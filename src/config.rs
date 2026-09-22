@@ -15,6 +15,13 @@ pub struct Config {
     /// Fraction of the terminal's width the viewer takes for `right` and
     /// `left`.
     pub split: f64,
+    /// `auto` takes colors and the monospace font from the terminal the
+    /// session runs in; `system` keeps the page's own light and dark
+    /// palettes.
+    pub theme: String,
+    /// Overrides for the monospace font the terminal theme would supply.
+    pub font: Option<String>,
+    pub font_size: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -28,7 +35,15 @@ pub enum Placement {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { hotkey: "Cmd+Shift+M".into(), backend: "auto".into(), placement: Placement::Right, split: 0.5 }
+        Self {
+            hotkey: "Cmd+Shift+M".into(),
+            backend: "auto".into(),
+            placement: Placement::Right,
+            split: 0.5,
+            theme: "auto".into(),
+            font: None,
+            font_size: None,
+        }
     }
 }
 

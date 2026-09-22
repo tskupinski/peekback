@@ -22,6 +22,7 @@ pub struct Session {
 pub struct Terminal {
     pub bundle_id: Option<String>,
     pub term_program: Option<String>,
+    pub iterm_profile: Option<String>,
     pub tmux_pane: Option<String>,
     pub tmux_socket: Option<String>,
     pub kitty_window: Option<String>,

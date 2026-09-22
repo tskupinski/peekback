@@ -277,6 +277,9 @@ to force `clipboard` when the injection is unwelcome:
     backend = "auto"            # or tmux, wezterm, kitty, keystroke, clipboard
     placement = "right"         # right, left, over, or free
     split = 0.5                 # share of the terminal's width for right/left
+    theme = "auto"              # or system: keep the page's own palettes
+    # font = "JetBrains Mono"   # override the terminal font
+    # font_size = 13
 
 All keys are optional and these are the defaults. `peekback status` shows
 the probe result per session so misconfiguration is visible before a send.
@@ -305,8 +308,24 @@ the bundle id in the registry, which needs no permission. The daemon runs
 with the Accessory activation policy, so there is no dock icon and no
 menu bar switch. `free` gives an ordinary decorated window the user places.
 
-Layout: a narrow sidebar with three sections, and the document filling the
-rest. Light and dark follow the system.
+Theme: with `theme = "auto"` the daemon reads the colors and monospace font
+of the terminal the session runs in and pushes them to the page. iTerm2 is
+read from its preferences plist, using the profile named by `ITERM_PROFILE`
+in the registry; Ghostty from its config file and the theme file it names.
+The page maps them onto its variables: background and foreground as they
+are, ANSI blue as the accent, ANSI bright black as muted, and the code
+highlighting classes onto the sixteen ANSI colors, so a snippet looks the
+same in the viewer as in the terminal. Body text keeps the system
+proportional font on purpose: the viewer should read as an extension of the
+terminal, not an imitation of one. The terminal font goes on code, the
+status line, the command line, and the picker. Unknown terminals fall back
+to the page's own light and dark palettes, which follow the system.
+
+Layout: the document fills the window. A status line along the bottom
+shows the mode, the session and document, and messages. A sidebar with
+sessions, documents, and pending comments can be toggled on; it is off by
+default because the popup is narrow and the picker covers the same ground.
+Light and dark follow the system.
 
 - **Sessions**: live sessions, most recently active first, showing the
   project directory name and how long ago it was active. The current one is
@@ -326,11 +345,18 @@ carries `data-source-line` from markdown-it, so a block selection maps to an
 exact source line range.
 
 - **Normal.** `j`/`k` move the block cursor, drawn as a bar in the left
-  margin of the current block. `d`/`u` half page, `gg`/`G` top and bottom,
-  `]]`/`[[` next and previous heading. `]d`/`[d` cycle documents, `]s`/`[s`
-  cycle sessions. `y`, `s`, `c` act on the block under the cursor. `?` shows
-  a key overlay. `Esc` or `:q` leaves: hides the window and returns focus to
-  the application the user came from.
+  margin of the current block, with counts like `5j` and `12G`. `d`/`u`
+  half page, `gg`/`G` top and bottom, `zz`/`zt`/`zb` scroll the cursor
+  block to the center, top, or bottom. `]]`/`[[` next and previous heading.
+  `]d`/`[d` cycle documents, `]s`/`[s` cycle sessions. `y`, `s`, `c` act on
+  the block under the cursor. `Tab` toggles the sidebar. `?` shows a key
+  overlay. `Esc` or `:q` leaves: hides the window and returns focus to the
+  application the user came from.
+- **Picker.** `Space d` (or `Ctrl-P`) and `Space s` open an fzf-style
+  overlay over documents or sessions: type to filter, `Ctrl-N`/`Ctrl-P` or
+  arrows to move, `Enter` to open, `Esc` to close. `:doc` and `:session`
+  without an argument open the same picker. This is the primary way to move
+  between documents and sessions; the sidebar is off by default.
 - **Visual.** `v` anchors a selection at the cursor and `j`/`k` extend it
   over blocks. `y` copies, `s` sends, `c` comments; each returns to normal.
   `Esc` cancels.
@@ -338,8 +364,8 @@ exact source line range.
   `Enter` moves the cursor to the first match, `n`/`N` step through them.
 - **Command.** `:` opens a command line with completion over documents and
   sessions. Commands: `:send`, `:c <note>` to comment on the current
-  selection with the note, `:sendall`, `:doc <name>`, `:session <name>`,
-  `:q`, `:help`.
+  selection with the note, `:sendall`, `:doc [name]`, `:session [name]`,
+  `:sidebar`, `:q`, `:help`.
 
 Mouse selection: when text is selected with the mouse, a small floating bar
 offers the same three actions. A mouse selection sends rendered text, since

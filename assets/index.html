@@ -30,10 +30,18 @@
     <button data-action="send">Send</button>
   </div>
 
+  <div id="picker" class="picker" hidden>
+    <div class="picker-row"><span id="picker-prefix" class="cmd-prefix">›</span><input id="picker-input" type="text" autocomplete="off" spellcheck="false" placeholder="type to filter"></div>
+    <ul id="picker-list" class="picker-list"></ul>
+  </div>
+
   <div id="help" class="help" hidden>
     <h3>Keys</h3>
     <table>
-      <tr><td>j / k</td><td>move the block cursor</td></tr>
+      <tr><td>j / k</td><td>move the block cursor, with counts like 5j</td></tr>
+      <tr><td>zz / zt</td><td>center / top the cursor block</td></tr>
+      <tr><td>Space d / Ctrl-P</td><td>document picker</td></tr>
+      <tr><td>Space s</td><td>session picker</td></tr>
       <tr><td>d / u</td><td>half page down / up</td></tr>
       <tr><td>gg / G</td><td>top / bottom</td></tr>
       <tr><td>]] / [[</td><td>next / previous heading</td></tr>

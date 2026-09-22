@@ -33,6 +33,7 @@ printf '%s' "$input" | jq \
 	--arg now "$now" \
 	--arg bundle_id "${__CFBundleIdentifier:-}" \
 	--arg term_program "${TERM_PROGRAM:-}" \
+	--arg iterm_profile "${ITERM_PROFILE:-}" \
 	--arg tmux_pane "${TMUX_PANE:-}" \
 	--arg tmux_socket "$tmux_socket" \
 	--arg kitty_window "${KITTY_WINDOW_ID:-}" \
@@ -47,6 +48,7 @@ printf '%s' "$input" | jq \
 		terminal: ({
 			bundle_id: $bundle_id,
 			term_program: $term_program,
+			iterm_profile: $iterm_profile,
 			tmux_pane: $tmux_pane,
 			tmux_socket: $tmux_socket,
 			kitty_window: $kitty_window,

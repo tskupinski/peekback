@@ -19,6 +19,7 @@ use crate::discovery::{self, Document};
 use crate::paths;
 use crate::protocol::{Request, Response};
 use crate::registry::{self, Session};
+use crate::theme::{self, Theme};
 use crate::{config, send, session};
 
 /// Everything that reaches the main thread from elsewhere: socket requests,
@@ -51,6 +52,7 @@ pub enum DaemonMessage<'a> {
     Sessions { sessions: &'a [Session], current: Option<&'a str> },
     Banner { text: &'a str },
     Toast { text: &'a str },
+    Theme { theme: Option<&'a Theme> },
 }
 
 struct Current {
@@ -83,14 +85,24 @@ pub fn run() -> Result<()> {
 
     let mut current: Option<Current> = None;
     let mut page_ready = false;
+    let mut current_theme: Option<Theme> = None;
 
     eprintln!("peekback daemon listening on {}", paths::socket_path().display());
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
-        let mut show = |session_id: Option<String>, path: Option<PathBuf>, current: &mut Option<Current>| -> Result<()> {
+        let mut show = |session_id: Option<String>, path: Option<PathBuf>, current: &mut Option<Current>, current_theme: &mut Option<Theme>| -> Result<()> {
             let next = open(session_id, path)?;
             doc_watcher.watch(&next.path)?;
+            let theme = next.session.as_ref().and_then(|s| theme::detect(&s.terminal, &config));
+            let theme_changed = theme.as_ref().map(|t| (&t.background, &t.foreground, &t.font_family))
+                != current_theme.as_ref().map(|t| (&t.background, &t.foreground, &t.font_family));
+            if theme_changed {
+                *current_theme = theme;
+                if page_ready {
+                    view.push(&DaemonMessage::Theme { theme: current_theme.as_ref() });
+                }
+            }
             if page_ready {
                 view.push(&render_message(&next));
                 push_sessions(&view, next.session.as_ref());
@@ -104,7 +116,7 @@ pub fn run() -> Result<()> {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => view.hide(),
             Event::UserEvent(UserEvent::Request { request, reply }) => {
                 let response = match request {
-                    Request::Show { session_id, path } => match show(session_id, path, &mut current) {
+                    Request::Show { session_id, path } => match show(session_id, path, &mut current, &mut current_theme) {
                         Ok(()) => {
                             view.bring_forward();
                             Response::Ok
@@ -135,7 +147,7 @@ pub fn run() -> Result<()> {
                     view.place(terminal_frame(current.as_ref().and_then(|c| c.session.as_ref())));
                     view.focus();
                 } else {
-                    if let Err(e) = show(session::resolve(None, None).ok().map(|s| s.session_id), None, &mut current) {
+                    if let Err(e) = show(session::resolve(None, None).ok().map(|s| s.session_id), None, &mut current, &mut current_theme) {
                         eprintln!("hotkey: {e:#}");
                         view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
                     }
@@ -184,13 +196,16 @@ pub fn run() -> Result<()> {
             }
             Event::UserEvent(UserEvent::Page(PageMessage::Ready)) => {
                 page_ready = true;
+                if current_theme.is_some() {
+                    view.push(&DaemonMessage::Theme { theme: current_theme.as_ref() });
+                }
                 push_sessions(&view, current.as_ref().and_then(|c| c.session.as_ref()));
                 if let Some(doc) = &current {
                     view.push(&render_message(doc));
                 }
             }
             Event::UserEvent(UserEvent::Page(PageMessage::Switch { session_id, path })) => {
-                if let Err(e) = show(session_id, path, &mut current) {
+                if let Err(e) = show(session_id, path, &mut current, &mut current_theme) {
                     view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
                 }
             }

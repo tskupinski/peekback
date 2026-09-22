@@ -14,6 +14,9 @@
   const cmdPrefixEl = $("cmd-prefix");
   const cmdInput = $("cmd-input");
   const completionsEl = $("completions");
+  const pickerEl = $("picker");
+  const pickerInput = $("picker-input");
+  const pickerList = $("picker-list");
 
   const darkMode = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
 
@@ -46,7 +49,60 @@
     });
   }
 
-  mermaid.initialize({ startOnLoad: false, theme: darkMode() ? "dark" : "default" });
+  let mermaidOptions = { startOnLoad: false, theme: darkMode() ? "dark" : "default" };
+  mermaid.initialize(mermaidOptions);
+
+  // The terminal's palette and font, when the daemon could read them. Body
+  // text keeps the system font; the terminal font goes on code and chrome.
+  function applyTheme(theme) {
+    const root = document.documentElement;
+    const vars = ["bg", "fg", "muted", "accent", "border", "sidebar-bg", "code-bg", "banner-bg", "banner-fg", "mono"];
+    if (!theme) {
+      root.removeAttribute("data-theme");
+      for (const v of vars) root.style.removeProperty(`--${v}`);
+      for (let i = 0; i < 16; i++) root.style.removeProperty(`--ansi-${i}`);
+      mermaidOptions = { startOnLoad: false, theme: darkMode() ? "dark" : "default" };
+    } else {
+      const dark = luminance(theme.background) < 0.5;
+      root.dataset.theme = dark ? "dark" : "light";
+      const p = theme.palette;
+      const set = (k, v) => root.style.setProperty(`--${k}`, v);
+      set("bg", theme.background);
+      set("fg", theme.foreground);
+      set("muted", p[8]);
+      set("accent", p[4]);
+      set("border", `color-mix(in srgb, ${theme.foreground} 18%, ${theme.background})`);
+      set("sidebar-bg", `color-mix(in srgb, ${theme.foreground} 5%, ${theme.background})`);
+      set("code-bg", `color-mix(in srgb, ${theme.foreground} 7%, ${theme.background})`);
+      set("banner-bg", `color-mix(in srgb, ${p[3]} 25%, ${theme.background})`);
+      set("banner-fg", theme.foreground);
+      p.forEach((c, i) => set(`ansi-${i}`, c));
+      if (theme.font_family) set("mono", `"${theme.font_family}", ui-monospace, Menlo, monospace`);
+      mermaidOptions = {
+        startOnLoad: false,
+        theme: "base",
+        themeVariables: {
+          darkMode: dark,
+          background: theme.background,
+          primaryColor: `color-mix(in srgb, ${p[4]} 25%, ${theme.background})`,
+          primaryTextColor: theme.foreground,
+          primaryBorderColor: p[4],
+          lineColor: theme.foreground,
+          secondaryColor: `color-mix(in srgb, ${p[5]} 25%, ${theme.background})`,
+          tertiaryColor: `color-mix(in srgb, ${p[6]} 20%, ${theme.background})`,
+          fontFamily: theme.font_family ? `"${theme.font_family}", monospace` : "monospace",
+        },
+      };
+    }
+    mermaid.initialize(mermaidOptions);
+    if (state.doc) render({ ...state.doc, session: { session_id: state.doc.sessionId } });
+  }
+
+  function luminance(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => v / 255);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
 
   const state = {
     doc: null, // { path, source, label, sessionId, documents }
@@ -56,6 +112,7 @@
     mode: "normal", // normal | visual | search | command
     anchor: null, // visual mode anchor block index
     pendingKey: null,
+    count: "",
     search: { query: "", matches: [], index: -1 },
   };
 
@@ -141,7 +198,60 @@
   }
 
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    mermaid.initialize({ startOnLoad: false, theme: darkMode() ? "dark" : "default" });
+    let mermaidOptions = { startOnLoad: false, theme: darkMode() ? "dark" : "default" };
+  mermaid.initialize(mermaidOptions);
+
+  // The terminal's palette and font, when the daemon could read them. Body
+  // text keeps the system font; the terminal font goes on code and chrome.
+  function applyTheme(theme) {
+    const root = document.documentElement;
+    const vars = ["bg", "fg", "muted", "accent", "border", "sidebar-bg", "code-bg", "banner-bg", "banner-fg", "mono"];
+    if (!theme) {
+      root.removeAttribute("data-theme");
+      for (const v of vars) root.style.removeProperty(`--${v}`);
+      for (let i = 0; i < 16; i++) root.style.removeProperty(`--ansi-${i}`);
+      mermaidOptions = { startOnLoad: false, theme: darkMode() ? "dark" : "default" };
+    } else {
+      const dark = luminance(theme.background) < 0.5;
+      root.dataset.theme = dark ? "dark" : "light";
+      const p = theme.palette;
+      const set = (k, v) => root.style.setProperty(`--${k}`, v);
+      set("bg", theme.background);
+      set("fg", theme.foreground);
+      set("muted", p[8]);
+      set("accent", p[4]);
+      set("border", `color-mix(in srgb, ${theme.foreground} 18%, ${theme.background})`);
+      set("sidebar-bg", `color-mix(in srgb, ${theme.foreground} 5%, ${theme.background})`);
+      set("code-bg", `color-mix(in srgb, ${theme.foreground} 7%, ${theme.background})`);
+      set("banner-bg", `color-mix(in srgb, ${p[3]} 25%, ${theme.background})`);
+      set("banner-fg", theme.foreground);
+      p.forEach((c, i) => set(`ansi-${i}`, c));
+      if (theme.font_family) set("mono", `"${theme.font_family}", ui-monospace, Menlo, monospace`);
+      mermaidOptions = {
+        startOnLoad: false,
+        theme: "base",
+        themeVariables: {
+          darkMode: dark,
+          background: theme.background,
+          primaryColor: `color-mix(in srgb, ${p[4]} 25%, ${theme.background})`,
+          primaryTextColor: theme.foreground,
+          primaryBorderColor: p[4],
+          lineColor: theme.foreground,
+          secondaryColor: `color-mix(in srgb, ${p[5]} 25%, ${theme.background})`,
+          tertiaryColor: `color-mix(in srgb, ${p[6]} 20%, ${theme.background})`,
+          fontFamily: theme.font_family ? `"${theme.font_family}", monospace` : "monospace",
+        },
+      };
+    }
+    mermaid.initialize(mermaidOptions);
+    if (state.doc) render({ ...state.doc, session: { session_id: state.doc.sessionId } });
+  }
+
+  function luminance(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => v / 255);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
     if (state.doc) render({ ...state.doc, session: { session_id: state.doc.sessionId } });
   });
 
@@ -340,8 +450,8 @@
   const commands = {
     q: () => send({ type: "hide" }),
     quit: () => send({ type: "hide" }),
-    doc: (arg) => switchTo(documentCandidates(), arg, "document"),
-    session: (arg) => switchTo(sessionCandidates(), arg, "session"),
+    doc: (arg) => (arg ? switchTo(documentCandidates(), arg, "document") : openPicker("documents")),
+    session: (arg) => (arg ? switchTo(sessionCandidates(), arg, "session") : openPicker("sessions")),
     send: () => actOnSelection("send"),
     copy: () => actOnSelection("copy"),
     help: () => toggleHelp(),
@@ -352,6 +462,8 @@
     if (!state.doc) return [];
     return state.doc.documents.map((d) => ({
       label: d.label,
+      meta: d.touched_at ? ago(d.touched_at) : "",
+      current: d.path === state.doc.path,
       run: () => send({ type: "switch", session_id: state.doc.sessionId, path: d.path }),
     }));
   }
@@ -359,6 +471,8 @@
   function sessionCandidates() {
     return state.sessions.sessions.map((s) => ({
       label: sessionName(s),
+      meta: `${ago(s.last_active_at)} · ${s.cwd}`,
+      current: s.session_id === state.sessions.current,
       run: () => send({ type: "switch", session_id: s.session_id }),
     }));
   }
@@ -486,6 +600,82 @@
     helpEl.hidden = !helpEl.hidden;
   }
 
+  // ---------------------------------------------------------------- picker
+
+  // An fzf-style overlay: type to filter, Enter to open. Replaces the
+  // sidebar as the way to move between documents and sessions.
+  let picker = { items: [], filtered: [], index: 0 };
+
+  function openPicker(kind) {
+    picker.items = kind === "documents" ? documentCandidates() : sessionCandidates();
+    pickerInput.value = "";
+    pickerInput.placeholder = kind === "documents" ? "open document" : "switch session";
+    pickerEl.hidden = false;
+    setMode("picker");
+    filterPicker();
+    pickerInput.focus();
+  }
+
+  function closePicker() {
+    pickerEl.hidden = true;
+    pickerInput.blur();
+    setMode("normal");
+  }
+
+  function filterPicker() {
+    picker.filtered = fuzzy(picker.items, pickerInput.value);
+    picker.index = 0;
+    renderPicker();
+  }
+
+  function renderPicker() {
+    pickerList.replaceChildren(
+      ...picker.filtered.slice(0, 30).map((c, i) => {
+        const li = document.createElement("li");
+        li.className = "picker-item" + (i === picker.index ? " active" : "") + (c.current ? " current" : "");
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = c.label;
+        const meta = document.createElement("span");
+        meta.className = "meta";
+        meta.textContent = c.meta ?? "";
+        li.append(name, meta);
+        li.addEventListener("mousedown", (event) => event.preventDefault());
+        li.addEventListener("click", () => { picker.index = i; choosePicker(); });
+        return li;
+      })
+    );
+    if (picker.filtered.length === 0) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = "no matches";
+      pickerList.append(li);
+    }
+  }
+
+  function movePicker(step) {
+    if (picker.filtered.length === 0) return;
+    picker.index = (picker.index + step + picker.filtered.length) % picker.filtered.length;
+    renderPicker();
+    pickerList.children[picker.index]?.scrollIntoView({ block: "nearest" });
+  }
+
+  function choosePicker() {
+    const chosen = picker.filtered[picker.index];
+    closePicker();
+    if (chosen) chosen.run();
+  }
+
+  pickerInput.addEventListener("input", filterPicker);
+  pickerInput.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    const ctrl = event.ctrlKey;
+    if (event.key === "Escape") closePicker();
+    else if (event.key === "Enter") choosePicker();
+    else if (event.key === "ArrowDown" || (ctrl && (event.key === "n" || event.key === "j"))) { event.preventDefault(); movePicker(1); }
+    else if (event.key === "ArrowUp" || (ctrl && (event.key === "p" || event.key === "k"))) { event.preventDefault(); movePicker(-1); }
+  });
+
   // ---------------------------------------------------------------- keys
 
   const pendingTimeout = 800;
@@ -506,19 +696,50 @@
     return key;
   }
 
+  function takeCount() {
+    const n = state.count ? parseInt(state.count, 10) : 1;
+    state.count = "";
+    return n;
+  }
+
+  function scrollCursorTo(where) {
+    const block = state.blocks[state.cursor];
+    if (block) block.scrollIntoView({ block: where });
+  }
+
   window.addEventListener("keydown", (event) => {
+    if (state.mode === "command" || state.mode === "search" || state.mode === "picker") return;
+    if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "p") {
+      event.preventDefault();
+      openPicker("documents");
+      return;
+    }
     if (event.metaKey || event.ctrlKey || event.altKey) return;
-    if (state.mode === "command" || state.mode === "search") return;
     if (!helpEl.hidden && event.key !== "?") {
       helpEl.hidden = true;
       if (event.key === "Escape") return;
     }
     const key = event.key;
+    if (/^[0-9]$/.test(key) && !(key === "0" && state.count === "") && !state.pendingKey) {
+      state.count += key;
+      setMessage(state.count);
+      event.preventDefault();
+      return;
+    }
     const pending = takePending();
     let handled = true;
 
     if (pending === "g") {
-      if (key === "g") moveCursor(0);
+      if (key === "g") moveCursor(state.count ? takeCount() - 1 : 0);
+      else handled = false;
+    } else if (pending === "z") {
+      if (key === "z") scrollCursorTo("center");
+      else if (key === "t") scrollCursorTo("start");
+      else if (key === "b") scrollCursorTo("end");
+      else handled = false;
+    } else if (pending === " ") {
+      if (key === "d") openPicker("documents");
+      else if (key === "s") openPicker("sessions");
       else handled = false;
     } else if (pending === "]" || pending === "[") {
       const direction = pending === "]" ? 1 : -1;
@@ -528,12 +749,12 @@
       else handled = false;
     } else {
       switch (key) {
-        case "j": moveCursor(state.cursor + 1); break;
-        case "k": moveCursor(state.cursor - 1); break;
+        case "j": moveCursor(state.cursor + takeCount()); break;
+        case "k": moveCursor(state.cursor - takeCount()); break;
         case "d": halfPage(1); break;
         case "u": halfPage(-1); break;
-        case "G": moveCursor(state.blocks.length - 1); break;
-        case "g": case "]": case "[": setPending(key); break;
+        case "G": moveCursor(state.count ? takeCount() - 1 : state.blocks.length - 1); break;
+        case "g": case "]": case "[": case "z": case " ": setPending(key); break;
         case "v":
           if (state.mode === "visual") setMode("normal");
           else { state.anchor = state.cursor; setMode("visual"); }
@@ -547,7 +768,8 @@
         case "?": toggleHelp(); break;
         case "Tab": setSidebar(!sidebarVisible()); break;
         case "Escape":
-          if (state.mode === "visual") setMode("normal");
+          if (state.count) state.count = "";
+          else if (state.mode === "visual") setMode("normal");
           else if (state.search.query) clearSearch();
           else send({ type: "hide" });
           break;
@@ -555,6 +777,7 @@
       }
     }
     if (handled) event.preventDefault();
+    else state.count = "";
   });
 
   function cycleDocument(direction) {
@@ -720,6 +943,7 @@
         case "sessions": state.sessions = message; renderSessions(); renderStatus(); break;
         case "banner": bannerEl.textContent = message.text; bannerEl.hidden = false; break;
         case "toast": toast(message.text); break;
+        case "theme": applyTheme(message.theme); break;
         default: console.warn("unknown message", message);
       }
     },

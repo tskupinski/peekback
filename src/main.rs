@@ -8,6 +8,7 @@ mod protocol;
 mod registry;
 mod send;
 mod session;
+mod theme;
 
 use std::path::PathBuf;
 
