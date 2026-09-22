@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>peekback</title>
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="vendor/hljs/github.min.css" media="(prefers-color-scheme: light)">
+  <link rel="stylesheet" href="vendor/hljs/github-dark.min.css" media="(prefers-color-scheme: dark)">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <aside id="sidebar">
+    <section class="sidebar-section">
+      <h2>Sessions</h2>
+      <ul id="sessions" class="list"></ul>
+    </section>
+    <section class="sidebar-section">
+      <h2>Documents</h2>
+      <ul id="documents" class="list"></ul>
+    </section>
+  </aside>
+  <main id="main">
+    <div id="banner" class="banner" hidden></div>
+    <article id="doc" class="markdown"></article>
+  </main>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="vendor/markdown-it.min.js"></script>
+  <script src="vendor/markdown-it-footnote.min.js"></script>
+  <script src="vendor/markdown-it-task-lists.min.js"></script>
+  <script src="vendor/hljs/highlight.min.js"></script>
+  <script src="vendor/katex/katex.min.js"></script>
+  <script src="vendor/katex/auto-render.min.js"></script>
+  <script src="vendor/mermaid.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
