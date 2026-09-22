@@ -18,7 +18,7 @@ use crate::discovery::{self, Document};
 use crate::paths;
 use crate::protocol::{Request, Response};
 use crate::registry::{self, Session};
-use crate::{config, session};
+use crate::{config, send, session};
 
 /// Everything that reaches the main thread from elsewhere: socket requests,
 /// file changes, hotkey presses, and messages from the page.
@@ -36,6 +36,9 @@ pub enum UserEvent {
 pub enum PageMessage {
     Ready,
     Switch { session_id: Option<String>, path: Option<PathBuf> },
+    Send { text: String },
+    Copy { text: String },
+    Hide,
     OpenExternal { url: String },
 }
 
@@ -62,6 +65,7 @@ pub fn run() -> Result<()> {
     fs::create_dir_all(registry::dir())?;
     let _lock = lock::acquire(&paths::lock_path())?;
     let config = config::load();
+    let pinned_backend = send::Backend::parse(&config.backend)?;
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
@@ -113,18 +117,32 @@ pub fn run() -> Result<()> {
             }
             Event::UserEvent(UserEvent::Hotkey) => {
                 if view.is_focused() {
-                    view.hide();
+                    view.hide_and_return_focus();
                 } else {
-                    match show(session::resolve(None, None).ok().map(|s| s.session_id), None, &mut current) {
-                        Ok(()) => view.bring_forward(),
-                        Err(e) => {
-                            eprintln!("hotkey: {e:#}");
-                            view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
-                            view.bring_forward();
-                        }
+                    if let Err(e) = show(session::resolve(None, None).ok().map(|s| s.session_id), None, &mut current) {
+                        eprintln!("hotkey: {e:#}");
+                        view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
                     }
+                    view.focus();
                 }
             }
+            Event::UserEvent(UserEvent::Page(PageMessage::Send { text })) => {
+                let Some(target) = current.as_ref().and_then(|c| c.session.as_ref()) else {
+                    view.push(&DaemonMessage::Toast { text: "No session to send to" });
+                    return;
+                };
+                match send::send(target, &text, pinned_backend) {
+                    Ok(outcome) => view.push(&DaemonMessage::Toast { text: &outcome.note }),
+                    Err(e) => view.push(&DaemonMessage::Toast { text: &format!("Send failed: {e:#}") }),
+                }
+            }
+            Event::UserEvent(UserEvent::Page(PageMessage::Copy { text })) => {
+                match send::copy(&text) {
+                    Ok(()) => view.push(&DaemonMessage::Toast { text: "Copied" }),
+                    Err(e) => view.push(&DaemonMessage::Toast { text: &format!("Copy failed: {e:#}") }),
+                }
+            }
+            Event::UserEvent(UserEvent::Page(PageMessage::Hide)) => view.hide_and_return_focus(),
             Event::UserEvent(UserEvent::DocChanged) => {
                 let Some(doc) = current.as_mut() else { return };
                 match fs::read_to_string(&doc.path) {

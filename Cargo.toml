@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+arboard = "3.6.1"
 clap = { version = "4.6.7", features = ["derive"] }
 dirs = "7.0.0"
 global-hotkey = "0.8.0"
@@ -19,4 +20,7 @@ toml = "1.1.6"
 wry = "0.57.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.25.0"
+objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", features = ["NSWindow", "NSApplication", "NSResponder", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3.2", features = ["NSString", "NSArray"] }

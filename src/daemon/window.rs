@@ -54,8 +54,10 @@ impl View {
     pub fn bring_forward(&self) {
         #[cfg(target_os = "macos")]
         {
-            use objc2_app_kit::NSWindow;
+            use objc2_app_kit::{NSApplication, NSWindow};
             use tao::platform::macos::WindowExtMacOS;
+            let mtm = objc2::MainThreadMarker::new().expect("main thread");
+            NSApplication::sharedApplication(mtm).unhideWithoutActivation();
             let ns_window = self.window.ns_window() as *const NSWindow;
             unsafe { (*ns_window).orderFrontRegardless() };
         }
@@ -63,8 +65,27 @@ impl View {
         self.window.set_visible(true);
     }
 
+    /// Shows the window and gives it keyboard focus.
+    pub fn focus(&self) {
+        self.bring_forward();
+        self.window.set_focus();
+        let _ = self.webview.focus();
+    }
+
     pub fn hide(&self) {
         self.window.set_visible(false);
+    }
+
+    /// Hides the window and hands focus back to whatever application was
+    /// active before the viewer.
+    pub fn hide_and_return_focus(&self) {
+        self.window.set_visible(false);
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_app_kit::NSApplication;
+            let mtm = objc2::MainThreadMarker::new().expect("main thread");
+            NSApplication::sharedApplication(mtm).hide(None);
+        }
     }
 
     pub fn is_focused(&self) -> bool {

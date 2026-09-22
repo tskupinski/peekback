@@ -6,6 +6,7 @@ mod discovery;
 mod paths;
 mod protocol;
 mod registry;
+mod send;
 mod session;
 
 use std::path::PathBuf;
@@ -36,6 +37,13 @@ enum Command {
         #[arg(long)]
         pane: Option<String>,
     },
+    /// Paste stdin into a session's prompt
+    Send {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        pane: Option<String>,
+    },
     /// Run the viewer daemon in the foreground
     Daemon,
     /// Print registered sessions and daemon state
@@ -53,6 +61,15 @@ fn main() -> Result<()> {
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     match Cli::parse().command {
         Command::Show { file, session, pane } => show(file, session, pane),
+        Command::Send { session, pane } => {
+            let target = session::resolve(session.as_deref(), pane.as_deref())?;
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+            let pinned = send::Backend::parse(&config::load().backend)?;
+            let outcome = send::send(&target, &text, pinned)?;
+            eprintln!("{} ({})", outcome.note, outcome.backend.name());
+            Ok(())
+        }
         Command::Daemon => daemon::run(),
         Command::Status { prune } => status(prune),
         Command::Quit => {
@@ -102,6 +119,7 @@ fn status(prune: bool) -> Result<()> {
     } else {
         println!("sessions:");
         let now = registry::now_unix();
+        let pinned = send::Backend::parse(&config::load().backend).unwrap_or(None);
         for s in sessions {
             let terminal = match (&s.terminal.tmux_pane, &s.terminal.term_program) {
                 (Some(pane), _) => format!("tmux {pane}"),
@@ -109,14 +127,17 @@ fn status(prune: bool) -> Result<()> {
                 (None, None) => "unknown terminal".into(),
             };
             println!(
-                "  {}  {}  active {}  {}",
+                "  {}  {}  active {}  {}  send via {}",
                 s.session_id,
                 s.cwd.display(),
                 ago(now - s.last_active_at),
-                terminal
+                terminal,
+                send::probe(&s, pinned).name()
             );
         }
     }
+    let tools: Vec<&str> = ["tmux", "wezterm", "kitten"].into_iter().filter(|t| send::on_path(t)).collect();
+    println!("backend tools on PATH: {}", if tools.is_empty() { "none".to_string() } else { tools.join(", ") });
     Ok(())
 }
 

@@ -24,6 +24,38 @@
     <div id="banner" class="banner" hidden></div>
     <article id="doc" class="markdown"></article>
   </main>
+
+  <div id="toolbar" class="toolbar" hidden>
+    <button data-action="copy">Copy</button>
+    <button data-action="send">Send</button>
+  </div>
+
+  <div id="help" class="help" hidden>
+    <h3>Keys</h3>
+    <table>
+      <tr><td>j / k</td><td>move the block cursor</td></tr>
+      <tr><td>d / u</td><td>half page down / up</td></tr>
+      <tr><td>gg / G</td><td>top / bottom</td></tr>
+      <tr><td>]] / [[</td><td>next / previous heading</td></tr>
+      <tr><td>]d / [d</td><td>next / previous document</td></tr>
+      <tr><td>]s / [s</td><td>next / previous session</td></tr>
+      <tr><td>v</td><td>visual mode: extend with j / k</td></tr>
+      <tr><td>y / s</td><td>copy / send the block or selection as Markdown</td></tr>
+      <tr><td>/</td><td>search, then n / N</td></tr>
+      <tr><td>:</td><td>command line: :doc, :session, :send, :q, :help</td></tr>
+      <tr><td>Esc</td><td>cancel, clear search, or leave the viewer</td></tr>
+    </table>
+  </div>
+
+  <footer id="statusline" class="statusline">
+    <span id="mode" class="mode">NORMAL</span>
+    <span id="status-doc" class="status-doc"></span>
+    <span id="status-msg" class="status-msg"></span>
+  </footer>
+  <div id="cmdline" class="cmdline" hidden>
+    <ul id="completions" class="completions" hidden></ul>
+    <div class="cmdline-row"><span id="cmd-prefix" class="cmd-prefix">:</span><input id="cmd-input" type="text" autocomplete="off" spellcheck="false"></div>
+  </div>
   <div id="toast" class="toast" hidden></div>
 
   <script src="vendor/markdown-it.min.js"></script>

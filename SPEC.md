@@ -31,8 +31,12 @@ In:
 - Terminal-agnostic triggers: a global hotkey opens the viewer for the most
   recently active session; `peekback show` does the same from any shell.
   Terminal-specific keybindings are optional sharpening, not a requirement.
+- Keyboard-first, vim-like: a block cursor, visual selection over blocks,
+  search, and a command line. Mouse selection works too, for sub-block
+  precision.
 - Selection actions: Copy, Send to prompt, Comment. Comments accumulate in a
-  panel and are sent as one prompt.
+  panel and are sent as one prompt. A block selection sends the exact
+  Markdown source of those blocks.
 - Send works in any terminal, through the best available backend: terminal
   IPC where the terminal has one, keystroke injection otherwise, clipboard as
   the floor.
@@ -178,9 +182,11 @@ It is a few lines of shell and ships with a documented settings snippet.
 Subcommands:
 
 - `peekback show [FILE] [--session ID] [--pane ID]`
-  Resolve the session: explicit `--session`, else `CLAUDE_CODE_SESSION_ID`
-  from the environment, else the registry entry whose `tmux_pane` matches
-  `--pane`, else the registry entry with the newest `last_active_at`. Start
+  Resolve the session: explicit `--session`, else the registry entry whose
+  `tmux_pane` matches `--pane`, else `CLAUDE_CODE_SESSION_ID` from the
+  environment, else the registry entry with the newest `last_active_at`.
+  Flags beat the environment so a script run from inside one session can
+  target another. Start
   the daemon if not running. Set the current document to FILE, or to the
   session's most recently written Markdown file. Bring the window forward.
 - `peekback send [--session ID] [--pane ID] < text`
@@ -300,10 +306,36 @@ rest. Light and dark follow the system.
   highlighted.
 - **Comments**: the pending comments list.
 
-Selection toolbar: when text is selected, a small floating bar offers three
-actions.
+A status line along the bottom shows the mode, the current document, and
+the pending comment count, in the manner of vim.
 
-- **Copy** puts the selection on the clipboard as plain text.
+Keyboard model, active whenever the viewer window has focus. The unit is the
+block: every paragraph, heading, list item, code block, table, and blockquote
+carries `data-source-line` from markdown-it, so a block selection maps to an
+exact source line range.
+
+- **Normal.** `j`/`k` move the block cursor, drawn as a bar in the left
+  margin of the current block. `d`/`u` half page, `gg`/`G` top and bottom,
+  `]]`/`[[` next and previous heading. `]d`/`[d` cycle documents, `]s`/`[s`
+  cycle sessions. `y`, `s`, `c` act on the block under the cursor. `?` shows
+  a key overlay. `Esc` or `:q` leaves: hides the window and returns focus to
+  the application the user came from.
+- **Visual.** `v` anchors a selection at the cursor and `j`/`k` extend it
+  over blocks. `y` copies, `s` sends, `c` comments; each returns to normal.
+  `Esc` cancels.
+- **Search.** `/` opens a search field; matches highlight as you type,
+  `Enter` moves the cursor to the first match, `n`/`N` step through them.
+- **Command.** `:` opens a command line with completion over documents and
+  sessions. Commands: `:send`, `:c <note>` to comment on the current
+  selection with the note, `:sendall`, `:doc <name>`, `:session <name>`,
+  `:q`, `:help`.
+
+Mouse selection: when text is selected with the mouse, a small floating bar
+offers the same three actions. A mouse selection sends rendered text, since
+it can cut through the middle of a block.
+
+- **Copy** puts the selection on the clipboard. A block selection copies the
+  Markdown source; a mouse selection copies plain text.
 - **Send** pastes the selection into the session prompt as a blockquote.
 - **Comment** opens a one-line input; on Enter the quote and note are added to
   the pending comments list.
@@ -321,8 +353,10 @@ if none could.
 Default, needing no terminal configuration:
 
 - Global hotkey, registered by the daemon. Default `Cmd+Shift+M`, set in
-  `config.toml`. Toggles the window: opens it on the most recently active
-  session if hidden, hides it if focused.
+  `config.toml`. Means "enter the viewer": shows the window on the most
+  recently active session if it was hidden, and gives it keyboard focus.
+  Leaving is `Esc` or `:q` inside the viewer, which hides the window and
+  hands focus back to the previous application.
 - `peekback show` from any shell, including `! peekback show` inside a Claude
   Code prompt, which resolves the session exactly through the environment.
 
@@ -402,9 +436,11 @@ it, otherwise absolute.
 - If every backend fails, `send` returns the last error and the window shows
   it; nothing is silently dropped. The clipboard backend cannot fail in
   practice, so this means the clipboard itself is unavailable.
-- Window focus: `show` and the hotkey bring the window forward but do not
-  steal keyboard focus from the terminal. IPC backends (tmux, wezterm, kitty)
-  leave focus in the viewer after Send. The keystroke backend necessarily
+- Window focus: `show` brings the window forward but does not steal keyboard
+  focus from the terminal, since it is the agent-triggered path. The hotkey
+  and a sidebar click do focus the viewer. IPC backends (tmux, wezterm,
+  kitty) leave focus in the viewer after Send; `Esc` returns to the
+  terminal. The keystroke backend necessarily
   activates the terminal, so after Send the terminal is frontmost with the
   text in the prompt; this is stated in the toast.
 - The keystroke backend targets whichever split or tab is focused in the
@@ -432,19 +468,19 @@ it, otherwise absolute.
 2. Registry hook, `show` with session resolution, transcript discovery,
    sidebar with sessions and documents, global hotkey. Proves the trigger end
    to end without any terminal configuration.
-3. Verify bracketed paste behaviour in Claude Code. Set up the self-signed
-   dev signing certificate. Selection toolbar with Copy and Send. Backends:
-   clipboard, tmux, keystroke. wezterm and kitty backends written to spec but
-   marked untested until run on a real install.
-4. Comments panel and Send all.
+3. Selection and send. Verify bracketed paste behaviour in Claude Code. Mode
+   state machine, block cursor, visual mode, search, command line with `:q`,
+   `:doc`, `:session`, `:send`, `:help`. Mouse selection toolbar. Copy and
+   Send with source-line mapping. Backends: clipboard, tmux, keystroke (with
+   the dev signing certificate). wezterm and kitty backends written to spec
+   but marked untested until run on a real install.
+4. Comments: `c`, `:c <note>`, the pending comments panel, `:sendall`.
 5. `status --prune`, optional keybinding docs, README.
 
 ## Open questions
 
 - Whether `show` should also accept a directory and default to its newest
   `.md`, for use outside any session.
-- Whether Copy should offer "as Markdown" using the source line mapping, or
-  plain text is enough in practice.
 - Whether the keystroke backend should verify the frontmost window title
   contains something recognisable before posting Cmd+V, to reduce wrong
   landings, or whether the toast is enough.
