@@ -2,6 +2,13 @@
 name = "peekback"
 version = "0.1.0"
 edition = "2024"
+description = "Rendered Markdown viewer for Claude Code sessions, with a way back to the prompt"
+license = "Apache-2.0"
+readme = "README.md"
+
+[profile.release]
+strip = true
+lto = true
 
 [dependencies]
 anyhow = "1.0.104"

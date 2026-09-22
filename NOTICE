@@ -1,0 +1,14 @@
+peekback
+Copyright 2026 Tomasz Skupinski
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This binary embeds the following front-end libraries, unmodified, with
+their own licenses (versions in assets/vendor/VERSIONS):
+
+  markdown-it             MIT           https://github.com/markdown-it/markdown-it
+  markdown-it-footnote    MIT           https://github.com/markdown-it/markdown-it-footnote
+  markdown-it-task-lists  ISC           https://github.com/revin/markdown-it-task-lists
+  mermaid                 MIT           https://github.com/mermaid-js/mermaid
+  KaTeX                   MIT           https://github.com/KaTeX/KaTeX
+  highlight.js            BSD-3-Clause  https://github.com/highlightjs/highlight.js
