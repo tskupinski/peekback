@@ -42,6 +42,7 @@ html, body {
 body {
   display: flex;
   min-height: 100vh;
+  border-left: 1px solid var(--border);
 }
 
 #sidebar {
@@ -128,11 +129,14 @@ body {
 }
 
 .markdown {
-  max-width: 820px;
-  padding: 32px 40px 80px;
+  max-width: 860px;
+  padding: 24px 28px 80px 32px;
   margin: 0 auto;
   overflow-wrap: break-word;
 }
+
+body.no-sidebar #sidebar { display: none; }
+body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
 
 .markdown h1, .markdown h2, .markdown h3, .markdown h4 {
   line-height: 1.25;
@@ -169,6 +173,7 @@ body {
 }
 .markdown pre code { padding: 0; background: none; font-size: 0.85em; }
 .markdown pre.mermaid { display: flex; justify-content: center; background: transparent; }
+.markdown pre.frontmatter { font-size: 0.8em; color: var(--muted); border-style: dashed; }
 
 .markdown blockquote {
   padding: 0 1em;

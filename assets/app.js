@@ -72,7 +72,22 @@
     document.title = `${state.doc.label} - peekback`;
     bannerEl.hidden = true;
 
-    docEl.innerHTML = md.render(message.source);
+    const { frontmatter, body, offset } = splitFrontmatter(message.source);
+    docEl.innerHTML = md.render(body);
+    if (offset) {
+      for (const el of docEl.querySelectorAll("[data-source-line]")) {
+        el.dataset.sourceLine = String(Number(el.dataset.sourceLine) + offset);
+        el.dataset.sourceEnd = String(Number(el.dataset.sourceEnd) + offset);
+      }
+    }
+    if (frontmatter) {
+      const pre = document.createElement("pre");
+      pre.className = "frontmatter";
+      pre.textContent = frontmatter;
+      pre.dataset.sourceLine = "0";
+      pre.dataset.sourceEnd = String(offset);
+      docEl.prepend(pre);
+    }
     await renderMermaid();
     renderMathInElement(docEl, {
       delimiters: [
@@ -90,6 +105,15 @@
     paintCursor(false);
     renderDocuments();
     renderStatus();
+  }
+
+  // YAML frontmatter would otherwise render as a setext heading. Source
+  // lines of the body are shifted so block selection still maps correctly.
+  function splitFrontmatter(source) {
+    const match = source.match(/^---\n([\s\S]*?)\n---\n/);
+    if (!match) return { frontmatter: null, body: source, offset: 0 };
+    const offset = match[0].split("\n").length - 1;
+    return { frontmatter: match[1], body: source.slice(match[0].length), offset };
   }
 
   function labelFor(path, documents) {
@@ -216,8 +240,23 @@
   }
 
   function renderStatus() {
-    statusDocEl.textContent = state.doc ? state.doc.label : "";
+    const session = state.sessions.sessions.find((s) => s.session_id === state.sessions.current);
+    const parts = [];
+    if (session) parts.push(sessionName(session));
+    if (state.doc) parts.push(state.doc.label);
+    statusDocEl.textContent = parts.join(" › ");
   }
+
+  // The sidebar is off by default; the popup is narrow and the command
+  // line already switches documents and sessions.
+  function setSidebar(visible) {
+    document.body.classList.toggle("no-sidebar", !visible);
+    try { localStorage.setItem("sidebar", visible ? "1" : "0"); } catch (_) {}
+  }
+  function sidebarVisible() {
+    return !document.body.classList.contains("no-sidebar");
+  }
+  try { setSidebar(localStorage.getItem("sidebar") === "1"); } catch (_) { setSidebar(false); }
 
   // -------------------------------------------------------------- actions
 
@@ -306,6 +345,7 @@
     send: () => actOnSelection("send"),
     copy: () => actOnSelection("copy"),
     help: () => toggleHelp(),
+    sidebar: () => setSidebar(!sidebarVisible()),
   };
 
   function documentCandidates() {
@@ -505,6 +545,7 @@
         case "n": gotoMatch(1); break;
         case "N": gotoMatch(-1); break;
         case "?": toggleHelp(); break;
+        case "Tab": setSidebar(!sidebarVisible()); break;
         case "Escape":
           if (state.mode === "visual") setMode("normal");
           else if (state.search.query) clearSearch();
@@ -676,7 +717,7 @@
     receive(message) {
       switch (message.type) {
         case "render": render(message); break;
-        case "sessions": state.sessions = message; renderSessions(); break;
+        case "sessions": state.sessions = message; renderSessions(); renderStatus(); break;
         case "banner": bannerEl.textContent = message.text; bannerEl.hidden = false; break;
         case "toast": toast(message.text); break;
         default: console.warn("unknown message", message);

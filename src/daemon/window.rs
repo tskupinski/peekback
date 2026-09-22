@@ -1,13 +1,15 @@
 use std::borrow::Cow;
 
 use anyhow::Result;
-use tao::dpi::LogicalSize;
+use tao::dpi::{LogicalPosition, LogicalSize};
 use tao::event_loop::EventLoop;
 use tao::window::{Window, WindowBuilder};
 use wry::http::{Request, Response, StatusCode, header};
 use wry::{WebView, WebViewBuilder};
 
 use crate::assets;
+use crate::config::Placement;
+use crate::daemon::terminal::Frame;
 use crate::daemon::{DaemonMessage, PageMessage, UserEvent};
 
 const SCHEME: &str = "peekback";
@@ -16,13 +18,18 @@ const START_URL: &str = "peekback://app/index.html";
 pub struct View {
     window: Window,
     webview: WebView,
+    placement: Placement,
+    split: f64,
 }
 
-pub fn create(event_loop: &EventLoop<UserEvent>) -> Result<View> {
+pub fn create(event_loop: &EventLoop<UserEvent>, placement: Placement, split: f64) -> Result<View> {
+    let popup = placement != Placement::Free;
     let window = WindowBuilder::new()
         .with_title("peekback")
         .with_inner_size(LogicalSize::new(960.0, 1000.0))
         .with_visible(false)
+        .with_decorations(!popup)
+        .with_always_on_top(popup)
         .build(event_loop)?;
 
     let proxy = event_loop.create_proxy();
@@ -38,7 +45,21 @@ pub fn create(event_loop: &EventLoop<UserEvent>) -> Result<View> {
         .with_url(START_URL)
         .build(&window)?;
 
-    Ok(View { window, webview })
+    #[cfg(target_os = "macos")]
+    if popup {
+        use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+        use tao::platform::macos::WindowExtMacOS;
+        // Appear on whichever Space the user is on, fullscreen ones included,
+        // rather than staying on the Space where it was first shown.
+        let ns_window = window.ns_window() as *const NSWindow;
+        unsafe {
+            (*ns_window).setCollectionBehavior(
+                NSWindowCollectionBehavior::MoveToActiveSpace | NSWindowCollectionBehavior::FullScreenAuxiliary,
+            )
+        };
+    }
+
+    Ok(View { window, webview, placement, split })
 }
 
 impl View {
@@ -47,6 +68,21 @@ impl View {
         if let Err(e) = self.webview.evaluate_script(&format!("window.peekback.receive({json})")) {
             eprintln!("push to page failed: {e}");
         }
+    }
+
+    /// Moves the window onto the terminal window according to the configured
+    /// placement. A popup that borrows the terminal's space, not a window of
+    /// its own.
+    pub fn place(&self, terminal: Option<Frame>) {
+        let Some(t) = terminal else { return };
+        let (x, width) = match self.placement {
+            Placement::Free => return,
+            Placement::Over => (t.x, t.width),
+            Placement::Right => (t.x + t.width * (1.0 - self.split), t.width * self.split),
+            Placement::Left => (t.x, t.width * self.split),
+        };
+        self.window.set_outer_position(LogicalPosition::new(x, t.y));
+        self.window.set_inner_size(LogicalSize::new(width, t.height));
     }
 
     /// Shows the window in front of other apps without taking keyboard focus
@@ -90,6 +126,10 @@ impl View {
 
     pub fn is_focused(&self) -> bool {
         self.window.is_visible() && self.window.is_focused()
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.window.is_visible()
     }
 }
 

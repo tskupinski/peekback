@@ -1885,6 +1885,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "clap",
+ "core-foundation",
  "core-graphics",
  "dirs",
  "global-hotkey",

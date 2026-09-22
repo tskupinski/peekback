@@ -275,8 +275,10 @@ to force `clipboard` when the injection is unwelcome:
 
     hotkey = "Cmd+Shift+M"      # global hotkey; empty string disables it
     backend = "auto"            # or tmux, wezterm, kitty, keystroke, clipboard
+    placement = "right"         # right, left, over, or free
+    split = 0.5                 # share of the terminal's width for right/left
 
-Both keys are optional and these are the defaults. `peekback status` shows
+All keys are optional and these are the defaults. `peekback status` shows
 the probe result per session so misconfiguration is visible before a send.
 
 ### 4. Viewer window
@@ -293,6 +295,15 @@ client-side:
 
 All JS and CSS assets are vendored and embedded in the binary. No CDN, works
 offline.
+
+The window is a popup that borrows the terminal's space, not an app of its
+own. With `placement` other than `free` it has no title bar, floats above
+the terminal until dismissed, follows the user to whatever Space they are
+on, and on every show it moves onto the terminal window: the right or left
+`split` of it, or all of it for `over`. The terminal window is found through
+the bundle id in the registry, which needs no permission. The daemon runs
+with the Accessory activation policy, so there is no dock icon and no
+menu bar switch. `free` gives an ordinary decorated window the user places.
 
 Layout: a narrow sidebar with three sections, and the document filling the
 rest. Light and dark follow the system.

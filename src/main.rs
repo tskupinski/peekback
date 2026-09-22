@@ -52,6 +52,8 @@ enum Command {
         #[arg(long)]
         prune: bool,
     },
+    /// Hide the viewer window
+    Hide,
     /// Stop the daemon
     Quit,
 }
@@ -72,6 +74,10 @@ fn main() -> Result<()> {
         }
         Command::Daemon => daemon::run(),
         Command::Status { prune } => status(prune),
+        Command::Hide => {
+            let _ = client::request(&Request::Hide);
+            Ok(())
+        }
         Command::Quit => {
             let _ = client::request(&Request::Quit);
             Ok(())

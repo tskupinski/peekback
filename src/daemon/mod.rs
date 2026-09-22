@@ -1,5 +1,6 @@
 mod lock;
 mod server;
+mod terminal;
 mod watcher;
 mod window;
 
@@ -67,13 +68,18 @@ pub fn run() -> Result<()> {
     let config = config::load();
     let pinned_backend = send::Backend::parse(&config.backend)?;
 
-    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    #[cfg(target_os = "macos")]
+    {
+        use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
+        event_loop.set_activation_policy(ActivationPolicy::Accessory);
+    }
     let proxy = event_loop.create_proxy();
     server::start(proxy.clone())?;
     let mut doc_watcher = watcher::DocWatcher::new(proxy.clone())?;
     let _registry_watcher = watcher::watch_registry(proxy.clone())?;
     let _hotkeys = register_hotkey(&config.hotkey, proxy)?;
-    let view = window::create(&event_loop)?;
+    let view = window::create(&event_loop, config.placement, config.split)?;
 
     let mut current: Option<Current> = None;
     let mut page_ready = false;
@@ -89,6 +95,7 @@ pub fn run() -> Result<()> {
                 view.push(&render_message(&next));
                 push_sessions(&view, next.session.as_ref());
             }
+            view.place(terminal_frame(next.session.as_ref()));
             *current = Some(next);
             Ok(())
         };
@@ -108,6 +115,10 @@ pub fn run() -> Result<()> {
                         document: current.as_ref().map(|c| c.path.clone()),
                         session_id: current.as_ref().and_then(|c| c.session.as_ref()).map(|s| s.session_id.clone()),
                     },
+                    Request::Hide => {
+                        view.hide_and_return_focus();
+                        Response::Ok
+                    }
                     Request::Quit => {
                         *control_flow = ControlFlow::Exit;
                         Response::Ok
@@ -115,9 +126,14 @@ pub fn run() -> Result<()> {
                 };
                 let _ = reply.send(response);
             }
+            // Hidden: open on the newest session. Visible but behind the
+            // terminal: just enter it. Focused: leave.
             Event::UserEvent(UserEvent::Hotkey) => {
                 if view.is_focused() {
                     view.hide_and_return_focus();
+                } else if view.is_visible() {
+                    view.place(terminal_frame(current.as_ref().and_then(|c| c.session.as_ref())));
+                    view.focus();
                 } else {
                     if let Err(e) = show(session::resolve(None, None).ok().map(|s| s.session_id), None, &mut current) {
                         eprintln!("hotkey: {e:#}");
@@ -206,6 +222,15 @@ fn open(session_id: Option<String>, path: Option<PathBuf>) -> Result<Current> {
     let source =
         fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
     Ok(Current { session, documents, path, source, missing: false })
+}
+
+/// The terminal window to sit on: the session's own, else the most recently
+/// active session's, since under tmux several sessions share one window.
+fn terminal_frame(session: Option<&Session>) -> Option<terminal::Frame> {
+    let bundle_id = session
+        .and_then(|s| s.terminal.bundle_id.clone())
+        .or_else(|| registry::newest().and_then(|s| s.terminal.bundle_id))?;
+    terminal::frontmost_window(&bundle_id)
 }
 
 fn render_message(current: &Current) -> DaemonMessage<'_> {

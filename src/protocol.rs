@@ -10,6 +10,7 @@ pub enum Request {
     /// Without a session, shows the path on its own.
     Show { session_id: Option<String>, path: Option<PathBuf> },
     Status,
+    Hide,
     Quit,
 }
 

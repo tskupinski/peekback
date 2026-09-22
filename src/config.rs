@@ -9,11 +9,26 @@ use serde::Deserialize;
 pub struct Config {
     pub hotkey: String,
     pub backend: String,
+    /// Where the window goes relative to the terminal window: `right`,
+    /// `left`, `over`, or `free` for an ordinary window the user places.
+    pub placement: Placement,
+    /// Fraction of the terminal's width the viewer takes for `right` and
+    /// `left`.
+    pub split: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Placement {
+    Right,
+    Left,
+    Over,
+    Free,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { hotkey: "Cmd+Shift+M".into(), backend: "auto".into() }
+        Self { hotkey: "Cmd+Shift+M".into(), backend: "auto".into(), placement: Placement::Right, split: 0.5 }
     }
 }
 
