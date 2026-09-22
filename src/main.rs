@@ -60,19 +60,9 @@ enum Command {
 }
 
 fn main() -> Result<()> {
-    // Let `peekback status | head` end quietly instead of panicking on EPIPE.
-    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     match Cli::parse().command {
         Command::Show { file, session, pane } => show(file, session, pane),
-        Command::Send { session, pane } => {
-            let target = session::resolve(session.as_deref(), pane.as_deref())?;
-            let mut text = String::new();
-            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
-            let pinned = send::Backend::parse(&config::load().backend)?;
-            let outcome = send::send(&target, &text, pinned)?;
-            eprintln!("{} ({})", outcome.note, outcome.backend.name());
-            Ok(())
-        }
+        Command::Send { session, pane } => send(session, pane),
         Command::Daemon => daemon::run(),
         Command::Status { prune } => status(prune),
         Command::Hide => {
@@ -102,7 +92,20 @@ fn show(file: Option<PathBuf>, session: Option<String>, pane: Option<String>) ->
     }
 }
 
+fn send(session: Option<String>, pane: Option<String>) -> Result<()> {
+    let target = session::resolve(session.as_deref(), pane.as_deref())?;
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+    let outcome = send::send(&target, &text, config::load().pinned_backend())?;
+    eprintln!("{} ({})", outcome.note, outcome.backend.name());
+    Ok(())
+}
+
 fn status(prune: bool) -> Result<()> {
+    // Only here: `peekback status | head` should end quietly. The daemon
+    // must keep SIGPIPE ignored, since a client vanishing mid-reply would
+    // otherwise kill it.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     if prune {
         for session in registry::prune(PRUNE_AFTER_SECS) {
             println!("pruned {} ({})", session.session_id, session.cwd.display());
@@ -126,7 +129,7 @@ fn status(prune: bool) -> Result<()> {
     } else {
         println!("sessions:");
         let now = registry::now_unix();
-        let pinned = send::Backend::parse(&config::load().backend).unwrap_or(None);
+        let pinned = config::load().pinned_backend();
         for s in sessions {
             let terminal = match (&s.terminal.tmux_pane, &s.terminal.term_program) {
                 (Some(pane), _) => format!("tmux {pane}"),

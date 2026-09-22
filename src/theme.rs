@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::config::Config;
 use crate::registry::Terminal;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Theme {
     pub source: String,
     pub font_family: Option<String>,
@@ -41,8 +41,6 @@ pub fn detect(terminal: &Terminal, config: &Config) -> Option<Theme> {
     }
     Some(theme)
 }
-
-// ---------------------------------------------------------------- iTerm2
 
 fn iterm(profile_name: Option<&str>) -> Option<Theme> {
     let output = Command::new("defaults").args(["export", "com.googlecode.iterm2", "-"]).output().ok()?;
@@ -92,8 +90,6 @@ fn split_font(spec: &str) -> (Option<String>, Option<f64>) {
         _ => (Some(spec.to_string()), None),
     }
 }
-
-// --------------------------------------------------------------- Ghostty
 
 /// Reads the Ghostty config and the theme file it names. Untested on a
 /// real Ghostty setup so far.

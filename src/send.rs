@@ -79,7 +79,11 @@ pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Ou
         }
         Backend::Clipboard => {
             copy(text)?;
-            "Copied. Paste it into the prompt.".to_string()
+            if session.terminal.bundle_id.is_some() && !keystroke::trusted() {
+                "Copied. Paste it into the prompt. Grant peekback Accessibility for direct paste.".to_string()
+            } else {
+                "Copied. Paste it into the prompt.".to_string()
+            }
         }
     };
     Ok(Outcome { backend, note })
@@ -128,7 +132,7 @@ fn send_kitty(session: &Session, text: &str) -> Result<()> {
     let window = session.terminal.kitty_window.as_deref().ok_or_else(|| anyhow!("no kitty window"))?;
     let to = session.terminal.kitty_listen_on.as_deref().ok_or_else(|| anyhow!("no kitty socket"))?;
     run_with_stdin(
-        Command::new("kitten").args(["@", "--to", to, "send-text", "--match", &format!("id:{window}"), "--stdin"]),
+        Command::new("kitten").args(["@", "--to", to, "send-text", "--bracketed-paste", "--match", &format!("id:{window}"), "--stdin"]),
         text,
     )
 }

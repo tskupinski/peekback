@@ -60,12 +60,12 @@ pub fn frontmost_window(bundle_id: &str) -> Option<Frame> {
         let Some(bounds) = bounds.downcast::<CFDictionary>() else { continue };
         let bounds: CFDictionary<CFString, CFType> =
             unsafe { CFDictionary::wrap_under_get_rule(bounds.as_concrete_TypeRef()) };
-        let frame = Frame {
-            x: number(&bounds, "X")?,
-            y: number(&bounds, "Y")?,
-            width: number(&bounds, "Width")?,
-            height: number(&bounds, "Height")?,
+        let (Some(x), Some(y), Some(width), Some(height)) =
+            (number(&bounds, "X"), number(&bounds, "Y"), number(&bounds, "Width"), number(&bounds, "Height"))
+        else {
+            continue;
         };
+        let frame = Frame { x, y, width, height };
         if frame.width >= 200.0 && frame.height >= 100.0 {
             return Some(frame);
         }

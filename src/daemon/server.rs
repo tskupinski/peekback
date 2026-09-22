@@ -1,6 +1,8 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::time::Duration;
 use std::sync::mpsc;
 use std::thread;
 
@@ -19,6 +21,7 @@ pub fn start(proxy: EventLoopProxy<UserEvent>) -> Result<()> {
     let _ = fs::remove_file(&path);
     let listener =
         UnixListener::bind(&path).with_context(|| format!("bind {}", path.display()))?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let proxy = proxy.clone();
@@ -33,6 +36,7 @@ pub fn start(proxy: EventLoopProxy<UserEvent>) -> Result<()> {
 }
 
 fn handle(mut stream: UnixStream, proxy: EventLoopProxy<UserEvent>) -> Result<()> {
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut line = String::new();
     BufReader::new(stream.try_clone()?).read_line(&mut line)?;
     let response = match serde_json::from_str::<Request>(line.trim()) {

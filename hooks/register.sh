@@ -3,11 +3,16 @@
 # Wire it to SessionStart, UserPromptSubmit, Stop, and SessionEnd.
 set -u
 
-command -v jq >/dev/null 2>&1 || exit 0
+if ! command -v jq >/dev/null 2>&1; then
+	echo "peekback: jq is required by hooks/register.sh" >&2
+	exit 0
+fi
 
 input="$(cat)"
 session_id="$(printf '%s' "$input" | jq -r '.session_id // empty')"
-[ -n "$session_id" ] || exit 0
+case "$session_id" in
+	"" | *[!A-Za-z0-9._-]*) exit 0 ;;
+esac
 event="$(printf '%s' "$input" | jq -r '.hook_event_name // empty')"
 
 dir="$HOME/.local/state/peekback/sessions"
@@ -18,7 +23,7 @@ if [ "$event" = "SessionEnd" ]; then
 	exit 0
 fi
 
-mkdir -p "$dir"
+mkdir -p "$dir" && chmod 700 "$dir"
 now="$(date +%s)"
 started_at="$now"
 if [ -f "$file" ]; then

@@ -20,6 +20,7 @@ pub struct Document {
 }
 
 const CWD_WALK_DEPTH: usize = 4;
+const CWD_WALK_BUDGET: usize = 20_000;
 const SKIPPED_DIRS: &[&str] = &["node_modules", "target"];
 
 /// Markdown files the session produced, newest touch first.
@@ -43,8 +44,13 @@ pub fn documents(session: &Session) -> Vec<Document> {
             note(path, at);
         }
     }
-    for (path, at) in markdown_under(&session.cwd, CWD_WALK_DEPTH, session.started_at) {
-        note(path, at);
+    // A session started in the home directory or at the root would walk the
+    // whole disk; those sessions get only the transcript-based sources.
+    let cwd_is_broad = session.cwd == Path::new("/") || dirs::home_dir().is_some_and(|h| h == session.cwd);
+    if !cwd_is_broad {
+        for (path, at) in markdown_under(&session.cwd, CWD_WALK_DEPTH, session.started_at()) {
+            note(path, at);
+        }
     }
 
     let mut documents: Vec<Document> = touched
@@ -82,7 +88,7 @@ fn transcript_writes(transcript: &Path) -> Vec<(PathBuf, i64)> {
             if !matches!(item["name"].as_str(), Some("Write") | Some("Edit")) {
                 continue;
             }
-            if let Some(path) = item["input"]["file_path"].as_str().filter(|p| p.ends_with(".md")) {
+            if let Some(path) = item["input"]["file_path"].as_str().filter(|p| is_markdown(p)) {
                 writes.push((PathBuf::from(path), at));
             }
         }
@@ -91,31 +97,42 @@ fn transcript_writes(transcript: &Path) -> Vec<(PathBuf, i64)> {
 }
 
 /// `.md` files under `dir` modified after `since`, walking at most `depth`
-/// levels and skipping hidden and build directories.
+/// levels and skipping hidden and build directories. The walk runs on the
+/// main thread, so it stops after a fixed number of entries.
 fn markdown_under(dir: &Path, depth: usize, since: i64) -> Vec<(PathBuf, i64)> {
     let mut found = Vec::new();
-    walk(dir, depth, since, &mut found);
+    let mut budget = CWD_WALK_BUDGET;
+    walk(dir, depth, since, &mut found, &mut budget);
     found
 }
 
-fn walk(dir: &Path, depth: usize, since: i64, found: &mut Vec<(PathBuf, i64)>) {
+fn walk(dir: &Path, depth: usize, since: i64, found: &mut Vec<(PathBuf, i64)>, budget: &mut usize) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
         let Ok(kind) = entry.file_type() else { continue };
         if kind.is_dir() {
             if depth > 1 && !name.starts_with('.') && !SKIPPED_DIRS.contains(&name.as_ref()) {
-                walk(&path, depth - 1, since, found);
+                walk(&path, depth - 1, since, found, budget);
             }
-        } else if kind.is_file() && name.ends_with(".md") {
+        } else if kind.is_file() && is_markdown(&name) {
             let modified = entry.metadata().and_then(|m| m.modified()).map(unix_secs).unwrap_or(0);
             if modified >= since {
                 found.push((path, modified));
             }
         }
     }
+}
+
+fn is_markdown(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown")
 }
 
 fn label_for(path: &Path, session: &Session) -> String {

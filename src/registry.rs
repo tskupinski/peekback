@@ -40,6 +40,17 @@ impl Session {
         self.project_dir().map(|d| d.join("memory"))
     }
 
+    /// The hook resets `started_at` on a resume after exit; the transcript's
+    /// creation time is the earlier bound and survives that.
+    pub fn started_at(&self) -> i64 {
+        fs::metadata(&self.transcript_path)
+            .and_then(|m| m.created())
+            .ok()
+            .map(unix_secs)
+            .filter(|&t| t > 0)
+            .map_or(self.started_at, |t| t.min(self.started_at))
+    }
+
     pub fn scratchpad_dir(&self) -> Option<PathBuf> {
         let slug = self.project_dir()?.file_name()?;
         let uid = unsafe { libc::getuid() };
@@ -50,7 +61,6 @@ impl Session {
                 .join("scratchpad"),
         )
     }
-
 }
 
 pub fn dir() -> PathBuf {
@@ -71,7 +81,15 @@ pub fn load_all() -> Vec<Session> {
     sessions
 }
 
+/// Ids come from hook input and page messages and become file names.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 pub fn find(session_id: &str) -> Option<Session> {
+    if !valid_id(session_id) {
+        return None;
+    }
     let text = fs::read_to_string(dir().join(format!("{session_id}.json"))).ok()?;
     serde_json::from_str(&text).ok()
 }
@@ -94,7 +112,7 @@ pub fn prune(max_idle_secs: i64) -> Vec<Session> {
             .and_then(|m| m.modified())
             .map(unix_secs)
             .unwrap_or(0);
-        if now - last_write > max_idle_secs {
+        if now - last_write > max_idle_secs && valid_id(&session.session_id) {
             let _ = fs::remove_file(dir().join(format!("{}.json", session.session_id)));
             removed.push(session);
         }

@@ -4,11 +4,12 @@ mod terminal;
 mod watcher;
 mod window;
 
-use std::fs;
+use std::fs::{self, DirBuilder};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use serde::{Deserialize, Serialize};
@@ -20,7 +21,7 @@ use crate::paths;
 use crate::protocol::{Request, Response};
 use crate::registry::{self, Session};
 use crate::theme::{self, Theme};
-use crate::{config, send, session};
+use crate::{config, send};
 
 /// Everything that reaches the main thread from elsewhere: socket requests,
 /// file changes, hotkey presses, and messages from the page.
@@ -56,6 +57,8 @@ pub enum DaemonMessage<'a> {
     SendResult { ok: bool, purpose: Option<&'a str>, text: &'a str },
 }
 
+const DELETED_BANNER: &str = "This file was deleted. Showing the last rendered version.";
+
 struct Current {
     session: Option<Session>,
     documents: Vec<Document>,
@@ -65,11 +68,14 @@ struct Current {
 }
 
 pub fn run() -> Result<()> {
-    fs::create_dir_all(paths::state_dir())?;
-    fs::create_dir_all(registry::dir())?;
+    // State names sessions, paths and terminal ids; only this user reads it.
+    for dir in [paths::state_dir(), registry::dir()] {
+        DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+    }
     let _lock = lock::acquire(&paths::lock_path())?;
     let config = config::load();
-    let pinned_backend = send::Backend::parse(&config.backend)?;
+    let pinned_backend = config.pinned_backend();
 
     let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     #[cfg(target_os = "macos")]
@@ -81,7 +87,13 @@ pub fn run() -> Result<()> {
     server::start(proxy.clone())?;
     let mut doc_watcher = watcher::DocWatcher::new(proxy.clone())?;
     let _registry_watcher = watcher::watch_registry(proxy.clone())?;
-    let _hotkeys = register_hotkey(&config.hotkey, proxy)?;
+    let _hotkeys = match register_hotkey(&config.hotkey, proxy) {
+        Ok(manager) => manager,
+        Err(e) => {
+            eprintln!("no global hotkey: {e:#}");
+            None
+        }
+    };
     let view = window::create(&event_loop, config.placement, config.split)?;
 
     let mut current: Option<Current> = None;
@@ -94,11 +106,11 @@ pub fn run() -> Result<()> {
 
         let mut show = |session_id: Option<String>, path: Option<PathBuf>, current: &mut Option<Current>, current_theme: &mut Option<Theme>| -> Result<()> {
             let next = open(session_id, path)?;
-            doc_watcher.watch(&next.path)?;
+            if let Err(e) = doc_watcher.watch(&next.path) {
+                eprintln!("no live reload for {}: {e}", next.path.display());
+            }
             let theme = next.session.as_ref().and_then(|s| theme::detect(&s.terminal, &config));
-            let theme_changed = theme.as_ref().map(|t| (&t.background, &t.foreground, &t.font_family))
-                != current_theme.as_ref().map(|t| (&t.background, &t.foreground, &t.font_family));
-            if theme_changed {
+            if theme != *current_theme {
                 *current_theme = theme;
                 if page_ready {
                     view.push(&DaemonMessage::Theme { theme: current_theme.as_ref() });
@@ -148,20 +160,31 @@ pub fn run() -> Result<()> {
                     view.place(terminal_frame(current.as_ref().and_then(|c| c.session.as_ref())));
                     view.focus();
                 } else {
-                    if let Err(e) = show(session::resolve(None, None).ok().map(|s| s.session_id), None, &mut current, &mut current_theme) {
+                    // The daemon is never inside a session; the newest one is
+                    // the only sensible target for a hotkey.
+                    if let Err(e) = show(registry::newest().map(|s| s.session_id), None, &mut current, &mut current_theme) {
                         eprintln!("hotkey: {e:#}");
-                        view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
+                        if page_ready {
+                            view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
+                        }
                     }
                     view.focus();
                 }
             }
             Event::UserEvent(UserEvent::Page(PageMessage::Send { text, purpose })) => {
                 let purpose = purpose.as_deref();
-                let Some(target) = current.as_ref().and_then(|c| c.session.as_ref()) else {
+                let Some(shown) = current.as_ref().and_then(|c| c.session.as_ref()) else {
                     view.push(&DaemonMessage::SendResult { ok: false, purpose, text: "No session to send to" });
                     return;
                 };
-                match send::send(target, &text, pinned_backend) {
+                // The hook rewrites the entry on every prompt and removes it
+                // on exit; the copy taken at show time may point at a pane
+                // that now holds something else.
+                let Some(target) = registry::find(&shown.session_id) else {
+                    view.push(&DaemonMessage::SendResult { ok: false, purpose, text: "This session has ended" });
+                    return;
+                };
+                match send::send(&target, &text, pinned_backend) {
                     Ok(outcome) => view.push(&DaemonMessage::SendResult { ok: true, purpose, text: &outcome.note }),
                     Err(e) => view.push(&DaemonMessage::SendResult { ok: false, purpose, text: &format!("Send failed: {e:#}") }),
                 }
@@ -176,6 +199,9 @@ pub fn run() -> Result<()> {
             Event::UserEvent(UserEvent::DocChanged) => {
                 let Some(doc) = current.as_mut() else { return };
                 match fs::read_to_string(&doc.path) {
+                    // A truncate-then-write shows up as an empty file for a
+                    // moment; the write that follows triggers another event.
+                    Ok(source) if source.is_empty() && !doc.source.is_empty() && !doc.missing => {}
                     Ok(source) if source != doc.source || doc.missing => {
                         doc.source = source;
                         doc.missing = false;
@@ -184,9 +210,9 @@ pub fn run() -> Result<()> {
                     Ok(_) => {}
                     Err(_) if !doc.path.exists() => {
                         doc.missing = true;
-                        view.push(&DaemonMessage::Banner {
-                            text: "This file was deleted. Showing the last rendered version.",
-                        });
+                        if page_ready {
+                            view.push(&DaemonMessage::Banner { text: DELETED_BANNER });
+                        }
                     }
                     Err(e) => eprintln!("reread {}: {e}", doc.path.display()),
                 }
@@ -204,9 +230,21 @@ pub fn run() -> Result<()> {
                 push_sessions(&view, current.as_ref().and_then(|c| c.session.as_ref()));
                 if let Some(doc) = &current {
                     view.push(&render_message(doc));
+                    if doc.missing {
+                        view.push(&DaemonMessage::Banner { text: DELETED_BANNER });
+                    }
                 }
             }
+            // The page renders untrusted documents, so it may only ask for
+            // paths the daemon itself listed.
             Event::UserEvent(UserEvent::Page(PageMessage::Switch { session_id, path })) => {
+                let listed = path.as_ref().is_none_or(|p| {
+                    current.as_ref().is_some_and(|c| c.documents.iter().any(|d| d.path == *p))
+                });
+                if !listed {
+                    view.push(&DaemonMessage::Toast { text: "That file is not in this session's documents" });
+                    return;
+                }
                 if let Err(e) = show(session_id, path, &mut current, &mut current_theme) {
                     view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
                 }
@@ -229,9 +267,10 @@ fn open(session_id: Option<String>, path: Option<PathBuf>) -> Result<Current> {
         None => None,
     };
     let documents = session.as_ref().map(discovery::documents).unwrap_or_default();
-    let path = match path {
-        Some(path) => path,
-        None => documents
+    let path = match (path, session.is_some()) {
+        (Some(path), _) => path,
+        (None, false) => bail!("nothing to show: no session and no file"),
+        (None, true) => documents
             .first()
             .map(|d| d.path.clone())
             .ok_or_else(|| anyhow!("this session has not written any Markdown yet"))?,
@@ -245,7 +284,8 @@ fn open(session_id: Option<String>, path: Option<PathBuf>) -> Result<Current> {
 /// active session's, since under tmux several sessions share one window.
 fn terminal_frame(session: Option<&Session>) -> Option<terminal::Frame> {
     let bundle_id = session
-        .and_then(|s| s.terminal.bundle_id.clone())
+        .and_then(|s| registry::find(&s.session_id).or_else(|| Some(s.clone())))
+        .and_then(|s| s.terminal.bundle_id)
         .or_else(|| registry::newest().and_then(|s| s.terminal.bundle_id))?;
     terminal::frontmost_window(&bundle_id)
 }

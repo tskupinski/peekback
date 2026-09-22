@@ -190,10 +190,14 @@ Subcommands:
   the daemon if not running. Set the current document to FILE, or to the
   session's most recently written Markdown file. Bring the window forward.
 - `peekback send [--session ID] [--pane ID] < text`
-  Paste stdin into the session's prompt through the send backends. Resolves
-  the session with the same chain as `show`. Used from scripts; the viewer
-  window sends through the daemon directly and always targets the session it
-  is showing.
+  Paste stdin into the session's prompt through the send backends, from the
+  CLI process itself; no daemon is needed. Resolves the session with the
+  same chain as `show`. The viewer window sends through the daemon and
+  always targets the session it is showing, re-reading that session's
+  registry entry at send time so a resumed or ended session cannot paste
+  into a stale pane.
+- `peekback hide`
+  Hide the viewer window and return focus to the previous application.
 - `peekback daemon`
   Run the window, the socket server, the watchers, and the global hotkey in
   the foreground. Normally started implicitly by `show`.
@@ -230,8 +234,8 @@ Two transports, one in-process and one over the socket:
 
 - **Socket protocol** (CLI to daemon): newline-delimited JSON over the Unix
   socket, one request and one response per connection. Requests: `show`
-  (session id, optional path), `send` (session id, text), `status`. No HTTP
-  server.
+  (session id, optional path), `status`, `hide`, `quit`. No HTTP server.
+  The socket is mode 0600 and the state directory 0700.
 - **Page transport** (webview to daemon, in-process): the page and its assets
   are served through wry's custom protocol at `peekback://app/`. The page
   sends `ready`, `switch` (session id, optional path), `send` (text), and
@@ -298,6 +302,14 @@ client-side:
 
 All JS and CSS assets are vendored and embedded in the binary. No CDN, works
 offline.
+
+Documents are untrusted: an agent wrote them, or they arrived with a cloned
+repository, and the page can paste into the user's prompt. So raw HTML in
+Markdown is disabled, a Content Security Policy allows scripts only from
+the embedded assets, Mermaid runs at its strict security level, KaTeX with
+trust off, the page's receive hook is frozen, and the daemon accepts a
+page-initiated switch only to a document it listed itself. Nothing rendered
+from a document can reach the IPC bridge.
 
 The window is a popup that borrows the terminal's space, not an app of its
 own. With `placement` other than `free` it has no title bar, floats above

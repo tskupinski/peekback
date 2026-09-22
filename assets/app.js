@@ -22,11 +22,31 @@
 
   const darkMode = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
 
-  // ---------------------------------------------------------------- rendering
+  // ---------------------------------------------------------------- state
 
+  const state = {
+    doc: null, // { path, source, label, sessionId, documents }
+    lastRender: null, // the render message, so the page can re-render itself
+    sessions: [],
+    currentSession: null,
+    blocks: [],
+    cursor: 0,
+    mode: "normal", // normal | visual | search | command | comment | picker
+    anchor: null, // visual selection start, a block index
+    pendingKey: null,
+    count: "",
+    search: { query: "", matches: [], index: -1 },
+    comments: [], // { id, path, label, quote, note, line }
+    pendingJump: null, // { path, line } to apply once that document renders
+  };
+
+  // ------------------------------------------------------------- rendering
+
+  // Documents are untrusted: an agent wrote them, or they came with a cloned
+  // repo. Raw HTML stays off, and the CSP in index.html backs that up.
   const md = window
     .markdownit({
-      html: true,
+      html: false,
       linkify: true,
       highlight(code, lang) {
         if (lang === "mermaid") return "";
@@ -51,77 +71,22 @@
     });
   }
 
-  let mermaidOptions = { startOnLoad: false, theme: darkMode() ? "dark" : "default" };
+  function mermaidDefaults() {
+    return { startOnLoad: false, securityLevel: "strict", theme: darkMode() ? "dark" : "default" };
+  }
+  let mermaidOptions = mermaidDefaults();
   mermaid.initialize(mermaidOptions);
 
-  // The terminal's palette and font, when the daemon could read them. Body
-  // text keeps the system font; the terminal font goes on code and chrome.
-  function applyTheme(theme) {
-    const root = document.documentElement;
-    const vars = ["bg", "fg", "muted", "accent", "border", "sidebar-bg", "code-bg", "banner-bg", "banner-fg", "mono"];
-    if (!theme) {
-      root.removeAttribute("data-theme");
-      for (const v of vars) root.style.removeProperty(`--${v}`);
-      for (let i = 0; i < 16; i++) root.style.removeProperty(`--ansi-${i}`);
-      mermaidOptions = { startOnLoad: false, theme: darkMode() ? "dark" : "default" };
-    } else {
-      const dark = luminance(theme.background) < 0.5;
-      root.dataset.theme = dark ? "dark" : "light";
-      const p = theme.palette;
-      const set = (k, v) => root.style.setProperty(`--${k}`, v);
-      set("bg", theme.background);
-      set("fg", theme.foreground);
-      set("muted", p[8]);
-      set("accent", p[4]);
-      set("border", `color-mix(in srgb, ${theme.foreground} 18%, ${theme.background})`);
-      set("sidebar-bg", `color-mix(in srgb, ${theme.foreground} 5%, ${theme.background})`);
-      set("code-bg", `color-mix(in srgb, ${theme.foreground} 7%, ${theme.background})`);
-      set("banner-bg", `color-mix(in srgb, ${p[3]} 25%, ${theme.background})`);
-      set("banner-fg", theme.foreground);
-      p.forEach((c, i) => set(`ansi-${i}`, c));
-      if (theme.font_family) set("mono", `"${theme.font_family}", ui-monospace, Menlo, monospace`);
-      mermaidOptions = {
-        startOnLoad: false,
-        theme: "base",
-        themeVariables: {
-          darkMode: dark,
-          background: theme.background,
-          primaryColor: `color-mix(in srgb, ${p[4]} 25%, ${theme.background})`,
-          primaryTextColor: theme.foreground,
-          primaryBorderColor: p[4],
-          lineColor: theme.foreground,
-          secondaryColor: `color-mix(in srgb, ${p[5]} 25%, ${theme.background})`,
-          tertiaryColor: `color-mix(in srgb, ${p[6]} 20%, ${theme.background})`,
-          fontFamily: theme.font_family ? `"${theme.font_family}", monospace` : "monospace",
-        },
-      };
-    }
-    mermaid.initialize(mermaidOptions);
-    if (state.doc) render({ ...state.doc, session: { session_id: state.doc.sessionId } });
-  }
-
-  function luminance(hex) {
-    const n = parseInt(hex.slice(1), 16);
-    const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => v / 255);
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  }
-
-  const state = {
-    doc: null, // { path, source, label, sessionId, documents }
-    sessions: { sessions: [], current: null },
-    blocks: [],
-    cursor: 0,
-    mode: "normal", // normal | visual | search | command
-    anchor: null, // visual mode anchor block index
-    pendingKey: null,
-    count: "",
-    search: { query: "", matches: [], index: -1 },
-    comments: [], // { id, path, label, quote, note, line }
-  };
+  let renderGeneration = 0;
 
   async function render(message) {
-    const scrollY = window.scrollY;
-    const previousLine = state.blocks[state.cursor]?.dataset.sourceLine;
+    const generation = ++renderGeneration;
+    const samePath = state.doc?.path === message.path;
+    const sourceChanged = !samePath || state.doc.source !== message.source;
+    const scrollY = samePath ? window.scrollY : 0;
+    const previousLine = samePath ? state.blocks[state.cursor]?.dataset.sourceLine : undefined;
+
+    state.lastRender = message;
     state.doc = {
       path: message.path,
       source: message.source,
@@ -134,6 +99,7 @@
 
     const { frontmatter, body, offset } = splitFrontmatter(message.source);
     docEl.innerHTML = md.render(body);
+    hoistFenceAttributes();
     if (offset) {
       for (const el of docEl.querySelectorAll("[data-source-line]")) {
         el.dataset.sourceLine = String(Number(el.dataset.sourceLine) + offset);
@@ -149,29 +115,51 @@
       docEl.prepend(pre);
     }
     await renderMermaid();
+    if (generation !== renderGeneration) return;
     renderMathInElement(docEl, {
       delimiters: [
         { left: "$$", right: "$$", display: true },
         { left: "$", right: "$", display: false },
       ],
       throwOnError: false,
+      trust: false,
+      maxSize: 100,
     });
     window.scrollTo(0, scrollY);
 
     collectBlocks();
-    state.cursor = previousLine === undefined ? 0 : nearestBlock(Number(previousLine));
-    if (state.mode === "visual") setMode("normal");
-    if (state.search.query) runSearch(state.search.query);
+    if (sourceChanged && state.anchor !== null) setMode("normal");
+    if (state.pendingJump?.path === message.path) {
+      state.cursor = nearestBlock(state.pendingJump.line);
+      state.pendingJump = null;
+    } else {
+      state.cursor = previousLine === undefined ? 0 : nearestBlock(Number(previousLine));
+    }
+    if (state.search.query) runSearch(state.search.query, { keepIndex: true });
     paintCursor(false);
     renderDocuments();
     renderStatus();
   }
 
+  function rerender() {
+    if (state.lastRender) render(state.lastRender);
+  }
+
+  // markdown-it puts a fence's attributes on the <code>, but the cursor
+  // works on top-level elements, so the <pre> needs them.
+  function hoistFenceAttributes() {
+    for (const code of docEl.querySelectorAll("pre > code[data-source-line]")) {
+      const pre = code.parentElement;
+      pre.dataset.sourceLine = code.dataset.sourceLine;
+      pre.dataset.sourceEnd = code.dataset.sourceEnd;
+    }
+  }
+
   // YAML frontmatter would otherwise render as a setext heading. Source
   // lines of the body are shifted so block selection still maps correctly.
   function splitFrontmatter(source) {
-    const match = source.match(/^---\n([\s\S]*?)\n---\n/);
-    if (!match) return { frontmatter: null, body: source, offset: 0 };
+    const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+    if (!match || !/^[\w-]+\s*:/.test(match[1])) return { frontmatter: null, body: source, offset: 0 };
     const offset = match[0].split("\n").length - 1;
     return { frontmatter: match[1], body: source.slice(match[0].length), offset };
   }
@@ -187,8 +175,8 @@
       const container = document.createElement("pre");
       container.className = "mermaid";
       container.textContent = code.textContent;
-      container.dataset.sourceLine = pre.dataset.sourceLine ?? code.dataset.sourceLine;
-      container.dataset.sourceEnd = pre.dataset.sourceEnd ?? code.dataset.sourceEnd;
+      container.dataset.sourceLine = pre.dataset.sourceLine;
+      container.dataset.sourceEnd = pre.dataset.sourceEnd;
       pre.replaceWith(container);
       nodes.push(container);
     }
@@ -200,20 +188,16 @@
     }
   }
 
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    let mermaidOptions = { startOnLoad: false, theme: darkMode() ? "dark" : "default" };
-  mermaid.initialize(mermaidOptions);
-
   // The terminal's palette and font, when the daemon could read them. Body
   // text keeps the system font; the terminal font goes on code and chrome.
   function applyTheme(theme) {
     const root = document.documentElement;
     const vars = ["bg", "fg", "muted", "accent", "border", "sidebar-bg", "code-bg", "banner-bg", "banner-fg", "mono"];
-    if (!theme) {
+    if (!theme || theme.palette?.length < 16) {
       root.removeAttribute("data-theme");
       for (const v of vars) root.style.removeProperty(`--${v}`);
       for (let i = 0; i < 16; i++) root.style.removeProperty(`--ansi-${i}`);
-      mermaidOptions = { startOnLoad: false, theme: darkMode() ? "dark" : "default" };
+      mermaidOptions = mermaidDefaults();
     } else {
       const dark = luminance(theme.background) < 0.5;
       root.dataset.theme = dark ? "dark" : "light";
@@ -232,6 +216,7 @@
       if (theme.font_family) set("mono", `"${theme.font_family}", ui-monospace, Menlo, monospace`);
       mermaidOptions = {
         startOnLoad: false,
+        securityLevel: "strict",
         theme: "base",
         themeVariables: {
           darkMode: dark,
@@ -247,18 +232,23 @@
       };
     }
     mermaid.initialize(mermaidOptions);
-    if (state.doc) render({ ...state.doc, session: { session_id: state.doc.sessionId } });
+    rerender();
   }
 
   function luminance(hex) {
-    const n = parseInt(hex.slice(1), 16);
+    const n = parseInt(String(hex).slice(1, 7), 16) || 0;
     const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => v / 255);
     return 0.2126 * r + 0.7152 * g + 0.0722 * b;
   }
-    if (state.doc) render({ ...state.doc, session: { session_id: state.doc.sessionId } });
+
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (document.documentElement.dataset.theme) return;
+    mermaidOptions = mermaidDefaults();
+    mermaid.initialize(mermaidOptions);
+    rerender();
   });
 
-  // ------------------------------------------------------------------ blocks
+  // ---------------------------------------------------------------- blocks
 
   // The cursor moves over top-level blocks, with list items as their own
   // stops so a single bullet can be picked out.
@@ -286,6 +276,12 @@
     return best;
   }
 
+  function blockIndexOf(element) {
+    const block = element?.closest?.("[data-source-line]");
+    if (!block) return -1;
+    return state.blocks.findIndex((b) => b === block || b.contains(block));
+  }
+
   // The anchor outlives visual mode while the command line or the note
   // input is open, so `:c note` and `c` act on the whole selection.
   function selectionRange() {
@@ -305,6 +301,7 @@
     if (scroll && current) current.scrollIntoView({ block: "nearest" });
   }
 
+  // map[1] from markdown-it is an exclusive end line.
   function sourceOf(from, to) {
     const start = Number(state.blocks[from].dataset.sourceLine);
     const end = Number(state.blocks[to].dataset.sourceEnd);
@@ -318,14 +315,14 @@
   }
 
   function topVisibleBlock() {
-    const top = window.scrollY + 8;
-    let index = state.blocks.findIndex((b) => b.offsetTop + b.offsetHeight > top);
-    return index < 0 ? state.blocks.length - 1 : index;
+    const index = state.blocks.findIndex((b) => b.getBoundingClientRect().bottom > 8);
+    return index < 0 ? Math.max(0, state.blocks.length - 1) : index;
   }
 
   function halfPage(direction) {
     window.scrollBy({ top: (direction * window.innerHeight) / 2 });
     requestAnimationFrame(() => {
+      if (state.blocks.length === 0) return;
       state.cursor = topVisibleBlock();
       paintCursor(false);
     });
@@ -340,7 +337,12 @@
     }
   }
 
-  // ------------------------------------------------------------------ modes
+  function scrollCursorTo(where) {
+    const block = state.blocks[state.cursor];
+    if (block) block.scrollIntoView({ block: where });
+  }
+
+  // ----------------------------------------------------------------- modes
 
   function setMode(mode) {
     state.mode = mode;
@@ -350,31 +352,53 @@
     paintCursor(false);
   }
 
+  function leaveVisual() {
+    if (state.anchor !== null) setMode("normal");
+  }
+
   function setMessage(text) {
     statusMsgEl.textContent = text;
   }
 
+  function sessionName(s) {
+    return s.cwd.split("/").pop() || s.cwd;
+  }
+
+  function currentSession() {
+    return state.sessions.find((s) => s.session_id === state.currentSession) ?? null;
+  }
+
   function renderStatus() {
-    const session = state.sessions.sessions.find((s) => s.session_id === state.sessions.current);
     const parts = [];
+    const session = currentSession();
     if (session) parts.push(sessionName(session));
     if (state.doc) parts.push(state.doc.label);
     if (state.comments.length) parts.push(`${state.comments.length} pending`);
     statusDocEl.textContent = parts.join(" › ");
   }
 
-  // The sidebar is off by default; the popup is narrow and the command
-  // line already switches documents and sessions.
+  // The sidebar is off by default; the popup is narrow and the picker
+  // covers the same ground.
   function setSidebar(visible) {
     document.body.classList.toggle("no-sidebar", !visible);
-    try { localStorage.setItem("sidebar", visible ? "1" : "0"); } catch (_) {}
+    try {
+      localStorage.setItem("sidebar", visible ? "1" : "0");
+    } catch (_) {}
   }
   function sidebarVisible() {
     return !document.body.classList.contains("no-sidebar");
   }
-  try { setSidebar(localStorage.getItem("sidebar") === "1"); } catch (_) { setSidebar(false); }
+  try {
+    setSidebar(localStorage.getItem("sidebar") === "1");
+  } catch (_) {
+    setSidebar(false);
+  }
 
-  // -------------------------------------------------------------- actions
+  // --------------------------------------------------------------- actions
+
+  function switchTo(sessionId, path) {
+    post({ type: "switch", session_id: sessionId, path });
+  }
 
   function blockquote(text) {
     return text
@@ -393,20 +417,17 @@
 
   function perform(action, text, line) {
     if (!text) return;
-    if (action === "copy") send({ type: "copy", text });
-    if (action === "send") send({ type: "send", text: blockquote(text), purpose: "selection" });
+    if (action === "copy") post({ type: "copy", text });
+    if (action === "send") post({ type: "send", text: blockquote(text), purpose: "selection" });
     if (action === "comment") openNoteInput(text, line);
   }
 
-  function leaveVisual() {
-    if (state.anchor !== null) setMode("normal");
-  }
-
-  // ------------------------------------------------------------- comments
+  // -------------------------------------------------------------- comments
 
   // Comments are not persisted: closing the window loses them, by design.
   let noteTarget = null;
   let nextCommentId = 1;
+  let commentsInFlight = null; // ids included in a send that has not reported back
 
   function openNoteInput(quote, line) {
     noteTarget = { quote, line };
@@ -436,20 +457,20 @@
   // Relative to the session's cwd when under it, otherwise absolute, since
   // the agent will read this path.
   function promptPathFor(path) {
-    const session = state.sessions.sessions.find((s) => s.session_id === state.sessions.current);
+    const session = state.sessions.find((s) => s.session_id === state.doc?.sessionId);
     if (session && path.startsWith(session.cwd + "/")) return path.slice(session.cwd.length + 1);
     return path;
   }
 
-  function commentsPrompt() {
+  function commentsPrompt(comments) {
     const byPath = new Map();
-    for (const c of state.comments) {
+    for (const c of comments) {
       if (!byPath.has(c.label)) byPath.set(c.label, []);
       byPath.get(c.label).push(c);
     }
     return [...byPath.entries()]
-      .map(([label, comments]) => {
-        const body = comments.map((c) => `${blockquote(c.quote)}\n${c.note}`.trimEnd()).join("\n\n");
+      .map(([label, group]) => {
+        const body = group.map((c) => `${blockquote(c.quote)}\n${c.note}`.trimEnd()).join("\n\n");
         return `Comments on \`${label}\`:\n\n${body}`;
       })
       .join("\n\n");
@@ -457,7 +478,20 @@
 
   function sendAllComments() {
     if (state.comments.length === 0) return setMessage("no pending comments");
-    send({ type: "send", text: commentsPrompt(), purpose: "comments" });
+    if (commentsInFlight) return setMessage("still sending the previous batch");
+    commentsInFlight = state.comments.map((c) => c.id);
+    post({ type: "send", text: commentsPrompt(state.comments), purpose: "comments" });
+  }
+
+  function onSendResult(message) {
+    toast(message.text);
+    if (message.purpose !== "comments") return;
+    if (message.ok && commentsInFlight) {
+      const sent = new Set(commentsInFlight);
+      state.comments = state.comments.filter((c) => !sent.has(c.id));
+      renderComments();
+    }
+    commentsInFlight = null;
   }
 
   function renderComments() {
@@ -475,7 +509,10 @@
         remove.className = "comment-remove";
         remove.textContent = "×";
         remove.title = "Remove";
-        remove.addEventListener("click", (event) => { event.stopPropagation(); removeComment(c.id); });
+        remove.addEventListener("click", (event) => {
+          event.stopPropagation();
+          removeComment(c.id);
+        });
         li.append(quote, note, remove);
         li.addEventListener("click", () => jumpToComment(c));
         return li;
@@ -488,7 +525,8 @@
 
   function jumpToComment(c) {
     if (c.path !== state.doc?.path) {
-      send({ type: "switch", session_id: state.doc?.sessionId ?? null, path: c.path });
+      state.pendingJump = { path: c.path, line: c.line };
+      switchTo(state.doc?.sessionId ?? null, c.path);
       return;
     }
     if (c.line !== undefined && c.line !== null) moveCursor(nearestBlock(c.line));
@@ -505,11 +543,12 @@
 
   sendAllButton.addEventListener("click", sendAllComments);
 
-  // -------------------------------------------------------------- search
+  // ---------------------------------------------------------------- search
 
   const highlightsSupported = "highlights" in CSS && typeof Highlight === "function";
 
-  function runSearch(query) {
+  function runSearch(query, { keepIndex = false } = {}) {
+    const previousIndex = state.search.index;
     state.search.query = query;
     state.search.matches = [];
     state.search.index = -1;
@@ -518,27 +557,28 @@
     if (!query) return;
 
     const needle = query.toLowerCase();
-    const ranges = [];
+    const highlight = highlightsSupported ? new Highlight() : null;
     const walker = document.createTreeWalker(docEl, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       const text = node.textContent.toLowerCase();
+      // Case folding can change string length; offsets would then be wrong.
+      if (text.length !== node.textContent.length) continue;
       let at = text.indexOf(needle);
       while (at >= 0) {
         const range = new Range();
         range.setStart(node, at);
         range.setEnd(node, at + needle.length);
-        ranges.push(range);
+        highlight?.add(range);
+        const block = blockIndexOf(node.parentElement);
+        if (!highlightsSupported && block >= 0) state.blocks[block].classList.add("match");
+        state.search.matches.push({ range, block });
         at = text.indexOf(needle, at + needle.length);
       }
     }
-    if (highlightsSupported) CSS.highlights.set("search", new Highlight(...ranges));
-    state.search.matches = ranges.map((r) => {
-      const block = r.startContainer.parentElement.closest("[data-source-line]");
-      const index = state.blocks.findIndex((b) => b === block || b.contains(block));
-      if (!highlightsSupported && index >= 0) state.blocks[index].classList.add("match");
-      return { range: r, block: index };
-    });
-    setMessage(ranges.length ? `${ranges.length} match${ranges.length === 1 ? "" : "es"}` : "no matches");
+    if (highlight) CSS.highlights.set("search", highlight);
+    const count = state.search.matches.length;
+    if (keepIndex && previousIndex >= 0 && previousIndex < count) state.search.index = previousIndex;
+    setMessage(count ? `${count} match${count === 1 ? "" : "es"}` : "no matches");
   }
 
   function gotoMatch(step) {
@@ -559,17 +599,18 @@
     setMessage("");
   }
 
-  // ------------------------------------------------------------- commands
+  // -------------------------------------------------------------- commands
 
   const commands = {
-    q: () => send({ type: "hide" }),
-    quit: () => send({ type: "hide" }),
-    doc: (arg) => (arg ? switchTo(documentCandidates(), arg, "document") : openPicker("documents")),
-    session: (arg) => (arg ? switchTo(sessionCandidates(), arg, "session") : openPicker("sessions")),
+    q: () => post({ type: "hide" }),
+    quit: () => post({ type: "hide" }),
+    doc: (arg) => (arg ? switchByName(documentCandidates(), arg, "document") : openPicker("documents")),
+    session: (arg) => (arg ? switchByName(sessionCandidates(), arg, "session") : openPicker("sessions")),
     send: () => actOnSelection("send"),
     copy: () => actOnSelection("copy"),
     c: (arg) => {
       if (!state.blocks.length) return;
+      if (!arg) return actOnSelection("comment");
       const [from, to] = selectionRange();
       addComment(sourceOf(from, to), arg, Number(state.blocks[from].dataset.sourceLine));
       leaveVisual();
@@ -586,20 +627,20 @@
       label: d.label,
       meta: d.touched_at ? ago(d.touched_at) : "",
       current: d.path === state.doc.path,
-      run: () => send({ type: "switch", session_id: state.doc.sessionId, path: d.path }),
+      run: () => switchTo(state.doc.sessionId, d.path),
     }));
   }
 
   function sessionCandidates() {
-    return state.sessions.sessions.map((s) => ({
+    return state.sessions.map((s) => ({
       label: sessionName(s),
       meta: `${ago(s.last_active_at)} · ${s.cwd}`,
-      current: s.session_id === state.sessions.current,
-      run: () => send({ type: "switch", session_id: s.session_id }),
+      current: s.session_id === state.currentSession,
+      run: () => switchTo(s.session_id),
     }));
   }
 
-  function switchTo(candidates, arg, what) {
+  function switchByName(candidates, arg, what) {
     const match = fuzzy(candidates, arg)[0];
     if (!match) return setMessage(`no ${what} matching ${arg}`);
     match.run();
@@ -608,11 +649,11 @@
   function fuzzy(candidates, query) {
     const q = (query || "").toLowerCase();
     if (!q) return candidates;
-    const scored = candidates
+    return candidates
       .map((c) => ({ c, score: fuzzyScore(c.label.toLowerCase(), q) }))
       .filter((x) => x.score >= 0)
-      .sort((a, b) => b.score - a.score);
-    return scored.map((x) => x.c);
+      .sort((a, b) => b.score - a.score)
+      .map((x) => x.c);
   }
 
   function fuzzyScore(text, query) {
@@ -629,14 +670,16 @@
   }
 
   function runCommand(line) {
-    const [name, ...rest] = line.trim().split(/\s+/);
-    if (!name) return;
+    const match = line.trim().match(/^(\S+)\s*([\s\S]*)$/);
+    if (!match) return;
+    const [, name, arg] = match;
     const handler = commands[name];
     if (!handler) return setMessage(`unknown command :${name}`);
-    handler(rest.join(" "));
+    handler(arg);
   }
 
-  // The command line doubles as the search field; `prefix` tells them apart.
+  // The command line doubles as the search field and the note input;
+  // `cmdPrefix` tells them apart.
   let cmdPrefix = ":";
   let completionList = [];
   let completionIndex = -1;
@@ -653,8 +696,10 @@
   }
 
   function closeCmdline() {
+    if (cmdlineEl.hidden) return;
     cmdlineEl.hidden = true;
     hideCompletions();
+    noteTarget = null;
     cmdInput.blur();
     setMode(state.anchor !== null ? "visual" : "normal");
   }
@@ -710,14 +755,24 @@
       closeCmdline();
     } else if (event.key === "Enter") {
       const value = cmdInput.value;
+      const prefix = cmdPrefix;
+      const target = noteTarget;
       closeCmdline();
-      if (cmdPrefix === "/") gotoMatch(1);
-      else if (cmdPrefix === "c") { if (noteTarget) addComment(noteTarget.quote, value, noteTarget.line); noteTarget = null; setMode("normal"); }
-      else runCommand(value);
+      if (prefix === "/") gotoMatch(1);
+      else if (prefix === "c") {
+        if (target) addComment(target.quote, value, target.line);
+        setMode("normal");
+      } else runCommand(value);
     } else if (event.key === "Tab") {
       event.preventDefault();
       if (cmdPrefix === ":") cycleCompletion(event.shiftKey ? -1 : 1);
     }
+  });
+
+  // Clicking the document while an input is open would otherwise leave a
+  // mode nobody can leave by keyboard.
+  cmdInput.addEventListener("blur", () => {
+    if (document.hasFocus()) closeCmdline();
   });
 
   function toggleHelp() {
@@ -728,7 +783,7 @@
 
   // An fzf-style overlay: type to filter, Enter to open. Replaces the
   // sidebar as the way to move between documents and sessions.
-  let picker = { items: [], filtered: [], index: 0 };
+  const picker = { kind: null, items: [], filtered: [], index: 0 };
 
   function openPicker(kind) {
     picker.kind = kind;
@@ -742,9 +797,10 @@
   }
 
   function closePicker() {
+    if (pickerEl.hidden) return;
     pickerEl.hidden = true;
     pickerInput.blur();
-    setMode("normal");
+    setMode(state.anchor !== null ? "visual" : "normal");
   }
 
   function filterPicker() {
@@ -766,7 +822,10 @@
         meta.textContent = c.meta ?? "";
         li.append(name, meta);
         li.addEventListener("mousedown", (event) => event.preventDefault());
-        li.addEventListener("click", () => { picker.index = i; choosePicker(); });
+        li.addEventListener("click", () => {
+          picker.index = i;
+          choosePicker();
+        });
         return li;
       })
     );
@@ -797,16 +856,27 @@
     const ctrl = event.ctrlKey;
     if (event.key === "Escape") closePicker();
     else if (event.key === "Enter") choosePicker();
-    else if (event.key === "ArrowDown" || (ctrl && (event.key === "n" || event.key === "j"))) { event.preventDefault(); movePicker(1); }
-    else if (event.key === "ArrowUp" || (ctrl && (event.key === "p" || event.key === "k"))) { event.preventDefault(); movePicker(-1); }
-    else if (ctrl && event.key === "d" && picker.kind === "comments") {
+    else if (event.key === "ArrowDown" || (ctrl && (event.key === "n" || event.key === "j"))) {
+      event.preventDefault();
+      movePicker(1);
+    } else if (event.key === "ArrowUp" || (ctrl && (event.key === "p" || event.key === "k"))) {
+      event.preventDefault();
+      movePicker(-1);
+    } else if (ctrl && event.key === "d" && picker.kind === "comments") {
       event.preventDefault();
       const chosen = picker.filtered[picker.index];
-      if (chosen) { removeComment(chosen.id); picker.items = commentCandidates(); filterPicker(); }
+      if (chosen) {
+        removeComment(chosen.id);
+        picker.items = commentCandidates();
+        filterPicker();
+      }
     }
   });
+  pickerInput.addEventListener("blur", () => {
+    if (document.hasFocus()) closePicker();
+  });
 
-  // ---------------------------------------------------------------- keys
+  // ------------------------------------------------------------------ keys
 
   const pendingTimeout = 800;
   let pendingTimer = null;
@@ -815,14 +885,16 @@
     state.pendingKey = key;
     clearTimeout(pendingTimer);
     pendingTimer = setTimeout(() => (state.pendingKey = null), pendingTimeout);
-    setMessage(key);
+    setMessage(key === " " ? "space" : key);
   }
 
   function takePending() {
     const key = state.pendingKey;
-    state.pendingKey = null;
-    clearTimeout(pendingTimer);
-    setMessage("");
+    if (key !== null) {
+      state.pendingKey = null;
+      clearTimeout(pendingTimer);
+      setMessage("");
+    }
     return key;
   }
 
@@ -832,13 +904,11 @@
     return n;
   }
 
-  function scrollCursorTo(where) {
-    const block = state.blocks[state.cursor];
-    if (block) block.scrollIntoView({ block: where });
-  }
+  const modifierKeys = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
 
   window.addEventListener("keydown", (event) => {
     if (["command", "search", "picker", "comment"].includes(state.mode)) return;
+    if (modifierKeys.has(event.key)) return;
     if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "p") {
       event.preventDefault();
       openPicker("documents");
@@ -887,8 +957,11 @@
         case "G": moveCursor(state.count ? takeCount() - 1 : state.blocks.length - 1); break;
         case "g": case "]": case "[": case "z": case " ": setPending(key); break;
         case "v":
-          if (state.mode === "visual") setMode("normal");
-          else { state.anchor = state.cursor; setMode("visual"); }
+          if (state.anchor !== null) setMode("normal");
+          else {
+            state.anchor = state.cursor;
+            setMode("visual");
+          }
           break;
         case "y": actOnSelection("copy"); break;
         case "s": actOnSelection("send"); break;
@@ -904,7 +977,7 @@
           if (state.count) state.count = "";
           else if (state.anchor !== null) setMode("normal");
           else if (state.search.query) clearSearch();
-          else send({ type: "hide" });
+          else post({ type: "hide" });
           break;
         default: handled = false;
       }
@@ -918,29 +991,29 @@
     const docs = state.doc.documents;
     const i = docs.findIndex((d) => d.path === state.doc.path);
     const next = docs[(i + direction + docs.length) % docs.length];
-    if (next) send({ type: "switch", session_id: state.doc.sessionId, path: next.path });
+    if (next) switchTo(state.doc.sessionId, next.path);
   }
 
   function cycleSession(direction) {
-    const list = state.sessions.sessions;
+    const list = state.sessions;
     if (list.length === 0) return;
-    const i = list.findIndex((s) => s.session_id === state.sessions.current);
+    const i = list.findIndex((s) => s.session_id === state.currentSession);
     const next = list[(i + direction + list.length) % list.length];
-    send({ type: "switch", session_id: next.session_id });
+    switchTo(next.session_id);
   }
 
-  // ------------------------------------------------------ mouse selection
+  // -------------------------------------------------------- mouse and links
 
-  function mouseSelectionText() {
+  function mouseSelection() {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
     const range = selection.getRangeAt(0);
     if (!docEl.contains(range.commonAncestorContainer)) return null;
-    return { text: selection.toString().trim(), rect: range.getBoundingClientRect() };
+    return { text: selection.toString().trim(), rect: range.getBoundingClientRect(), anchor: selection.anchorNode };
   }
 
   function placeToolbar() {
-    const found = mouseSelectionText();
+    const found = mouseSelection();
     if (!found || !found.text) {
       toolbarEl.hidden = true;
       return;
@@ -962,9 +1035,9 @@
   toolbarEl.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
-    const found = mouseSelectionText();
+    const found = mouseSelection();
     if (found) {
-      const block = window.getSelection()?.anchorNode?.parentElement?.closest("[data-source-line]");
+      const block = found.anchor?.parentElement?.closest("[data-source-line]");
       perform(button.dataset.action, found.text, block ? Number(block.dataset.sourceLine) : undefined);
     }
     window.getSelection()?.removeAllRanges();
@@ -972,19 +1045,39 @@
   });
 
   docEl.addEventListener("click", (event) => {
-    const block = event.target.closest("[data-source-line]");
-    const index = state.blocks.findIndex((b) => b === block || b.contains(block));
+    const index = blockIndexOf(event.target);
     if (index >= 0 && window.getSelection()?.isCollapsed) {
       state.cursor = index;
       paintCursor(false);
     }
   });
 
-  // -------------------------------------------------------------- sidebar
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest("a[href]");
+    if (!link) return;
+    const href = link.getAttribute("href");
+    if (href.startsWith("#")) return;
+    event.preventDefault();
+    if (/^https?:\/\//.test(href)) post({ type: "open-external", url: href });
+    else if (/\.(md|markdown)$/i.test(href)) openRelativeLink(href);
+    else setMessage("only web links and Markdown files open from here");
+  });
 
-  function sessionName(s) {
-    return s.cwd.split("/").pop() || s.cwd;
+  // A link to another Markdown file resolves against the current document
+  // and opens if the session lists it.
+  function openRelativeLink(href) {
+    if (!state.doc) return;
+    const base = state.doc.path.split("/").slice(0, -1);
+    for (const part of href.split("/")) {
+      if (part === "..") base.pop();
+      else if (part && part !== ".") base.push(part);
+    }
+    const target = base.join("/");
+    if (state.doc.documents.some((d) => d.path === target)) switchTo(state.doc.sessionId, target);
+    else setMessage(`${href} is not among this session's documents`);
   }
+
+  // --------------------------------------------------------------- sidebar
 
   function ago(unixSeconds) {
     const s = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
@@ -1010,19 +1103,18 @@
   }
 
   function renderSessions() {
-    const { sessions, current } = state.sessions;
     sessionsEl.replaceChildren(
-      ...sessions.map((s) =>
+      ...state.sessions.map((s) =>
         item({
           name: sessionName(s),
           meta: ago(s.last_active_at),
           title: `${s.cwd}\n${s.session_id}`,
-          current: s.session_id === current,
-          onClick: () => send({ type: "switch", session_id: s.session_id }),
+          current: s.session_id === state.currentSession,
+          onClick: () => switchTo(s.session_id),
         })
       )
     );
-    if (sessions.length === 0) {
+    if (state.sessions.length === 0) {
       const li = document.createElement("li");
       li.className = "empty";
       li.textContent = "No live sessions";
@@ -1040,7 +1132,7 @@
           meta: slash >= 0 ? d.label.slice(0, slash) : "",
           title: d.path,
           current: d.path === state.doc.path,
-          onClick: () => send({ type: "switch", session_id: state.doc.sessionId, path: d.path }),
+          onClick: () => switchTo(state.doc.sessionId, d.path),
         });
       })
     );
@@ -1048,7 +1140,7 @@
 
   setInterval(renderSessions, 30000);
 
-  // ---------------------------------------------------------------- misc
+  // ------------------------------------------------------------------ misc
 
   let toastTimer = null;
   function toast(text) {
@@ -1059,36 +1151,38 @@
     setMessage(text);
   }
 
-  document.addEventListener("click", (event) => {
-    const link = event.target.closest("a[href]");
-    if (!link) return;
-    const href = link.getAttribute("href");
-    if (href.startsWith("#")) return;
-    event.preventDefault();
-    if (/^https?:\/\//.test(href)) send({ type: "open-external", url: href });
-  });
-
-  function send(message) {
+  function post(message) {
     window.ipc.postMessage(JSON.stringify(message));
   }
 
-  window.peekback = {
-    receive(message) {
-      switch (message.type) {
-        case "render": render(message); break;
-        case "sessions": state.sessions = message; renderSessions(); renderStatus(); break;
-        case "banner": bannerEl.textContent = message.text; bannerEl.hidden = false; break;
-        case "toast": toast(message.text); break;
-        case "theme": applyTheme(message.theme); break;
-        case "send-result":
-          toast(message.text);
-          if (message.ok && message.purpose === "comments") { state.comments = []; renderComments(); }
-          break;
-        default: console.warn("unknown message", message);
-      }
-    },
-  };
+  function receive(message) {
+    switch (message.type) {
+      case "render": render(message); break;
+      case "sessions":
+        state.sessions = message.sessions;
+        state.currentSession = message.current;
+        renderSessions();
+        renderStatus();
+        break;
+      case "banner":
+        bannerEl.textContent = message.text;
+        bannerEl.hidden = false;
+        break;
+      case "toast": toast(message.text); break;
+      case "theme": applyTheme(message.theme); break;
+      case "send-result": onSendResult(message); break;
+      default: console.warn("unknown message", message);
+    }
+  }
+
+  // The daemon's entry point into the page; frozen so nothing rendered
+  // from a document can replace it.
+  Object.defineProperty(window, "peekback", {
+    value: Object.freeze({ receive }),
+    writable: false,
+    configurable: false,
+  });
 
   setMode("normal");
-  send({ type: "ready" });
+  post({ type: "ready" });
 })();

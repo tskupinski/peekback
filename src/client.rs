@@ -1,4 +1,5 @@
-use std::fs::OpenOptions;
+use std::fs::{DirBuilder, OpenOptions};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
@@ -47,18 +48,27 @@ pub fn request_starting_daemon(request: &Request) -> Result<Response> {
 }
 
 fn spawn_daemon() -> Result<()> {
-    std::fs::create_dir_all(paths::state_dir())?;
+    DirBuilder::new().recursive(true).mode(0o700).create(paths::state_dir())?;
     let log = OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
         .open(paths::log_path())?;
-    Command::new(std::env::current_exe()?)
+    let mut command = Command::new(std::env::current_exe()?);
+    command
         .arg("daemon")
+        // The daemon serves every session; it must not inherit the one this
+        // shell happens to run inside.
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone()?))
-        .stderr(Stdio::from(log))
-        .process_group(0)
-        .spawn()
-        .context("failed to spawn daemon")?;
+        .stderr(Stdio::from(log));
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    command.spawn().context("failed to spawn daemon")?;
     Ok(())
 }

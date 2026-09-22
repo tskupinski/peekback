@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -11,12 +12,12 @@ use crate::daemon::UserEvent;
 pub struct DocWatcher {
     inner: RecommendedWatcher,
     watched_dir: Option<PathBuf>,
-    watched_file: std::sync::Arc<std::sync::Mutex<Option<PathBuf>>>,
+    watched_file: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl DocWatcher {
     pub fn new(proxy: EventLoopProxy<UserEvent>) -> Result<Self> {
-        let watched_file = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+        let watched_file = Arc::new(Mutex::new(None::<PathBuf>));
         let filter = watched_file.clone();
         let inner = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
             let Ok(event) = event else { return };
@@ -26,8 +27,12 @@ impl DocWatcher {
             ) {
                 return;
             }
+            // FSEvents reports real paths while the watched path may go
+            // through a symlink (`/tmp` is one); the watch is on the parent
+            // directory only, so the file name is enough to match.
             let target = filter.lock().unwrap().clone();
-            if target.is_some_and(|t| event.paths.contains(&t)) {
+            let hit = target.is_some_and(|t| event.paths.iter().any(|p| p.file_name() == t.file_name()));
+            if hit {
                 let _ = proxy.send_event(UserEvent::DocChanged);
             }
         })?;
