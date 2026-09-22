@@ -359,7 +359,14 @@ exact source line range.
   between documents and sessions; the sidebar is off by default.
 - **Visual.** `v` anchors a selection at the cursor and `j`/`k` extend it
   over blocks. `y` copies, `s` sends, `c` comments; each returns to normal.
-  `Esc` cancels.
+  `Esc` cancels. The selection survives opening the command line or the
+  note input, so `:c note` acts on it, as `:'<,'>` would in vim.
+- **Comment.** `c` opens a one-line note input for the block or selection;
+  `Enter` adds the quote and note to the pending list, `Esc` abandons.
+  `Space c` opens the pending comments in the picker: `Enter` jumps to the
+  quoted block, `Ctrl-D` removes one. `S` or `:sendall` sends them all as
+  one prompt and clears the list only after the backend reports success.
+  The status line shows the pending count.
 - **Search.** `/` opens a search field; matches highlight as you type,
   `Enter` moves the cursor to the first match, `n`/`N` step through them.
 - **Command.** `:` opens a command line with completion over documents and

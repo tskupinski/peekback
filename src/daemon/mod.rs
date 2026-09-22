@@ -38,7 +38,7 @@ pub enum UserEvent {
 pub enum PageMessage {
     Ready,
     Switch { session_id: Option<String>, path: Option<PathBuf> },
-    Send { text: String },
+    Send { text: String, purpose: Option<String> },
     Copy { text: String },
     Hide,
     OpenExternal { url: String },
@@ -53,6 +53,7 @@ pub enum DaemonMessage<'a> {
     Banner { text: &'a str },
     Toast { text: &'a str },
     Theme { theme: Option<&'a Theme> },
+    SendResult { ok: bool, purpose: Option<&'a str>, text: &'a str },
 }
 
 struct Current {
@@ -154,14 +155,15 @@ pub fn run() -> Result<()> {
                     view.focus();
                 }
             }
-            Event::UserEvent(UserEvent::Page(PageMessage::Send { text })) => {
+            Event::UserEvent(UserEvent::Page(PageMessage::Send { text, purpose })) => {
+                let purpose = purpose.as_deref();
                 let Some(target) = current.as_ref().and_then(|c| c.session.as_ref()) else {
-                    view.push(&DaemonMessage::Toast { text: "No session to send to" });
+                    view.push(&DaemonMessage::SendResult { ok: false, purpose, text: "No session to send to" });
                     return;
                 };
                 match send::send(target, &text, pinned_backend) {
-                    Ok(outcome) => view.push(&DaemonMessage::Toast { text: &outcome.note }),
-                    Err(e) => view.push(&DaemonMessage::Toast { text: &format!("Send failed: {e:#}") }),
+                    Ok(outcome) => view.push(&DaemonMessage::SendResult { ok: true, purpose, text: &outcome.note }),
+                    Err(e) => view.push(&DaemonMessage::SendResult { ok: false, purpose, text: &format!("Send failed: {e:#}") }),
                 }
             }
             Event::UserEvent(UserEvent::Page(PageMessage::Copy { text })) => {

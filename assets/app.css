@@ -256,7 +256,7 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
   background: var(--muted);
 }
 .statusline .mode[data-mode="visual"] { background: #b35900; }
-.statusline .mode[data-mode="command"], .statusline .mode[data-mode="search"], .statusline .mode[data-mode="picker"] { background: var(--accent); }
+.statusline .mode[data-mode="command"], .statusline .mode[data-mode="search"], .statusline .mode[data-mode="picker"], .statusline .mode[data-mode="comment"] { background: var(--accent); }
 .statusline .status-doc { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .statusline .status-msg { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -396,3 +396,46 @@ html[data-theme] .hljs-deletion { color: var(--ansi-1); }
 html[data-theme] .hljs-emphasis { font-style: italic; }
 html[data-theme] .hljs-strong { font-weight: 600; }
 html[data-theme] ::highlight(search) { background: var(--ansi-3); color: var(--bg); }
+
+/* ---- comments ---- */
+
+.comment {
+  position: relative;
+  padding: 6px 22px 6px 8px;
+  margin: 0 -8px 4px;
+  border-radius: 6px;
+  border-left: 3px solid var(--accent);
+}
+.comment:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.comment-quote {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.comment-note { font-size: 12.5px; }
+.comment-remove {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+.comment-remove:hover { color: var(--fg); }
+.send-all {
+  margin-top: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--bg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.send-all[hidden] { display: none; }

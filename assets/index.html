@@ -19,6 +19,11 @@
       <h2>Documents</h2>
       <ul id="documents" class="list"></ul>
     </section>
+    <section class="sidebar-section">
+      <h2>Comments</h2>
+      <ul id="comments" class="list comments"></ul>
+      <button id="send-all" class="send-all" hidden>Send all</button>
+    </section>
   </aside>
   <main id="main">
     <div id="banner" class="banner" hidden></div>
@@ -28,6 +33,7 @@
   <div id="toolbar" class="toolbar" hidden>
     <button data-action="copy">Copy</button>
     <button data-action="send">Send</button>
+    <button data-action="comment">Comment</button>
   </div>
 
   <div id="picker" class="picker" hidden>
@@ -49,8 +55,11 @@
       <tr><td>]s / [s</td><td>next / previous session</td></tr>
       <tr><td>v</td><td>visual mode: extend with j / k</td></tr>
       <tr><td>y / s</td><td>copy / send the block or selection as Markdown</td></tr>
+      <tr><td>c</td><td>comment on the block or selection</td></tr>
+      <tr><td>Space c</td><td>pending comments (Enter jumps, Ctrl-D removes)</td></tr>
+      <tr><td>S / :sendall</td><td>send all pending comments as one prompt</td></tr>
       <tr><td>/</td><td>search, then n / N</td></tr>
-      <tr><td>:</td><td>command line: :doc, :session, :send, :sidebar, :q, :help</td></tr>
+      <tr><td>:</td><td>command line: :doc, :session, :send, :c note, :sendall, :sidebar, :q, :help</td></tr>
       <tr><td>Tab</td><td>toggle the sidebar</td></tr>
       <tr><td>Esc</td><td>cancel, clear search, or leave the viewer</td></tr>
     </table>

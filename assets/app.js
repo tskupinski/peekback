@@ -17,6 +17,8 @@
   const pickerEl = $("picker");
   const pickerInput = $("picker-input");
   const pickerList = $("picker-list");
+  const commentsEl = $("comments");
+  const sendAllButton = $("send-all");
 
   const darkMode = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
 
@@ -114,6 +116,7 @@
     pendingKey: null,
     count: "",
     search: { query: "", matches: [], index: -1 },
+    comments: [], // { id, path, label, quote, note, line }
   };
 
   async function render(message) {
@@ -283,8 +286,10 @@
     return best;
   }
 
+  // The anchor outlives visual mode while the command line or the note
+  // input is open, so `:c note` and `c` act on the whole selection.
   function selectionRange() {
-    if (state.mode === "visual" && state.anchor !== null) {
+    if (state.anchor !== null) {
       return [Math.min(state.anchor, state.cursor), Math.max(state.anchor, state.cursor)];
     }
     return [state.cursor, state.cursor];
@@ -294,7 +299,7 @@
     const [from, to] = selectionRange();
     state.blocks.forEach((block, i) => {
       block.classList.toggle("cursor", i === state.cursor);
-      block.classList.toggle("selected", state.mode === "visual" && i >= from && i <= to);
+      block.classList.toggle("selected", state.anchor !== null && i >= from && i <= to);
     });
     const current = state.blocks[state.cursor];
     if (scroll && current) current.scrollIntoView({ block: "nearest" });
@@ -339,7 +344,7 @@
 
   function setMode(mode) {
     state.mode = mode;
-    if (mode !== "visual") state.anchor = null;
+    if (mode === "normal") state.anchor = null;
     modeEl.textContent = mode.toUpperCase();
     modeEl.dataset.mode = mode;
     paintCursor(false);
@@ -354,6 +359,7 @@
     const parts = [];
     if (session) parts.push(sessionName(session));
     if (state.doc) parts.push(state.doc.label);
+    if (state.comments.length) parts.push(`${state.comments.length} pending`);
     statusDocEl.textContent = parts.join(" › ");
   }
 
@@ -381,15 +387,123 @@
     if (!state.doc || state.blocks.length === 0) return;
     const [from, to] = selectionRange();
     const text = sourceOf(from, to);
-    perform(action, text);
-    if (state.mode === "visual") setMode("normal");
+    perform(action, text, Number(state.blocks[from].dataset.sourceLine));
+    if (action !== "comment") leaveVisual();
   }
 
-  function perform(action, text) {
+  function perform(action, text, line) {
     if (!text) return;
     if (action === "copy") send({ type: "copy", text });
-    if (action === "send") send({ type: "send", text: blockquote(text) });
+    if (action === "send") send({ type: "send", text: blockquote(text), purpose: "selection" });
+    if (action === "comment") openNoteInput(text, line);
   }
+
+  function leaveVisual() {
+    if (state.anchor !== null) setMode("normal");
+  }
+
+  // ------------------------------------------------------------- comments
+
+  // Comments are not persisted: closing the window loses them, by design.
+  let noteTarget = null;
+  let nextCommentId = 1;
+
+  function openNoteInput(quote, line) {
+    noteTarget = { quote, line };
+    openCmdline("c");
+    cmdInput.placeholder = "note, Enter to add";
+  }
+
+  function addComment(quote, note, line) {
+    if (!state.doc || !quote) return;
+    state.comments.push({
+      id: nextCommentId++,
+      path: state.doc.path,
+      label: promptPathFor(state.doc.path),
+      quote,
+      note: note.trim(),
+      line,
+    });
+    renderComments();
+    setMessage(`${state.comments.length} pending comment${state.comments.length === 1 ? "" : "s"}`);
+  }
+
+  function removeComment(id) {
+    state.comments = state.comments.filter((c) => c.id !== id);
+    renderComments();
+  }
+
+  // Relative to the session's cwd when under it, otherwise absolute, since
+  // the agent will read this path.
+  function promptPathFor(path) {
+    const session = state.sessions.sessions.find((s) => s.session_id === state.sessions.current);
+    if (session && path.startsWith(session.cwd + "/")) return path.slice(session.cwd.length + 1);
+    return path;
+  }
+
+  function commentsPrompt() {
+    const byPath = new Map();
+    for (const c of state.comments) {
+      if (!byPath.has(c.label)) byPath.set(c.label, []);
+      byPath.get(c.label).push(c);
+    }
+    return [...byPath.entries()]
+      .map(([label, comments]) => {
+        const body = comments.map((c) => `${blockquote(c.quote)}\n${c.note}`.trimEnd()).join("\n\n");
+        return `Comments on \`${label}\`:\n\n${body}`;
+      })
+      .join("\n\n");
+  }
+
+  function sendAllComments() {
+    if (state.comments.length === 0) return setMessage("no pending comments");
+    send({ type: "send", text: commentsPrompt(), purpose: "comments" });
+  }
+
+  function renderComments() {
+    commentsEl.replaceChildren(
+      ...state.comments.map((c) => {
+        const li = document.createElement("li");
+        li.className = "comment";
+        const quote = document.createElement("div");
+        quote.className = "comment-quote";
+        quote.textContent = c.quote;
+        const note = document.createElement("div");
+        note.className = "comment-note";
+        note.textContent = c.note || "(no note)";
+        const remove = document.createElement("button");
+        remove.className = "comment-remove";
+        remove.textContent = "×";
+        remove.title = "Remove";
+        remove.addEventListener("click", (event) => { event.stopPropagation(); removeComment(c.id); });
+        li.append(quote, note, remove);
+        li.addEventListener("click", () => jumpToComment(c));
+        return li;
+      })
+    );
+    sendAllButton.hidden = state.comments.length === 0;
+    sendAllButton.textContent = `Send all (${state.comments.length})`;
+    renderStatus();
+  }
+
+  function jumpToComment(c) {
+    if (c.path !== state.doc?.path) {
+      send({ type: "switch", session_id: state.doc?.sessionId ?? null, path: c.path });
+      return;
+    }
+    if (c.line !== undefined && c.line !== null) moveCursor(nearestBlock(c.line));
+  }
+
+  function commentCandidates() {
+    return state.comments.map((c) => ({
+      label: `${c.quote.split("\n")[0].slice(0, 60)}${c.note ? "  ·  " + c.note : ""}`,
+      meta: c.label,
+      id: c.id,
+      run: () => jumpToComment(c),
+    }));
+  }
+
+  sendAllButton.addEventListener("click", sendAllComments);
 
   // -------------------------------------------------------------- search
 
@@ -454,6 +568,14 @@
     session: (arg) => (arg ? switchTo(sessionCandidates(), arg, "session") : openPicker("sessions")),
     send: () => actOnSelection("send"),
     copy: () => actOnSelection("copy"),
+    c: (arg) => {
+      if (!state.blocks.length) return;
+      const [from, to] = selectionRange();
+      addComment(sourceOf(from, to), arg, Number(state.blocks[from].dataset.sourceLine));
+      leaveVisual();
+    },
+    sendall: () => sendAllComments(),
+    comments: () => openPicker("comments"),
     help: () => toggleHelp(),
     sidebar: () => setSidebar(!sidebarVisible()),
   };
@@ -521,11 +643,12 @@
 
   function openCmdline(prefix) {
     cmdPrefix = prefix;
-    cmdPrefixEl.textContent = prefix;
+    cmdPrefixEl.textContent = prefix === "c" ? "comment" : prefix;
     cmdInput.value = "";
+    cmdInput.placeholder = "";
     cmdlineEl.hidden = false;
     hideCompletions();
-    setMode(prefix === ":" ? "command" : "search");
+    setMode(prefix === ":" ? "command" : prefix === "/" ? "search" : "comment");
     cmdInput.focus();
   }
 
@@ -533,7 +656,7 @@
     cmdlineEl.hidden = true;
     hideCompletions();
     cmdInput.blur();
-    setMode("normal");
+    setMode(state.anchor !== null ? "visual" : "normal");
   }
 
   function completionsFor(value) {
@@ -577,7 +700,7 @@
 
   cmdInput.addEventListener("input", () => {
     if (cmdPrefix === "/") runSearch(cmdInput.value);
-    else showCompletions();
+    else if (cmdPrefix === ":") showCompletions();
   });
 
   cmdInput.addEventListener("keydown", (event) => {
@@ -589,6 +712,7 @@
       const value = cmdInput.value;
       closeCmdline();
       if (cmdPrefix === "/") gotoMatch(1);
+      else if (cmdPrefix === "c") { if (noteTarget) addComment(noteTarget.quote, value, noteTarget.line); noteTarget = null; setMode("normal"); }
       else runCommand(value);
     } else if (event.key === "Tab") {
       event.preventDefault();
@@ -607,9 +731,10 @@
   let picker = { items: [], filtered: [], index: 0 };
 
   function openPicker(kind) {
-    picker.items = kind === "documents" ? documentCandidates() : sessionCandidates();
+    picker.kind = kind;
+    picker.items = kind === "documents" ? documentCandidates() : kind === "sessions" ? sessionCandidates() : commentCandidates();
     pickerInput.value = "";
-    pickerInput.placeholder = kind === "documents" ? "open document" : "switch session";
+    pickerInput.placeholder = { documents: "open document", sessions: "switch session", comments: "pending comments, Ctrl-D removes" }[kind];
     pickerEl.hidden = false;
     setMode("picker");
     filterPicker();
@@ -674,6 +799,11 @@
     else if (event.key === "Enter") choosePicker();
     else if (event.key === "ArrowDown" || (ctrl && (event.key === "n" || event.key === "j"))) { event.preventDefault(); movePicker(1); }
     else if (event.key === "ArrowUp" || (ctrl && (event.key === "p" || event.key === "k"))) { event.preventDefault(); movePicker(-1); }
+    else if (ctrl && event.key === "d" && picker.kind === "comments") {
+      event.preventDefault();
+      const chosen = picker.filtered[picker.index];
+      if (chosen) { removeComment(chosen.id); picker.items = commentCandidates(); filterPicker(); }
+    }
   });
 
   // ---------------------------------------------------------------- keys
@@ -708,7 +838,7 @@
   }
 
   window.addEventListener("keydown", (event) => {
-    if (state.mode === "command" || state.mode === "search" || state.mode === "picker") return;
+    if (["command", "search", "picker", "comment"].includes(state.mode)) return;
     if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "p") {
       event.preventDefault();
       openPicker("documents");
@@ -740,6 +870,7 @@
     } else if (pending === " ") {
       if (key === "d") openPicker("documents");
       else if (key === "s") openPicker("sessions");
+      else if (key === "c") openPicker("comments");
       else handled = false;
     } else if (pending === "]" || pending === "[") {
       const direction = pending === "]" ? 1 : -1;
@@ -761,6 +892,8 @@
           break;
         case "y": actOnSelection("copy"); break;
         case "s": actOnSelection("send"); break;
+        case "c": actOnSelection("comment"); break;
+        case "S": sendAllComments(); break;
         case "/": openCmdline("/"); break;
         case ":": openCmdline(":"); break;
         case "n": gotoMatch(1); break;
@@ -769,7 +902,7 @@
         case "Tab": setSidebar(!sidebarVisible()); break;
         case "Escape":
           if (state.count) state.count = "";
-          else if (state.mode === "visual") setMode("normal");
+          else if (state.anchor !== null) setMode("normal");
           else if (state.search.query) clearSearch();
           else send({ type: "hide" });
           break;
@@ -830,7 +963,10 @@
     const button = event.target.closest("button");
     if (!button) return;
     const found = mouseSelectionText();
-    if (found) perform(button.dataset.action, found.text);
+    if (found) {
+      const block = window.getSelection()?.anchorNode?.parentElement?.closest("[data-source-line]");
+      perform(button.dataset.action, found.text, block ? Number(block.dataset.sourceLine) : undefined);
+    }
     window.getSelection()?.removeAllRanges();
     toolbarEl.hidden = true;
   });
@@ -944,6 +1080,10 @@
         case "banner": bannerEl.textContent = message.text; bannerEl.hidden = false; break;
         case "toast": toast(message.text); break;
         case "theme": applyTheme(message.theme); break;
+        case "send-result":
+          toast(message.text);
+          if (message.ok && message.purpose === "comments") { state.comments = []; renderComments(); }
+          break;
         default: console.warn("unknown message", message);
       }
     },
