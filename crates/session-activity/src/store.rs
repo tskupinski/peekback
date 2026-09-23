@@ -1,0 +1,267 @@
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result, ensure};
+
+use crate::{Agent, FileEvent, SessionKey};
+
+pub(crate) const MAX_BATCH_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Debug, Default)]
+pub struct ReadReport {
+    pub events: Vec<FileEvent>,
+    pub warnings: Vec<BatchWarning>,
+}
+
+#[derive(Debug, Default)]
+pub struct SessionReport {
+    pub sessions: Vec<SessionKey>,
+    pub warnings: Vec<BatchWarning>,
+}
+
+#[derive(Debug)]
+pub struct BatchWarning {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+static NEXT_BATCH: AtomicU64 = AtomicU64::new(0);
+
+/// An append-only store of metadata-only batches, namespaced by agent/session.
+/// Each hook writes its own batch then renames it atomically. Concurrent hooks
+/// cannot overwrite each other, and readers never see a partially written batch.
+#[derive(Clone, Debug)]
+pub struct Store {
+    root: PathBuf,
+}
+
+impl Store {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub(crate) fn directory(&self, session: &SessionKey) -> Result<PathBuf> {
+        session.validate()?;
+        Ok(self.root.join(session.agent.slug()).join(&session.session_id))
+    }
+
+    /// Enumerate retained session directories, including ended/compacted sessions.
+    /// Does not create state or follow namespace/session directory symlinks.
+    pub fn sessions(&self) -> SessionReport {
+        let mut report = SessionReport::default();
+        for agent in [Agent::Claude, Agent::Codex] {
+            let path = self.root.join(agent.slug());
+            let entries = (|| -> Result<Option<fs::ReadDir>> {
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(e) => return Err(e.into()),
+                };
+                ensure!(metadata.is_dir(), "agent namespace must be a directory, not a symlink");
+                Ok(Some(fs::read_dir(&path)?))
+            })();
+            let entries = match entries {
+                Ok(Some(entries)) => entries,
+                Ok(None) => continue,
+                Err(error) => {
+                    report.warnings.push(BatchWarning { path, message: format!("{error:#}") });
+                    continue;
+                }
+            };
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        report.warnings.push(BatchWarning { path: path.clone(), message: error.to_string() });
+                        continue;
+                    }
+                };
+                let result = (|| -> Result<Option<SessionKey>> {
+                    let kind = entry.file_type()?;
+                    ensure!(!kind.is_symlink(), "session directory symlinks are not followed");
+                    if !kind.is_dir() {
+                        return Ok(None);
+                    }
+                    let session_id = entry
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| anyhow::anyhow!("invalid session directory name"))?;
+                    let key = SessionKey { agent, session_id };
+                    key.validate()?;
+                    Ok(Some(key))
+                })();
+                match result {
+                    Ok(Some(key)) => report.sessions.push(key),
+                    Ok(None) => {}
+                    Err(error) => {
+                        report.warnings.push(BatchWarning { path: entry.path(), message: format!("{error:#}") })
+                    }
+                }
+            }
+        }
+        report
+            .sessions
+            .sort_by(|a, b| a.agent.slug().cmp(b.agent.slug()).then_with(|| a.session_id.cmp(&b.session_id)));
+        report
+    }
+
+    /// Read retained history across agents/sessions. Per-session failures become
+    /// warnings so one damaged checkpoint cannot hide other sessions. This is
+    /// not a globally atomic snapshot; each session is read under its own lock.
+    pub fn read_all(&self) -> ReadReport {
+        let sessions = self.sessions();
+        let mut report = ReadReport { events: Vec::new(), warnings: sessions.warnings };
+        for key in sessions.sessions {
+            match self.read(&key) {
+                Ok(mut read) => {
+                    report.events.append(&mut read.events);
+                    report.warnings.append(&mut read.warnings);
+                }
+                Err(error) => report.warnings.push(BatchWarning {
+                    path: self.root.join(key.agent.slug()).join(&key.session_id),
+                    message: format!("{error:#}"),
+                }),
+            }
+        }
+        report.events.sort_by_key(|e| e.timestamp);
+        report
+    }
+
+    pub fn append(&self, session: &SessionKey, events: &[FileEvent]) -> Result<()> {
+        let dir = self.directory(session)?;
+        if events.is_empty() {
+            return Ok(());
+        }
+        validate_batch(session, events)?;
+        let missing: Vec<_> =
+            dir.ancestors().take_while(|p| !p.as_os_str().is_empty() && !p.exists()).map(Path::to_path_buf).collect();
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&dir)?;
+        // Persist newly created directory links as well as the final batch.
+        for path in missing {
+            sync_directory(&path)?;
+            if let Some(parent) = path.parent() {
+                sync_directory(if parent.as_os_str().is_empty() { Path::new(".") } else { parent })?;
+            }
+        }
+        let _lock = crate::lock::Lock::acquire(&dir, false)?;
+        let cutoff = crate::maintenance::retained_from(&dir)?;
+        let retained: Vec<_> = events.iter().filter(|e| cutoff.is_none_or(|at| e.timestamp >= at)).collect();
+        if retained.is_empty() {
+            return Ok(());
+        }
+        let bytes = serde_json::to_vec(&retained)?;
+        ensure!(bytes.len() as u64 <= MAX_BATCH_BYTES, "activity batch exceeds 16 MiB limit");
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let name = format!("{nonce:039}-{}-{}", std::process::id(), NEXT_BATCH.fetch_add(1, Ordering::Relaxed));
+        let temporary = dir.join(format!("{name}.tmp"));
+        let destination = dir.join(format!("{name}.json"));
+        let result = write_batch(&temporary, &bytes).and_then(|()| {
+            fs::rename(&temporary, destination).context("publishing activity batch")?;
+            sync_directory(&dir)
+        });
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result
+    }
+
+    /// Strict reads remain available for callers that require complete history.
+    pub fn events(&self, session: &SessionKey) -> Result<Vec<FileEvent>> {
+        let report = self.read(session)?;
+        ensure!(
+            report.warnings.is_empty(),
+            "incomplete activity history: {}",
+            report
+                .warnings
+                .iter()
+                .map(|w| format!("{}: {}", w.path.display(), w.message))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+        Ok(report.events)
+    }
+
+    /// Read every valid batch and report damaged/unreadable batches separately.
+    /// Bad batches are left untouched for inspection and recovery.
+    pub fn read(&self, session: &SessionKey) -> Result<ReadReport> {
+        let dir = self.directory(session)?;
+        if !dir.try_exists()? {
+            return Ok(ReadReport::default());
+        }
+        let _lock = crate::lock::Lock::acquire(&dir, false)?;
+        self.read_unlocked(session)
+    }
+
+    pub(crate) fn read_unlocked(&self, session: &SessionKey) -> Result<ReadReport> {
+        let dir = self.directory(session)?;
+        let paths = crate::maintenance::active_paths(&dir)?;
+        let mut report = ReadReport::default();
+        for path in paths {
+            match read_batch(&path, session) {
+                Ok(batch) => report.events.extend(batch),
+                Err(error) => report.warnings.push(BatchWarning { path, message: format!("{error:#}") }),
+            }
+        }
+        report.events.sort_by_key(|e| e.timestamp);
+        if let Some(cutoff) = crate::maintenance::retained_from(&dir)? {
+            report.events.retain(|event| event.timestamp >= cutoff);
+        }
+        Ok(report)
+    }
+}
+
+pub(crate) fn write_batch(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn validate_batch(session: &SessionKey, events: &[FileEvent]) -> Result<()> {
+    for event in events {
+        ensure!(&event.session == session, "event belongs to a different session");
+        ensure!(event.schema_version == 1, "unsupported activity schema");
+        ensure!(event.path.is_absolute() && event.cwd.is_absolute(), "event paths must be absolute");
+        ensure!(event.previous_path.as_ref().is_none_or(|p| p.is_absolute()), "rename origin must be absolute");
+        ensure!(
+            (event.operation == crate::Operation::Rename) == event.previous_path.is_some(),
+            "rename operation and origin must agree"
+        );
+    }
+    Ok(())
+}
+
+fn read_batch(path: &Path, session: &SessionKey) -> Result<Vec<FileEvent>> {
+    ensure!(fs::symlink_metadata(path)?.file_type().is_file(), "batch must be a regular file");
+    let mut bytes = Vec::new();
+    fs::File::open(path)?.take(MAX_BATCH_BYTES + 1).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() as u64 <= MAX_BATCH_BYTES, "activity batch exceeds 16 MiB limit");
+    let events = serde_json::from_slice::<Vec<FileEvent>>(&bytes)?;
+    validate_batch(session, &events)?;
+    Ok(events)
+}
+
+pub(crate) fn sync_directory(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    fs::File::open(path)?.sync_all().with_context(|| format!("syncing {}", path.display()))?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}

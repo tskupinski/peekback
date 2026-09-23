@@ -17,6 +17,10 @@
   const pickerEl = $("picker");
   const pickerInput = $("picker-input");
   const pickerList = $("picker-list");
+  const pickerScope = $("picker-scope");
+  const pickerCurrent = $("picker-current");
+  const pickerAll = $("picker-all");
+  const pickerNote = $("picker-note");
   const commentsEl = $("comments");
   const sendAllButton = $("send-all");
 
@@ -319,14 +323,17 @@
     return index < 0 ? Math.max(0, state.blocks.length - 1) : index;
   }
 
-  function halfPage(direction) {
-    window.scrollBy({ top: (direction * window.innerHeight) / 2 });
+  function scrollPage(fraction) {
+    window.scrollBy({ top: fraction * window.innerHeight });
     requestAnimationFrame(() => {
       if (state.blocks.length === 0) return;
       state.cursor = topVisibleBlock();
       paintCursor(false);
     });
   }
+
+  const halfPage = (direction) => scrollPage(direction / 2);
+  const fullPage = (direction) => scrollPage(direction * 0.9);
 
   function nextHeading(direction) {
     const isHeading = (b) => /^H[1-6]$/.test(b.tagName);
@@ -361,7 +368,8 @@
   }
 
   function sessionName(s) {
-    return s.cwd.split("/").pop() || s.cwd;
+    const project = s.cwd.split("/").pop() || s.cwd;
+    return `${project} · ${s.agent === "codex" ? "Codex" : "Claude Code"}`;
   }
 
   function currentSession() {
@@ -622,6 +630,18 @@
   };
 
   function documentCandidates() {
+    if (picker.scope === "all") {
+      return picker.documents.map((d) => {
+        const provenance = d.sessions.map((s) => `${s.agent} / ${s.session_id}`).join(" · ");
+        return {
+          label: d.label,
+          search: `${d.label} ${provenance}`,
+          meta: `${ago(d.touched_at)} · ${provenance}`,
+          current: d.path === state.doc?.path,
+          run: () => post({ type: "switch-tracked", path: d.path }),
+        };
+      });
+    }
     if (!state.doc) return [];
     return state.doc.documents.map((d) => ({
       label: d.label,
@@ -650,7 +670,7 @@
     const q = (query || "").toLowerCase();
     if (!q) return candidates;
     return candidates
-      .map((c) => ({ c, score: fuzzyScore(c.label.toLowerCase(), q) }))
+      .map((c) => ({ c, score: fuzzyScore((c.search ?? c.label).toLowerCase(), q) }))
       .filter((x) => x.score >= 0)
       .sort((a, b) => b.score - a.score)
       .map((x) => x.c);
@@ -783,16 +803,41 @@
 
   // An fzf-style overlay: type to filter, Enter to open. Replaces the
   // sidebar as the way to move between documents and sessions.
-  const picker = { kind: null, items: [], filtered: [], index: 0 };
+  const picker = { kind: null, scope: "current", documents: [], warnings: [], loading: false, items: [], filtered: [], index: 0 };
+
+  function refreshAllDocuments() {
+    picker.loading = true;
+    picker.documents = [];
+    picker.warnings = [];
+    post({ type: "list-all-documents" });
+  }
+
+  function updatePickerItems() {
+    picker.items = picker.kind === "documents" ? documentCandidates() : picker.kind === "sessions" ? sessionCandidates() : commentCandidates();
+    filterPicker();
+  }
+
+  function setPickerScope(scope) {
+    picker.scope = scope;
+    if (scope === "all") refreshAllDocuments();
+    updatePickerItems();
+    pickerInput.focus();
+  }
+
+  for (const [button, scope] of [[pickerCurrent, "current"], [pickerAll, "all"]]) {
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => setPickerScope(scope));
+  }
 
   function openPicker(kind) {
     picker.kind = kind;
-    picker.items = kind === "documents" ? documentCandidates() : kind === "sessions" ? sessionCandidates() : commentCandidates();
+    if (kind === "documents" && !state.doc?.sessionId) picker.scope = "all";
+    if (kind === "documents" && picker.scope === "all") refreshAllDocuments();
     pickerInput.value = "";
     pickerInput.placeholder = { documents: "open document", sessions: "switch session", comments: "pending comments, Ctrl-D removes" }[kind];
     pickerEl.hidden = false;
     setMode("picker");
-    filterPicker();
+    updatePickerItems();
     pickerInput.focus();
   }
 
@@ -810,8 +855,19 @@
   }
 
   function renderPicker() {
+    const documents = picker.kind === "documents";
+    const all = documents && picker.scope === "all";
+    pickerScope.hidden = !documents;
+    pickerCurrent.setAttribute("aria-pressed", String(!all));
+    pickerAll.setAttribute("aria-pressed", String(all));
+    pickerNote.hidden = !all;
+    pickerNote.textContent = picker.loading ? "Loading retained history…" : picker.warnings.length
+      ? `Some history could not be read (${picker.warnings.length} warnings):\n${picker.warnings.join("\n")}`
+      : "Stored history, including ended sessions. Opens without a send target.";
+    const start = Math.max(0, picker.index - 29);
     pickerList.replaceChildren(
-      ...picker.filtered.slice(0, 30).map((c, i) => {
+      ...picker.filtered.slice(start, start + 30).map((c, offset) => {
+        const i = start + offset;
         const li = document.createElement("li");
         li.className = "picker-item" + (i === picker.index ? " active" : "") + (c.current ? " current" : "");
         const name = document.createElement("span");
@@ -820,6 +876,7 @@
         const meta = document.createElement("span");
         meta.className = "meta";
         meta.textContent = c.meta ?? "";
+        li.title = `${c.label}\n${c.meta ?? ""}`;
         li.append(name, meta);
         li.addEventListener("mousedown", (event) => event.preventDefault());
         li.addEventListener("click", () => {
@@ -832,7 +889,8 @@
     if (picker.filtered.length === 0) {
       const li = document.createElement("li");
       li.className = "empty";
-      li.textContent = "no matches";
+      li.textContent = all && picker.loading ? "loading…" : all && picker.documents.length === 0
+        ? "No existing Markdown files in retained history" : "no matches";
       pickerList.append(li);
     }
   }
@@ -841,7 +899,7 @@
     if (picker.filtered.length === 0) return;
     picker.index = (picker.index + step + picker.filtered.length) % picker.filtered.length;
     renderPicker();
-    pickerList.children[picker.index]?.scrollIntoView({ block: "nearest" });
+    pickerList.querySelector(".active")?.scrollIntoView({ block: "nearest" });
   }
 
   function choosePicker() {
@@ -856,6 +914,14 @@
     const ctrl = event.ctrlKey;
     if (event.key === "Escape") closePicker();
     else if (event.key === "Enter") choosePicker();
+    else if (event.key === "Tab" && picker.kind === "documents") {
+      event.preventDefault();
+      setPickerScope(picker.scope === "all" ? "current" : "all");
+    } else if (ctrl && event.key === "r" && picker.kind === "documents" && picker.scope === "all") {
+      event.preventDefault();
+      refreshAllDocuments();
+      updatePickerItems();
+    }
     else if (event.key === "ArrowDown" || (ctrl && (event.key === "n" || event.key === "j"))) {
       event.preventDefault();
       movePicker(1);
@@ -909,9 +975,12 @@
   window.addEventListener("keydown", (event) => {
     if (["command", "search", "picker", "comment"].includes(state.mode)) return;
     if (modifierKeys.has(event.key)) return;
-    if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "p") {
-      event.preventDefault();
-      openPicker("documents");
+    if (event.ctrlKey && !event.metaKey && !event.altKey) {
+      const ctrl = { p: () => openPicker("documents"), d: () => halfPage(1), u: () => halfPage(-1), f: () => fullPage(1), b: () => fullPage(-1) }[event.key];
+      if (ctrl) {
+        event.preventDefault();
+        ctrl();
+      }
       return;
     }
     if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -1158,6 +1227,20 @@
   function receive(message) {
     switch (message.type) {
       case "render": render(message); break;
+      case "all-documents":
+        picker.documents = message.documents;
+        picker.warnings = message.warnings;
+        picker.loading = false;
+        if (!pickerEl.hidden && picker.kind === "documents" && picker.scope === "all") updatePickerItems();
+        break;
+      case "documents":
+        if (state.doc?.sessionId === message.session_id) {
+          state.doc.documents = message.documents;
+          if (state.lastRender) state.lastRender.documents = message.documents;
+          renderDocuments();
+          if (!pickerEl.hidden && picker.kind === "documents" && picker.scope === "current") updatePickerItems();
+        }
+        break;
       case "sessions":
         state.sessions = message.sessions;
         state.currentSession = message.current;

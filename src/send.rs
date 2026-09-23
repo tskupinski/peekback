@@ -52,9 +52,7 @@ pub struct Outcome {
 
 /// The backend `send` would use for this session.
 pub fn probe(session: &Session, pinned: Option<Backend>) -> Backend {
-    pinned.unwrap_or_else(|| {
-        PROBE_ORDER.into_iter().find(|b| available(*b, session)).unwrap_or(Backend::Clipboard)
-    })
+    pinned.unwrap_or_else(|| PROBE_ORDER.into_iter().find(|b| available(*b, session)).unwrap_or(Backend::Clipboard))
 }
 
 pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Outcome> {
@@ -132,7 +130,16 @@ fn send_kitty(session: &Session, text: &str) -> Result<()> {
     let window = session.terminal.kitty_window.as_deref().ok_or_else(|| anyhow!("no kitty window"))?;
     let to = session.terminal.kitty_listen_on.as_deref().ok_or_else(|| anyhow!("no kitty socket"))?;
     run_with_stdin(
-        Command::new("kitten").args(["@", "--to", to, "send-text", "--bracketed-paste", "--match", &format!("id:{window}"), "--stdin"]),
+        Command::new("kitten").args([
+            "@",
+            "--to",
+            to,
+            "send-text",
+            "--bracketed-paste",
+            "--match",
+            &format!("id:{window}"),
+            "--stdin",
+        ]),
         text,
     )
 }
@@ -178,9 +185,7 @@ fn run_with_stdin(cmd: &mut Command, input: &str) -> Result<()> {
 }
 
 pub fn on_path(program: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| dir.join(program).is_file())
-    })
+    std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
 #[cfg(target_os = "macos")]
@@ -210,11 +215,10 @@ mod keystroke {
     }
 
     pub fn press_cmd_v() -> Result<()> {
-        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-            .map_err(|_| anyhow!("event source"))?;
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_| anyhow!("event source"))?;
         for down in [true, false] {
-            let event = CGEvent::new_keyboard_event(source.clone(), KEY_V, down)
-                .map_err(|_| anyhow!("keyboard event"))?;
+            let event =
+                CGEvent::new_keyboard_event(source.clone(), KEY_V, down).map_err(|_| anyhow!("keyboard event"))?;
             event.set_flags(CGEventFlags::CGEventFlagCommand);
             event.post(CGEventTapLocation::HID);
         }

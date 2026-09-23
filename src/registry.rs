@@ -6,11 +6,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::paths;
 
-/// One live Claude Code session, as written by hooks/register.sh.
+pub use session_activity::{Agent, SessionKey};
+
+/// One live agent session, as written by hooks/register.sh.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,
-    pub transcript_path: PathBuf,
+    #[serde(default)]
+    pub agent: Agent,
+    pub transcript_path: Option<PathBuf>,
+    /// Paths from older registry versions; new observations live in the activity store.
+    #[serde(default)]
+    pub written_files: Vec<PathBuf>,
     pub cwd: PathBuf,
     pub started_at: i64,
     pub last_active_at: i64,
@@ -31,9 +38,16 @@ pub struct Terminal {
 }
 
 impl Session {
+    pub fn activity_key(&self) -> SessionKey {
+        SessionKey { agent: self.agent, session_id: self.session_id.clone() }
+    }
+
     /// `~/.claude/projects/<slug>/`, the directory holding the transcript.
     pub fn project_dir(&self) -> Option<&Path> {
-        self.transcript_path.parent()
+        if self.agent != Agent::Claude {
+            return None;
+        }
+        self.transcript_path.as_deref()?.parent()
     }
 
     pub fn memory_dir(&self) -> Option<PathBuf> {
@@ -43,9 +57,9 @@ impl Session {
     /// The hook resets `started_at` on a resume after exit; the transcript's
     /// creation time is the earlier bound and survives that.
     pub fn started_at(&self) -> i64 {
-        fs::metadata(&self.transcript_path)
-            .and_then(|m| m.created())
-            .ok()
+        self.transcript_path
+            .as_ref()
+            .and_then(|p| fs::metadata(p).and_then(|m| m.created()).ok())
             .map(unix_secs)
             .filter(|&t| t > 0)
             .map_or(self.started_at, |t| t.min(self.started_at))
@@ -54,12 +68,7 @@ impl Session {
     pub fn scratchpad_dir(&self) -> Option<PathBuf> {
         let slug = self.project_dir()?.file_name()?;
         let uid = unsafe { libc::getuid() };
-        Some(
-            PathBuf::from(format!("/private/tmp/claude-{uid}"))
-                .join(slug)
-                .join(&self.session_id)
-                .join("scratchpad"),
-        )
+        Some(PathBuf::from(format!("/private/tmp/claude-{uid}")).join(slug).join(&self.session_id).join("scratchpad"))
     }
 }
 
@@ -76,6 +85,7 @@ pub fn load_all() -> Vec<Session> {
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| fs::read_to_string(e.path()).ok())
         .filter_map(|text| serde_json::from_str(&text).ok())
+        .filter(|s: &Session| !crate::lifecycle::ended(&paths::state_dir(), &s.activity_key()))
         .collect();
     sessions.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
     sessions
@@ -83,7 +93,7 @@ pub fn load_all() -> Vec<Session> {
 
 /// Ids come from hook input and page messages and become file names.
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    session_activity::valid_id(id)
 }
 
 pub fn find(session_id: &str) -> Option<Session> {
@@ -91,7 +101,8 @@ pub fn find(session_id: &str) -> Option<Session> {
         return None;
     }
     let text = fs::read_to_string(dir().join(format!("{session_id}.json"))).ok()?;
-    serde_json::from_str(&text).ok()
+    let session: Session = serde_json::from_str(&text).ok()?;
+    (!crate::lifecycle::ended(&paths::state_dir(), &session.activity_key())).then_some(session)
 }
 
 pub fn find_by_pane(pane: &str) -> Option<Session> {
@@ -108,12 +119,22 @@ pub fn prune(max_idle_secs: i64) -> Vec<Session> {
     let now = now_unix();
     let mut removed = Vec::new();
     for session in load_all() {
-        let last_write = fs::metadata(&session.transcript_path)
-            .and_then(|m| m.modified())
+        let root = paths::state_dir();
+        let Ok(_lock) = crate::lifecycle::lock(&root, &session.session_id) else { continue };
+        // Re-read under the lock: a hook could have refreshed this session
+        // after load_all produced its snapshot.
+        let Some(session) = find(&session.session_id) else { continue };
+        let last_write = session
+            .transcript_path
+            .as_ref()
+            .and_then(|p| fs::metadata(p).and_then(|m| m.modified()).ok())
             .map(unix_secs)
-            .unwrap_or(0);
-        if now - last_write > max_idle_secs && valid_id(&session.session_id) {
-            let _ = fs::remove_file(dir().join(format!("{}.json", session.session_id)));
+            .unwrap_or(0)
+            .max(session.last_active_at);
+        if now - last_write > max_idle_secs
+            && valid_id(&session.session_id)
+            && crate::lifecycle::end(&root, &session.activity_key()).is_ok()
+        {
             removed.push(session);
         }
     }

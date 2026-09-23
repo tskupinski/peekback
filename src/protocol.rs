@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 pub enum Request {
     /// Show a session's document: the given path, or its newest one.
     /// Without a session, shows the path on its own.
-    Show { session_id: Option<String>, path: Option<PathBuf> },
+    Show {
+        session_id: Option<String>,
+        path: Option<PathBuf>,
+    },
     Status,
     Hide,
     Quit,

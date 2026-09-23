@@ -31,6 +31,7 @@ pub enum UserEvent {
     RegistryChanged,
     Hotkey,
     Page(PageMessage),
+    AllDocumentsLoaded(discovery::AllDocuments),
 }
 
 /// Messages the page sends through `window.ipc.postMessage`.
@@ -38,6 +39,8 @@ pub enum UserEvent {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum PageMessage {
     Ready,
+    ListAllDocuments,
+    SwitchTracked { path: PathBuf },
     Switch { session_id: Option<String>, path: Option<PathBuf> },
     Send { text: String, purpose: Option<String> },
     Copy { text: String },
@@ -51,6 +54,8 @@ pub enum PageMessage {
 pub enum DaemonMessage<'a> {
     Render { path: &'a Path, source: &'a str, session: Option<&'a Session>, documents: &'a [Document] },
     Sessions { sessions: &'a [Session], current: Option<&'a str> },
+    Documents { session_id: &'a str, documents: &'a [Document] },
+    AllDocuments { documents: &'a [discovery::TrackedDocument], warnings: &'a [String] },
     Banner { text: &'a str },
     Toast { text: &'a str },
     Theme { theme: Option<&'a Theme> },
@@ -87,7 +92,7 @@ pub fn run() -> Result<()> {
     server::start(proxy.clone())?;
     let mut doc_watcher = watcher::DocWatcher::new(proxy.clone())?;
     let _registry_watcher = watcher::watch_registry(proxy.clone())?;
-    let _hotkeys = match register_hotkey(&config.hotkey, proxy) {
+    let _hotkeys = match register_hotkey(&config.hotkey, proxy.clone()) {
         Ok(manager) => manager,
         Err(e) => {
             eprintln!("no global hotkey: {e:#}");
@@ -99,12 +104,18 @@ pub fn run() -> Result<()> {
     let mut current: Option<Current> = None;
     let mut page_ready = false;
     let mut current_theme: Option<Theme> = None;
+    let mut all_documents = discovery::AllDocuments::default();
+    let mut loading_all_documents = false;
 
     eprintln!("peekback daemon listening on {}", paths::socket_path().display());
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
 
-        let mut show = |session_id: Option<String>, path: Option<PathBuf>, current: &mut Option<Current>, current_theme: &mut Option<Theme>| -> Result<()> {
+        let mut show = |session_id: Option<String>,
+                        path: Option<PathBuf>,
+                        current: &mut Option<Current>,
+                        current_theme: &mut Option<Theme>|
+         -> Result<()> {
             let next = open(session_id, path)?;
             if let Err(e) = doc_watcher.watch(&next.path) {
                 eprintln!("no live reload for {}: {e}", next.path.display());
@@ -126,16 +137,51 @@ pub fn run() -> Result<()> {
         };
 
         match event {
+            Event::UserEvent(UserEvent::Page(PageMessage::ListAllDocuments)) => {
+                if !loading_all_documents {
+                    loading_all_documents = true;
+                    let proxy = proxy.clone();
+                    // Retained histories may be large. Keep the viewer responsive
+                    // and allow only one all-session query at a time.
+                    std::thread::spawn(move || {
+                        let report = discovery::all_documents(&crate::activity::store());
+                        let _ = proxy.send_event(UserEvent::AllDocumentsLoaded(report));
+                    });
+                }
+            }
+            Event::UserEvent(UserEvent::AllDocumentsLoaded(report)) => {
+                loading_all_documents = false;
+                all_documents = report;
+                if page_ready {
+                    view.push(&DaemonMessage::AllDocuments {
+                        documents: &all_documents.documents,
+                        warnings: &all_documents.warnings,
+                    });
+                }
+            }
+            Event::UserEvent(UserEvent::Page(PageMessage::SwitchTracked { path })) => {
+                if !all_documents.documents.iter().any(|d| d.document.path == path) {
+                    view.push(&DaemonMessage::Toast { text: "That file is not in the tracked documents" });
+                    return;
+                }
+                // A path can belong to several sessions, including ended ones.
+                // Never infer a send-back target from a cross-session selection.
+                if let Err(e) = show(None, Some(path), &mut current, &mut current_theme) {
+                    view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
+                }
+            }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => view.hide(),
             Event::UserEvent(UserEvent::Request { request, reply }) => {
                 let response = match request {
-                    Request::Show { session_id, path } => match show(session_id, path, &mut current, &mut current_theme) {
-                        Ok(()) => {
-                            view.bring_forward();
-                            Response::Ok
+                    Request::Show { session_id, path } => {
+                        match show(session_id, path, &mut current, &mut current_theme) {
+                            Ok(()) => {
+                                view.bring_forward();
+                                Response::Ok
+                            }
+                            Err(e) => Response::Error { message: format!("{e:#}") },
                         }
-                        Err(e) => Response::Error { message: format!("{e:#}") },
-                    },
+                    }
                     Request::Status => Response::Status {
                         document: current.as_ref().map(|c| c.path.clone()),
                         session_id: current.as_ref().and_then(|c| c.session.as_ref()).map(|s| s.session_id.clone()),
@@ -162,7 +208,9 @@ pub fn run() -> Result<()> {
                 } else {
                     // The daemon is never inside a session; the newest one is
                     // the only sensible target for a hotkey.
-                    if let Err(e) = show(registry::newest().map(|s| s.session_id), None, &mut current, &mut current_theme) {
+                    if let Err(e) =
+                        show(registry::newest().map(|s| s.session_id), None, &mut current, &mut current_theme)
+                    {
                         eprintln!("hotkey: {e:#}");
                         if page_ready {
                             view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
@@ -186,15 +234,17 @@ pub fn run() -> Result<()> {
                 };
                 match send::send(&target, &text, pinned_backend) {
                     Ok(outcome) => view.push(&DaemonMessage::SendResult { ok: true, purpose, text: &outcome.note }),
-                    Err(e) => view.push(&DaemonMessage::SendResult { ok: false, purpose, text: &format!("Send failed: {e:#}") }),
+                    Err(e) => view.push(&DaemonMessage::SendResult {
+                        ok: false,
+                        purpose,
+                        text: &format!("Send failed: {e:#}"),
+                    }),
                 }
             }
-            Event::UserEvent(UserEvent::Page(PageMessage::Copy { text })) => {
-                match send::copy(&text) {
-                    Ok(()) => view.push(&DaemonMessage::Toast { text: "Copied" }),
-                    Err(e) => view.push(&DaemonMessage::Toast { text: &format!("Copy failed: {e:#}") }),
-                }
-            }
+            Event::UserEvent(UserEvent::Page(PageMessage::Copy { text })) => match send::copy(&text) {
+                Ok(()) => view.push(&DaemonMessage::Toast { text: "Copied" }),
+                Err(e) => view.push(&DaemonMessage::Toast { text: &format!("Copy failed: {e:#}") }),
+            },
             Event::UserEvent(UserEvent::Page(PageMessage::Hide)) => view.hide_and_return_focus(),
             Event::UserEvent(UserEvent::DocChanged) => {
                 let Some(doc) = current.as_mut() else { return };
@@ -218,6 +268,18 @@ pub fn run() -> Result<()> {
                 }
             }
             Event::UserEvent(UserEvent::RegistryChanged) => {
+                if let Some(doc) = current.as_mut() {
+                    if let Some(session) = doc.session.as_ref().and_then(|s| registry::find(&s.session_id)) {
+                        doc.documents = discovery::documents(&session);
+                        if page_ready {
+                            view.push(&DaemonMessage::Documents {
+                                session_id: &session.session_id,
+                                documents: &doc.documents,
+                            });
+                        }
+                        doc.session = Some(session);
+                    }
+                }
                 if page_ready {
                     push_sessions(&view, current.as_ref().and_then(|c| c.session.as_ref()));
                 }
@@ -238,9 +300,9 @@ pub fn run() -> Result<()> {
             // The page renders untrusted documents, so it may only ask for
             // paths the daemon itself listed.
             Event::UserEvent(UserEvent::Page(PageMessage::Switch { session_id, path })) => {
-                let listed = path.as_ref().is_none_or(|p| {
-                    current.as_ref().is_some_and(|c| c.documents.iter().any(|d| d.path == *p))
-                });
+                let listed = path
+                    .as_ref()
+                    .is_none_or(|p| current.as_ref().is_some_and(|c| c.documents.iter().any(|d| d.path == *p)));
                 if !listed {
                     view.push(&DaemonMessage::Toast { text: "That file is not in this session's documents" });
                     return;
@@ -275,8 +337,7 @@ fn open(session_id: Option<String>, path: Option<PathBuf>) -> Result<Current> {
             .map(|d| d.path.clone())
             .ok_or_else(|| anyhow!("this session has not written any Markdown yet"))?,
     };
-    let source =
-        fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
+    let source = fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
     Ok(Current { session, documents, path, source, missing: false })
 }
 
@@ -304,7 +365,10 @@ fn push_sessions(view: &window::View, current: Option<&Session>) {
     view.push(&DaemonMessage::Sessions { sessions: &sessions, current: current.map(|s| s.session_id.as_str()) });
 }
 
-fn register_hotkey(spec: &str, proxy: tao::event_loop::EventLoopProxy<UserEvent>) -> Result<Option<GlobalHotKeyManager>> {
+fn register_hotkey(
+    spec: &str,
+    proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+) -> Result<Option<GlobalHotKeyManager>> {
     if spec.trim().is_empty() {
         return Ok(None);
     }

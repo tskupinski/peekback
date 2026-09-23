@@ -42,3 +42,4 @@ katex $KATEX
 highlight.js $HLJS
 V
 echo "vendored into $out"
+python3 "$(dirname "$0")/vendor-licenses.py"

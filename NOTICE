@@ -12,3 +12,13 @@ their own licenses (versions in assets/vendor/VERSIONS):
   mermaid                 MIT           https://github.com/mermaid-js/mermaid
   KaTeX                   MIT           https://github.com/KaTeX/KaTeX
   highlight.js            BSD-3-Clause  https://github.com/highlightjs/highlight.js
+
+Full upstream notices, including dependencies embedded in those bundles, are
+collected under licenses/frontend. licenses/frontend/manifest.json records exact
+versions, source provenance, and checksums. The inventory also covers ELK/elkjs
+(EPL-2.0); see licenses/SOURCE-AVAILABILITY.md for its source information.
+
+Release archives include licenses/rust for the locked Rust dependency graph,
+with licenses/rust-overrides supplying notices omitted from published crates.
+License texts and package-specific notices remain attributable to their
+respective upstream authors; Peekback's Apache-2.0 license does not replace them.

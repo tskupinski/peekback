@@ -2,9 +2,9 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::time::Duration;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tao::event_loop::EventLoopProxy;
@@ -19,8 +19,7 @@ use crate::protocol::{Request, Response};
 pub fn start(proxy: EventLoopProxy<UserEvent>) -> Result<()> {
     let path = paths::socket_path();
     let _ = fs::remove_file(&path);
-    let listener =
-        UnixListener::bind(&path).with_context(|| format!("bind {}", path.display()))?;
+    let listener = UnixListener::bind(&path).with_context(|| format!("bind {}", path.display()))?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {

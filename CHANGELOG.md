@@ -1,0 +1,30 @@
+# Changelog
+
+## 0.1.0 — preview (unreleased)
+
+- Use normal window stacking so the viewer does not stay above other apps.
+- Find retained Markdown across all sessions in the viewer picker; browse all
+  file types with `peekback browse --all-sessions`. Merge paths while preserving
+  provenance, report partial history, and open without guessing a send target.
+- Install with Cargo; run `peekback setup` to configure detected agents or
+  select one with `--agent`. Setup preserves other settings, backs up changes,
+  and supports `--dry-run`; installed hooks need no separate shell script.
+- Discover files from local Claude Code and Codex CLI sessions, retaining
+  metadata and evidence after sessions end.
+- Browse all observed file types in an interactive terminal, with filtering,
+  current-text previews, evidence details, and Markdown preview handoff.
+- Render Markdown in a native macOS web view with Mermaid, KaTeX, and syntax
+  highlighting. Copy selections or paste them back into a live session.
+- Query session activity as JSON; preview and apply history compaction or
+  explicit timestamp retention.
+- Preserve healthy history when batches are damaged, report incomplete scans,
+  and prevent late hooks from reopening ended sessions.
+- Bound daemon replies, including stalled or partial replies. Add `--version`
+  and support installation/hook paths containing spaces.
+- Publish `session-activity` as a standalone Rust library with its own API docs,
+  consumer example, package verification, and independent release tags.
+
+The preview archive targets Apple Silicon and macOS 14 or newer. It is not
+Developer ID signed or notarized. Intel, Linux, Windows, and Codex desktop/IDE
+composer integration are outside this release. See RELEASING.md for validation
+status and the remaining manual release checks.

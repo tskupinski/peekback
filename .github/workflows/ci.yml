@@ -1,0 +1,43 @@
+name: CI
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  library:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: rustup show
+      - name: Verify standalone library package
+        run: python3 scripts/package-library.py
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: rustup show
+      - name: Check
+        run: bash scripts/check.sh
+      - name: Verify Cargo installation and setup
+        run: python3 tests/cargo_install.py
+      - name: Package and verify installation
+        run: |
+          python3 scripts/package.py
+          python3 tests/release_archive.py dist/peekback-*-aarch64-apple-darwin.tar.gz

@@ -38,7 +38,13 @@
   </div>
 
   <div id="picker" class="picker" hidden>
+    <div id="picker-scope" class="picker-scope" hidden>
+      <button id="picker-current" type="button" aria-pressed="true">Current session</button>
+      <button id="picker-all" type="button" aria-pressed="false">All sessions</button>
+      <span>Tab switches · Ctrl-R refreshes</span>
+    </div>
     <div class="picker-row"><span id="picker-prefix" class="cmd-prefix">›</span><input id="picker-input" type="text" autocomplete="off" spellcheck="false" placeholder="type to filter"></div>
+    <div id="picker-note" class="picker-note" role="status" hidden></div>
     <ul id="picker-list" class="picker-list"></ul>
   </div>
 
@@ -48,8 +54,10 @@
       <tr><td>j / k</td><td>move the block cursor, with counts like 5j</td></tr>
       <tr><td>zz / zt / zb</td><td>scroll the cursor block to center / top / bottom</td></tr>
       <tr><td>Space d / Ctrl-P</td><td>document picker</td></tr>
+      <tr><td>Tab in document picker</td><td>current / all stored sessions</td></tr>
       <tr><td>Space s</td><td>session picker</td></tr>
-      <tr><td>d / u</td><td>half page down / up</td></tr>
+      <tr><td>Ctrl-D / Ctrl-U</td><td>half page down / up (also d / u)</td></tr>
+      <tr><td>Ctrl-F / Ctrl-B</td><td>full page down / up</td></tr>
       <tr><td>gg / G</td><td>top / bottom</td></tr>
       <tr><td>]] / [[</td><td>next / previous heading</td></tr>
       <tr><td>]d / [d</td><td>next / previous document</td></tr>

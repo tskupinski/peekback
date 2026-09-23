@@ -29,7 +29,7 @@ pub fn create(event_loop: &EventLoop<UserEvent>, placement: Placement, split: f6
         .with_inner_size(LogicalSize::new(960.0, 1000.0))
         .with_visible(false)
         .with_decorations(!popup)
-        .with_always_on_top(popup)
+        .with_always_on_top(false)
         .build(event_loop)?;
 
     let proxy = event_loop.create_proxy();
@@ -136,10 +136,7 @@ impl View {
 fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let path = request.uri().path().trim_start_matches('/');
     match assets::get(path) {
-        Some((body, mime)) => Response::builder()
-            .header(header::CONTENT_TYPE, mime)
-            .body(Cow::Borrowed(body))
-            .unwrap(),
+        Some((body, mime)) => Response::builder().header(header::CONTENT_TYPE, mime).body(Cow::Borrowed(body)).unwrap(),
         None => Response::builder()
             .status(StatusCode::NOT_FOUND)
             .header(header::CONTENT_TYPE, "text/plain")

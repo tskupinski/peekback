@@ -1,138 +1,88 @@
-use std::collections::HashMap;
-use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use serde_json::Value;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
+use session_activity::{Operation, Outcome, SessionKey, Store};
 
-use crate::registry::{Session, unix_secs};
+use crate::registry::Session;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Document {
     pub path: PathBuf,
     pub touched_at: i64,
-    /// Path relative to the session's cwd when under it, otherwise absolute
-    /// with the home directory shortened.
     pub label: String,
 }
 
-const CWD_WALK_DEPTH: usize = 4;
-const CWD_WALK_BUDGET: usize = 20_000;
-const SKIPPED_DIRS: &[&str] = &["node_modules", "target"];
+#[derive(Clone, Debug, Serialize)]
+pub struct TrackedDocument {
+    #[serde(flatten)]
+    pub document: Document,
+    pub sessions: Vec<SessionKey>,
+}
 
-/// Markdown files the session produced, newest touch first.
+#[derive(Default)]
+pub struct AllDocuments {
+    pub documents: Vec<TrackedDocument>,
+    pub warnings: Vec<String>,
+}
+
+/// Retained history only: no live registry or filesystem candidate scans.
+pub fn all_documents(store: &Store) -> AllDocuments {
+    let report = store.read_all();
+    // Reconcile outcomes before filtering, as with current-session discovery.
+    let events = session_activity::reconcile(report.events);
+    let documents = session_activity::files(
+        events.into_iter().filter(|e| e.operation != Operation::Read && e.outcome != Outcome::Failed),
+    )
+    .into_iter()
+    .filter(|file| file.exists && is_markdown(&file.path))
+    .map(|file| {
+        let mut sessions = Vec::new();
+        for event in file.events.iter().rev() {
+            if !sessions.contains(&event.session) {
+                sessions.push(event.session.clone());
+            }
+        }
+        TrackedDocument {
+            document: Document {
+                label: file.path.display().to_string(),
+                path: file.path,
+                touched_at: file.last_touched_at,
+            },
+            sessions,
+        }
+    })
+    .collect();
+    AllDocuments {
+        documents,
+        warnings: report.warnings.into_iter().map(|w| format!("{}: {}", w.path.display(), w.message)).collect(),
+    }
+}
+
 pub fn documents(session: &Session) -> Vec<Document> {
-    let mut touched: HashMap<PathBuf, i64> = HashMap::new();
-    let mut note = |path: PathBuf, at: i64| {
-        let entry = touched.entry(path).or_insert(at);
-        *entry = (*entry).max(at);
+    documents_in(session, &crate::activity::store())
+}
+
+pub(crate) fn documents_in(session: &Session, store: &Store) -> Vec<Document> {
+    let events = match crate::activity::observations(session, store, true) {
+        Ok(events) => events,
+        Err(error) => {
+            eprintln!("cannot read session activity: {error:#}");
+            return Vec::new();
+        }
     };
-
-    for (path, at) in transcript_writes(&session.transcript_path) {
-        note(path, at);
-    }
-    if let Some(dir) = session.scratchpad_dir() {
-        for (path, at) in markdown_under(&dir, usize::MAX, 0) {
-            note(path, at);
-        }
-    }
-    if let Some(dir) = session.memory_dir() {
-        for (path, at) in markdown_under(&dir, 1, 0) {
-            note(path, at);
-        }
-    }
-    // A session started in the home directory or at the root would walk the
-    // whole disk; those sessions get only the transcript-based sources.
-    let cwd_is_broad = session.cwd == Path::new("/") || dirs::home_dir().is_some_and(|h| h == session.cwd);
-    if !cwd_is_broad {
-        for (path, at) in markdown_under(&session.cwd, CWD_WALK_DEPTH, session.started_at()) {
-            note(path, at);
-        }
-    }
-
-    let mut documents: Vec<Document> = touched
-        .into_iter()
-        .filter(|(path, _)| path.is_file())
-        .map(|(path, touched_at)| Document { label: label_for(&path, session), path, touched_at })
-        .collect();
-    documents.sort_by(|a, b| b.touched_at.cmp(&a.touched_at).then_with(|| a.path.cmp(&b.path)));
-    documents
+    session_activity::files(
+        events.into_iter().filter(|e| e.operation != Operation::Read && e.outcome != Outcome::Failed),
+    )
+    .into_iter()
+    .filter(|file| file.exists && is_markdown(&file.path))
+    .map(|file| Document { label: label_for(&file.path, session), path: file.path, touched_at: file.last_touched_at })
+    .collect()
 }
 
-/// Every `Write` or `Edit` of a `.md` file in the transcript, with the time
-/// of the last one per path.
-fn transcript_writes(transcript: &Path) -> Vec<(PathBuf, i64)> {
-    let Ok(file) = fs::File::open(transcript) else { return Vec::new() };
-    let mut writes = Vec::new();
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        if !line.contains("\"tool_use\"") {
-            continue;
-        }
-        let Ok(record) = serde_json::from_str::<Value>(&line) else { continue };
-        if record["type"] != "assistant" {
-            continue;
-        }
-        let at = record["timestamp"]
-            .as_str()
-            .and_then(|ts| OffsetDateTime::parse(ts, &Rfc3339).ok())
-            .map(|t| t.unix_timestamp())
-            .unwrap_or(0);
-        let Some(content) = record["message"]["content"].as_array() else { continue };
-        for item in content {
-            if item["type"] != "tool_use" {
-                continue;
-            }
-            if !matches!(item["name"].as_str(), Some("Write") | Some("Edit")) {
-                continue;
-            }
-            if let Some(path) = item["input"]["file_path"].as_str().filter(|p| is_markdown(p)) {
-                writes.push((PathBuf::from(path), at));
-            }
-        }
-    }
-    writes
-}
-
-/// `.md` files under `dir` modified after `since`, walking at most `depth`
-/// levels and skipping hidden and build directories. The walk runs on the
-/// main thread, so it stops after a fixed number of entries.
-fn markdown_under(dir: &Path, depth: usize, since: i64) -> Vec<(PathBuf, i64)> {
-    let mut found = Vec::new();
-    let mut budget = CWD_WALK_BUDGET;
-    walk(dir, depth, since, &mut found, &mut budget);
-    found
-}
-
-fn walk(dir: &Path, depth: usize, since: i64, found: &mut Vec<(PathBuf, i64)>, budget: &mut usize) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        if *budget == 0 {
-            return;
-        }
-        *budget -= 1;
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let Ok(kind) = entry.file_type() else { continue };
-        if kind.is_dir() {
-            if depth > 1 && !name.starts_with('.') && !SKIPPED_DIRS.contains(&name.as_ref()) {
-                walk(&path, depth - 1, since, found, budget);
-            }
-        } else if kind.is_file() && is_markdown(&name) {
-            let modified = entry.metadata().and_then(|m| m.modified()).map(unix_secs).unwrap_or(0);
-            if modified >= since {
-                found.push((path, modified));
-            }
-        }
-    }
-}
-
-fn is_markdown(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.ends_with(".md") || lower.ends_with(".markdown")
+pub(crate) fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
 }
 
 fn label_for(path: &Path, session: &Session) -> String {

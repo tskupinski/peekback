@@ -2,9 +2,24 @@
 name = "peekback"
 version = "0.1.0"
 edition = "2024"
-description = "Rendered Markdown viewer for Claude Code sessions, with a way back to the prompt"
+rust-version = "1.87"
+description = "Browse Claude Code and Codex session files in the terminal, with a native Markdown preview"
 license = "Apache-2.0"
 readme = "README.md"
+repository = "https://github.com/tskupinski/peekback"
+homepage = "https://github.com/tskupinski/peekback"
+publish = ["crates-io"]
+keywords = ["markdown", "codex", "claude", "preview", "terminal"]
+categories = ["command-line-utilities", "development-tools"]
+include = ["src/**", "assets/**", "hooks/**", "tests/*.rs", "licenses/**", "README.md", "SPEC.md", "RELEASING.md", "CHANGELOG.md", "LICENSE", "NOTICE"]
+
+[package.metadata.docs.rs]
+default-target = "aarch64-apple-darwin"
+targets = ["aarch64-apple-darwin"]
+
+[workspace]
+members = ["crates/session-activity"]
+resolver = "3"
 
 [profile.release]
 strip = true
@@ -14,6 +29,7 @@ lto = true
 anyhow = "1.0.104"
 arboard = "3.6.1"
 clap = { version = "4.6.7", features = ["derive"] }
+crossterm = "0.29.0"
 dirs = "7.0.0"
 global-hotkey = "0.8.0"
 include_dir = "0.7.4"
@@ -22,9 +38,10 @@ notify = "8.2.0"
 plist = "1.8.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+session-activity = { version = "0.1.0", path = "crates/session-activity" }
 tao = "0.37.0"
-time = { version = "0.3.45", features = ["parsing", "macros"] }
 toml = "1.1.6"
+unicode-width = "0.2.0"
 wry = "0.57.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]

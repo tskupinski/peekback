@@ -6,6 +6,47 @@ note and send that.
 
 You peek at what the agent wrote. What you mark up goes back.
 
+## Codex CLI support
+
+The original Claude Code design below also supports local Codex CLI sessions.
+`hooks/codex-snippet.json` uses Codex lifecycle hooks and invokes the shared
+registration script with a `codex` argument. Registry entries carry an `agent`
+field (missing means Claude for compatibility), an optional `transcript_path`,
+and legacy `written_files` for compatibility. New file activity is collected
+by the local `session-activity` crate and stored separately as versioned,
+metadata-only event batches keyed by agent and session. The shell hook invokes
+`peekback activity record`; the `files` and `events` subcommands expose JSON
+queries without starting the viewer. File history survives `SessionEnd` and
+registry pruning, including deleted files and rename pairs. Each event keeps
+its operation, source, timestamp, working directory, and outcome. Scans remain
+separate evidence. The library tracks all file types; Peekback chooses scan
+roots and filters existing Markdown for display. This supersedes the original
+hook and discovery implementation described below. Codex
+discovery combines recorded edits with the existing project Markdown scan; it
+does not parse Codex's unstable transcript format or use Claude scratchpad and
+memory directories. Files written by shell commands outside that scan can be
+opened explicitly. Session resolution recognizes `CODEX_THREAD_ID` and
+`CODEX_SESSION_ID`; status and the viewer distinguish agents. Pruning uses
+the latest hook activity or transcript modification, including when no
+transcript is available. The existing terminal paste backends are shared.
+Desktop and IDE composer integration is outside this scope. See README for
+hook installation and Codex's required hook trust step.
+
+Live registry updates and pruning use per-session locks and durable end
+markers. Late non-start hooks retain activity without reviving closed sessions;
+an explicit SessionStart resumes them. Activity maintenance offers preview-first
+compaction and explicit timestamp retention, committed through synced
+checkpoints under an exclusive lock. Retention cutoffs also prevent reimporting
+expired transcript observations. Scans expose budget/depth limits and I/O
+warnings; file queries still load the full retained history.
+
+`peekback browse` is a second presentation of the activity library: an
+interactive terminal file list with a bounded current-text preview, path
+filtering, evidence and warning views, and manual refresh. All file types are
+included. Markdown opens in the existing viewer only on an explicit `p` action;
+retained files from ended sessions open without a live session attachment.
+Piped output falls back to a plain table.
+
 ## Problem
 
 Claude Code sessions produce a lot of Markdown: plans, reports, scratchpad
@@ -312,8 +353,8 @@ page-initiated switch only to a document it listed itself. Nothing rendered
 from a document can reach the IPC bridge.
 
 The window is a popup that borrows the terminal's space, not an app of its
-own. With `placement` other than `free` it has no title bar, floats above
-the terminal until dismissed, follows the user to whatever Space they are
+own. With `placement` other than `free` it has no title bar, uses normal window
+stacking so other apps can cover it, follows the user to whatever Space they are
 on, and on every show it moves onto the terminal window: the right or left
 `split` of it, or all of it for `over`. The terminal window is found through
 the bundle id in the registry, which needs no permission. The daemon runs
@@ -357,8 +398,9 @@ carries `data-source-line` from markdown-it, so a block selection maps to an
 exact source line range.
 
 - **Normal.** `j`/`k` move the block cursor, drawn as a bar in the left
-  margin of the current block, with counts like `5j` and `12G`. `d`/`u`
-  half page, `gg`/`G` top and bottom, `zz`/`zt`/`zb` scroll the cursor
+  margin of the current block, with counts like `5j` and `12G`. `Ctrl-D`/`Ctrl-U`
+  (or `d`/`u`) half page, `Ctrl-F`/`Ctrl-B` full page, `gg`/`G` top and
+  bottom, `zz`/`zt`/`zb` scroll the cursor
   block to the center, top, or bottom. `]]`/`[[` next and previous heading.
   `]d`/`[d` cycle documents, `]s`/`[s` cycle sessions. `y`, `s`, `c` act on
   the block under the cursor. `Tab` toggles the sidebar. `?` shows a key

@@ -21,10 +21,7 @@ impl DocWatcher {
         let filter = watched_file.clone();
         let inner = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
             let Ok(event) = event else { return };
-            if !matches!(
-                event.kind,
-                EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-            ) {
+            if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)) {
                 return;
             }
             // FSEvents reports real paths while the watched path may go

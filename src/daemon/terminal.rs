@@ -45,9 +45,7 @@ pub fn frontmost_window(bundle_id: &str) -> Option<Frame> {
     };
 
     let number = |dict: &CFDictionary<CFString, CFType>, key: &str| -> Option<f64> {
-        dict.find(CFString::new(key))
-            .and_then(|v| v.downcast::<CFNumber>())
-            .and_then(|n| n.to_f64())
+        dict.find(CFString::new(key)).and_then(|v| v.downcast::<CFNumber>()).and_then(|n| n.to_f64())
     };
 
     // The list is ordered front to back, so the first match is frontmost.

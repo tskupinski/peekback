@@ -1,63 +1,27 @@
 #!/bin/bash
-# Claude Code hook that keeps the peekback session registry current.
-# Wire it to SessionStart, UserPromptSubmit, Stop, and SessionEnd.
+# Compatibility entry point for existing Claude Code and Codex hook configs.
+# PEEKBACK_BIN can select a particular build; otherwise use PATH or this clone.
 set -u
+agent="${1:-claude}"
+case "$agent" in claude | codex) ;; *) exit 0 ;; esac
 
-if ! command -v jq >/dev/null 2>&1; then
-	echo "peekback: jq is required by hooks/register.sh" >&2
-	exit 0
+binary="${PEEKBACK_BIN:-}"
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -z "$binary" ] && [ -x "$repo/bin/peekback" ]; then
+    binary="$repo/bin/peekback"
 fi
-
-input="$(cat)"
-session_id="$(printf '%s' "$input" | jq -r '.session_id // empty')"
-case "$session_id" in
-	"" | *[!A-Za-z0-9._-]*) exit 0 ;;
-esac
-event="$(printf '%s' "$input" | jq -r '.hook_event_name // empty')"
-
-dir="$HOME/.local/state/peekback/sessions"
-file="$dir/$session_id.json"
-
-if [ "$event" = "SessionEnd" ]; then
-	rm -f "$file"
-	exit 0
+if [ -z "$binary" ]; then
+    binary="$(command -v peekback || true)"
 fi
-
-mkdir -p "$dir" && chmod 700 "$dir"
-now="$(date +%s)"
-started_at="$now"
-if [ -f "$file" ]; then
-	started_at="$(jq -r ".started_at // $now" "$file" 2>/dev/null || echo "$now")"
+if [ -z "$binary" ]; then
+    for candidate in "$repo/target/release/peekback" "$repo/target/debug/peekback"; do
+        if [ -x "$candidate" ]; then binary="$candidate"; break; fi
+    done
 fi
-
-# $TMUX is "<socket path>,<server pid>,<session index>".
-tmux_socket="${TMUX:+${TMUX%%,*}}"
-
-printf '%s' "$input" | jq \
-	--arg started_at "$started_at" \
-	--arg now "$now" \
-	--arg bundle_id "${__CFBundleIdentifier:-}" \
-	--arg term_program "${TERM_PROGRAM:-}" \
-	--arg iterm_profile "${ITERM_PROFILE:-}" \
-	--arg tmux_pane "${TMUX_PANE:-}" \
-	--arg tmux_socket "$tmux_socket" \
-	--arg kitty_window "${KITTY_WINDOW_ID:-}" \
-	--arg kitty_listen_on "${KITTY_LISTEN_ON:-}" \
-	--arg wezterm_pane "${WEZTERM_PANE:-}" \
-	'{
-		session_id: .session_id,
-		transcript_path: .transcript_path,
-		cwd: .cwd,
-		started_at: ($started_at | tonumber),
-		last_active_at: ($now | tonumber),
-		terminal: ({
-			bundle_id: $bundle_id,
-			term_program: $term_program,
-			iterm_profile: $iterm_profile,
-			tmux_pane: $tmux_pane,
-			tmux_socket: $tmux_socket,
-			kitty_window: $kitty_window,
-			kitty_listen_on: $kitty_listen_on,
-			wezterm_pane: $wezterm_pane
-		} | with_entries(select(.value != "")))
-	}' > "$file.tmp" && mv "$file.tmp" "$file"
+if [ -z "$binary" ]; then
+    echo "peekback: build or install peekback before using hooks/register.sh" >&2
+    exit 0
+fi
+"$binary" activity record --agent "$agent" || echo "peekback: session activity could not be recorded" >&2
+# Tracking failures must not block the agent.
+exit 0

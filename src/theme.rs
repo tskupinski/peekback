@@ -65,11 +65,8 @@ fn iterm(profile_name: Option<&str>) -> Option<Theme> {
         Some(hex(channel("Red Component")?, channel("Green Component")?, channel("Blue Component")?))
     };
     let palette: Option<Vec<String>> = (0..16).map(|i| color(&format!("Ansi {i} Color"))).collect();
-    let (font_family, font_size) = profile
-        .get("Normal Font")
-        .and_then(|f| f.as_string())
-        .map(split_font)
-        .unwrap_or((None, None));
+    let (font_family, font_size) =
+        profile.get("Normal Font").and_then(|f| f.as_string()).map(split_font).unwrap_or((None, None));
     Some(Theme {
         source: "iterm2".into(),
         font_family,
@@ -95,10 +92,8 @@ fn split_font(spec: &str) -> (Option<String>, Option<f64>) {
 /// real Ghostty setup so far.
 fn ghostty() -> Option<Theme> {
     let home = dirs::home_dir()?;
-    let config_paths = [
-        home.join(".config/ghostty/config"),
-        home.join("Library/Application Support/com.mitchellh.ghostty/config"),
-    ];
+    let config_paths =
+        [home.join(".config/ghostty/config"), home.join("Library/Application Support/com.mitchellh.ghostty/config")];
     let mut settings: Vec<(String, String)> = Vec::new();
     for path in &config_paths {
         if let Ok(text) = fs::read_to_string(path) {
@@ -119,7 +114,10 @@ fn ghostty() -> Option<Theme> {
     if let Some(name) = get("theme") {
         let name = name.split(',').next().unwrap_or(&name).trim();
         let name = name.rsplit(':').next().unwrap_or(name).trim();
-        for dir in [home.join(".config/ghostty/themes"), PathBuf::from("/Applications/Ghostty.app/Contents/Resources/ghostty/themes")] {
+        for dir in [
+            home.join(".config/ghostty/themes"),
+            PathBuf::from("/Applications/Ghostty.app/Contents/Resources/ghostty/themes"),
+        ] {
             if let Ok(text) = fs::read_to_string(dir.join(name)) {
                 any_color |= apply_ghostty(&mut theme, &parse_ghostty(&text));
                 break;
@@ -147,8 +145,14 @@ fn apply_ghostty(theme: &mut Theme, settings: &[(String, String)]) -> bool {
     let mut any = false;
     for (key, value) in settings {
         match key.as_str() {
-            "background" => { theme.background = normalize_hex(value); any = true; }
-            "foreground" => { theme.foreground = normalize_hex(value); any = true; }
+            "background" => {
+                theme.background = normalize_hex(value);
+                any = true;
+            }
+            "foreground" => {
+                theme.foreground = normalize_hex(value);
+                any = true;
+            }
             "palette" => {
                 if let Some((index, color)) = value.split_once('=') {
                     if let Ok(i) = index.trim().parse::<usize>() {
@@ -172,8 +176,8 @@ fn normalize_hex(value: &str) -> String {
 
 fn default_palette() -> Vec<String> {
     [
-        "#000000", "#cc0000", "#4e9a06", "#c4a000", "#3465a4", "#75507b", "#06989a", "#d3d7cf",
-        "#555753", "#ef2929", "#8ae234", "#fce94f", "#729fcf", "#ad7fa8", "#34e2e2", "#eeeeec",
+        "#000000", "#cc0000", "#4e9a06", "#c4a000", "#3465a4", "#75507b", "#06989a", "#d3d7cf", "#555753", "#ef2929",
+        "#8ae234", "#fce94f", "#729fcf", "#ad7fa8", "#34e2e2", "#eeeeec",
     ]
     .into_iter()
     .map(String::from)
