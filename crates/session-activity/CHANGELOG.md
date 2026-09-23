@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-09-23
 
-First standalone library release, developed alongside Peekback.
+First standalone library release, developed alongside Peekback and published
+on [crates.io](https://crates.io/crates/session-activity/0.1.0).
 
 - Enumerate retained sessions and read history across both agent namespaces,
   with per-session warnings and support for compacted/retained histories.

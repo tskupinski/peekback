@@ -6,6 +6,13 @@ each path, and retains history independently of the calling application.
 It is developed alongside Peekback and published separately on crates.io;
 it has no GUI, Markdown, terminal, or Peekback runtime dependency.
 
+[crates.io](https://crates.io/crates/session-activity) ·
+[API reference](https://docs.rs/session-activity) ·
+[Changelog](https://github.com/tskupinski/peekback/blob/master/crates/session-activity/CHANGELOG.md)
+
+Add it to your Rust project with `cargo add session-activity@0.1`, or edit
+your manifest:
+
 ```toml
 [dependencies]
 session-activity = "0.1"
@@ -13,7 +20,8 @@ session-activity = "0.1"
 
 Requires Rust 1.87 or newer. The supported storage/maintenance platforms are
 macOS and Linux. The library is not currently validated on Windows, where
-maintenance is unavailable. API reference: <https://docs.rs/session-activity>.
+maintenance is unavailable. To install the Peekback application instead, use
+`cargo install peekback --locked` on Apple Silicon macOS.
 
 The library owns:
 
@@ -55,9 +63,14 @@ To collect a hook, call `hook_events(agent, &payload, unix_seconds)` and pass
 its result to `store.append(&session, &events)`. Only normalized metadata is
 stored; the raw hook payload and document contents are discarded.
 
-`cargo run --example inspect -- /path/to/activity codex SESSION_ID` prints
-retained file summaries as JSON and reports incomplete history on stderr.
-The example reads a store; it does not install hooks or start a viewer.
+From a repository checkout, run the consumer example:
+
+```sh
+cargo run -p session-activity --example inspect -- /path/to/activity codex SESSION_ID
+```
+
+It prints retained file summaries as JSON and reports incomplete history on
+stderr. The example reads a store; it does not install hooks or start a viewer.
 
 ## API and data compatibility
 

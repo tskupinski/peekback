@@ -1,25 +1,27 @@
 # peekback
 
-A rendered Markdown viewer for Claude Code and Codex CLI sessions, with a way back: select
-text in the viewer and copy it, send it to the session's prompt, or attach a
-note and send that.
+Browse files touched by Claude Code and Codex CLI sessions in your terminal,
+then open Markdown in a native preview. Select text in the viewer and copy it,
+send it to the session's prompt, or attach a note and send that.
 
 You peek at what the agent wrote. What you mark up goes back.
 
-peekback is a small Rust daemon with a native web view. It knows which Claude
-Code and Codex sessions are live, lists the Markdown each one wrote, renders it with
-real typesetting, Mermaid, KaTeX and syntax highlighting, and pastes what you
-select back into the session's prompt. It sits over your terminal window like
-a popup, takes its colors from your terminal, and is driven from the keyboard
-with vim-style keys. macOS only for now.
+The terminal browser covers all file types and keeps observed history after
+sessions end. The Markdown viewer adds Mermaid, KaTeX, syntax highlighting,
+live reload, and vim-style navigation. It takes its colors from your terminal
+and uses normal window stacking. The app supports Apple Silicon macOS;
+the separately published [session-activity library](https://crates.io/crates/session-activity)
+also supports Linux.
+
+[Cargo package](https://crates.io/crates/peekback) ·
+[Library API](https://docs.rs/session-activity) ·
+[Changelog](CHANGELOG.md)
 
 ## Install
 
 Apple Silicon macOS 14 or newer, Rust 1.87+, and Xcode command-line tools are
 required. The frontend is embedded; Node.js and separate hook scripts are not
 needed. Intel, Linux, and Windows are not supported by the app in this release.
-
-After the first crates.io publication:
 
 ```sh
 cargo install peekback --locked
@@ -43,18 +45,20 @@ peekback browse
 ```
 
 Press `p` on a Markdown file to open its rendered preview.
+Use `peekback browse --all-sessions` to browse retained files across sessions.
 
-### Before publication / installing from a checkout
+### Install from a checkout
 
-From this repository, the equivalent installation works now:
+To build the current repository version:
 
 ```sh
+git clone https://github.com/tskupinski/peekback.git
+cd peekback
 cargo install --path . --locked
 peekback setup
 ```
 
-The public `cargo install peekback` command will only work after both crates
-are published. Maintainer instructions are in [RELEASING.md](RELEASING.md).
+Maintainer instructions are in [RELEASING.md](RELEASING.md).
 
 ### Setup details
 
@@ -84,28 +88,29 @@ Codex shell commands and transcripts are not parsed. Use
 `peekback show /absolute/path/to/file.md --session ID` for files outside the scan.
 Codex desktop/IDE composer integration is not supported.
 
-To upgrade, rerun `cargo install peekback --locked`, then `peekback setup` and
-`peekback quit` so the next preview starts the new daemon. Review changed Codex
-hooks through `/hooks` if prompted. Rerun setup if you move the executable.
-
-### Optional prebuilt archive
-
-For users without Rust, the unsigned preview archive remains available when a
-[GitHub Release](https://github.com/tskupinski/peekback/releases) is published.
-Download it and SHA256SUMS, then:
+### Upgrade
 
 ```sh
-shasum -a 256 -c SHA256SUMS
-tar -xzf peekback-0.1.0-aarch64-apple-darwin.tar.gz
-cd peekback-0.1.0-aarch64-apple-darwin
-./install.sh
+cargo install peekback --locked
 peekback setup
+peekback quit
 ```
 
-The installer uses `~/.local/share/peekback` with a binary symlink in
-`~/.local/bin`; add that directory to PATH if needed. The downloaded binary is
-not Developer ID signed or notarized and may be blocked by macOS. Cargo builds
-locally. See [RELEASING.md](RELEASING.md) for the tested configurations.
+The next `peekback show` or `p` in the terminal browser starts the new daemon
+and restores the global hotkey. Review changed Codex hooks through `/hooks`
+if prompted. Rerun setup if you move the executable.
+
+If an upgrade seems to have no effect, run `type -a peekback` and
+`peekback --version`. An older copy in `~/bin` or `~/.local/bin` may come before
+Cargo's binary on PATH. Put your Cargo bin directory first, rerun setup with
+that binary, and restart the daemon. See [Cargo's installation reference](https://doc.rust-lang.org/cargo/commands/cargo-install.html)
+for custom install locations.
+
+### Prebuilt archives
+
+The current release is distributed through Cargo. No prebuilt GitHub release
+is published yet. Maintainers can build an optional unsigned Apple Silicon
+archive using [RELEASING.md](RELEASING.md).
 
 ## Use
 
@@ -166,8 +171,8 @@ sessions reads retained tracker history for both agents, including ended
 sessions. It groups identical paths, sorts by latest activity, and shows the
 agent/session origins; filter by path or session ID. It keeps the viewer's
 existing rules: existing Markdown files, excluding reads and failed operations.
-It refreshes when opened; `Ctrl-R` refreshes while open. Incomplete history is
-reported in the picker. Selecting a file from this scope opens a standalone
+The All sessions scope refreshes when opened; `Ctrl-R` refreshes it while open.
+Incomplete history is reported in the picker. Selecting a file from this scope opens a standalone
 preview with no send-back target, since a file can belong to several sessions.
 
 Nothing is ever submitted for you. Every send lands in the prompt as a paste
@@ -177,13 +182,18 @@ and waits for you to press Enter.
 
 ```
 peekback setup [--agent claude|codex|all] [--dry-run]  configure hooks
-peekback show [FILE] [--session ID] [--pane %N]   show a document
-peekback browse [--session ID] [--candidates]    browse files in the terminal
-peekback send [--session ID] [--pane %N] < text   paste text into a prompt
-peekback hide                                     hide the viewer
-peekback status [--prune]                         sessions, backends, daemon
-peekback quit                                     stop the daemon
+peekback show [FILE] [--session ID] [--pane %N]       show a document
+peekback browse [--session ID] [--candidates]        browse session files
+peekback browse --all-sessions [--list]              browse retained history
+peekback send [--session ID] [--pane %N] < text       paste text into a prompt
+peekback hide                                       hide the viewer
+peekback status [--prune]                            sessions, backends, daemon
+peekback quit                                       stop the daemon
 ```
+
+`peekback --help` and `peekback COMMAND --help` list all options.
+`:q` inside the viewer hides its window; `peekback quit` stops the daemon
+and unregisters the global hotkey.
 
 Session resolution for `show`, `send`, and `browse`: `--session`, else the session in
 the given tmux pane, else the session this shell runs inside, else the most
@@ -206,7 +216,8 @@ peekback browse --all-sessions --list
 
 The interactive browser shows all file types, including reads, failed operations,
 missing files, and rename origins. The file list and text preview appear side by
-side in wide terminals; `Tab` switches panes in narrower terminals. It uses the
+side in wide terminals; narrow terminals show the focused pane. `Tab` switches
+between the list and preview in either layout. It uses the
 same `session-activity` library as the Markdown viewer. Browsing does not start
 the viewer daemon; press `p` on a Markdown file to open its rendered preview.
 Live sessions keep the connection for sending selections back. Files from ended
@@ -218,6 +229,8 @@ the evidence view (`e`) and plain listing, and supports filtering by session ID.
 `r` reloads stored history. Previewing from this mode opens without a send-back
 target. It cannot be combined with session/pane selectors or `--candidates`;
 it reads the tracker rather than scanning every old project.
+Files found only by a live filesystem scan may therefore be absent from All
+sessions. Installing hooks does not automatically import every past session.
 
 | Key | Action |
 | --- | --- |
@@ -295,23 +308,26 @@ cutoff are retained. A later command cannot lower an existing cutoff.
 
 Maintenance refuses damaged history. It publishes a synced checkpoint before
 removing old batches, so interrupted cleanup does not duplicate events. Readers,
-writers, and maintenance coordinate through advisory locks on Unix. Replace
-older Peekback binaries and restart the daemon (`peekback quit`) before applying
-maintenance: older versions cannot read compacted history. Queries still read
-the full retained history; compaction reduces file count, not memory use.
+writers, and maintenance coordinate through advisory locks on Unix. All readers
+must support checkpoints before applying maintenance; development builds from
+before this feature cannot read compacted history. Peekback 0.1.0 supports it.
+Queries still read the full retained history; compaction reduces file count,
+not memory use.
 
-The separately released [`session-activity` library](https://github.com/tskupinski/peekback/tree/master/crates/session-activity)
+## Rust library
+
+The separately published [`session-activity` library](https://crates.io/crates/session-activity)
 owns event normalization, storage, scanning, and file queries. It has no
 dependency on Peekback's viewer, Markdown renderer, or terminal integration.
-The first release publishes both crates on crates.io, with an optional unsigned
-macOS archive for users without Rust.
-Rust consumers can depend on `session-activity = "0.1"` after its crates.io
-publication; the app continues using the versioned workspace dependency.
 
-Run all checks with `bash scripts/check.sh` (Python 3.9+ and Node.js are needed
-for development checks). `cargo test --workspace --locked` runs the Rust tests.
-The terminal smoke test uses isolated state and a fake viewer socket.
-See [RELEASING.md](RELEASING.md) for packaging and fresh-install verification.
+```sh
+cargo add session-activity@0.1
+```
+
+See the [library guide](https://github.com/tskupinski/peekback/tree/master/crates/session-activity)
+for examples, evidence semantics, storage guarantees, and limitations, or the
+[API reference](https://docs.rs/session-activity). Using the library does not
+install Peekback or configure agent hooks.
 
 ## Configuration
 
@@ -357,16 +373,33 @@ bind-key P run-shell -b "peekback show --pane '#{pane_id}'"
 
 ## How it works
 
-A single daemon per user holds one window. `show` talks to it over a Unix
+A single daemon per state directory holds one window. `show` talks to it over a Unix
 socket and starts it if needed. The page is served to the web view over a
 custom `peekback://` scheme from assets embedded in the binary, so nothing
 listens on a TCP port and it works offline. Documents are discovered from the
 Claude session transcript, its scratchpad, the project's memory directory,
 Codex file-edit hooks, and Markdown under the project modified since the
-session started. See
-`SPEC.md` for the full design.
+session started. See [SPEC.md](SPEC.md) for the architecture and tracking limits.
+
+## Development
+
+From a checkout on Apple Silicon macOS:
+
+```sh
+cargo build --locked
+bash scripts/check.sh
+```
+
+The repository pins Rust 1.87.0. Full checks also need Python 3.9+ and Node.js;
+these are not runtime dependencies. Checks cover Rust tests and Clippy,
+frontend picker behavior, license manifests, and an isolated terminal smoke
+test with a fake viewer socket. On Linux, work on the library with
+`cargo test -p session-activity --locked`.
+
+See [RELEASING.md](RELEASING.md) for Cargo publication, standalone library
+verification, and optional archive packaging.
 
 ## License
 
-Apache License 2.0. See `LICENSE`. The embedded front-end libraries carry
-their own licenses, listed in `NOTICE`.
+Apache License 2.0. See [LICENSE](LICENSE). The embedded front-end libraries carry
+their own licenses, listed in [NOTICE](NOTICE).

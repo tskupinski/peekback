@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.1.0 — preview (unreleased)
+## 0.1.0 — 2026-09-23
+
+Published on [crates.io](https://crates.io/crates/peekback/0.1.0).
 
 - Use normal window stacking so the viewer does not stay above other apps.
 - Find retained Markdown across all sessions in the viewer picker; browse all
@@ -24,7 +26,7 @@
 - Publish `session-activity` as a standalone Rust library with its own API docs,
   consumer example, package verification, and independent release tags.
 
-The preview archive targets Apple Silicon and macOS 14 or newer. It is not
+The app supports Apple Silicon and macOS 14 or newer. Optional archives are not
 Developer ID signed or notarized. Intel, Linux, Windows, and Codex desktop/IDE
-composer integration are outside this release. See RELEASING.md for validation
-status and the remaining manual release checks.
+composer integration are outside this app release. See [RELEASING.md](RELEASING.md)
+for validation evidence and the manual acceptance checklist.

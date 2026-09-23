@@ -8,7 +8,7 @@ use crate::paths;
 
 pub use session_activity::{Agent, SessionKey};
 
-/// One live agent session, as written by hooks/register.sh.
+/// One live agent session, as written by `peekback activity record`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,
@@ -113,7 +113,7 @@ pub fn newest() -> Option<Session> {
     load_all().into_iter().next()
 }
 
-/// Removes entries whose transcript has not changed for `max_idle_secs`.
+/// Removes entries with no hook or transcript activity for `max_idle_secs`.
 /// A session that died without SessionEnd leaves one behind.
 pub fn prune(max_idle_secs: i64) -> Vec<Session> {
     let now = now_unix();

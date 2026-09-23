@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Cargo's file list and a source install before the first registry release."""
+"""Check Cargo's package file list, source installation, and agent setup."""
 import argparse
 import json
 import os
@@ -58,7 +58,7 @@ def main():
             assert len(files) == 1 and files[0]["path"] == str(root / "note.md")
         assert not (root / "state/daemon.log").exists()
     print("Cargo source install passed: package file list, isolated install, setup, both agents, no helper scripts.")
-    print("Registry packaging/publish verification still requires session-activity to be published first.")
+    print("This checks the checkout; use cargo publish --dry-run to verify registry packaging separately.")
 
 
 if __name__ == "__main__":
