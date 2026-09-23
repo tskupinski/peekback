@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Highlight blocks with pending comments and show comment counts and notes on
+  hover. Keep selections attached to their original document while composing.
+
 ## 0.1.0 — 2026-09-23
 
 Published on [crates.io](https://crates.io/crates/peekback/0.1.0).

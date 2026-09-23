@@ -40,7 +40,7 @@
     pendingKey: null,
     count: "",
     search: { query: "", matches: [], index: -1 },
-    comments: [], // { id, path, label, quote, note, line }
+    comments: [], // { id, path, label, quote, note, line, endLine, anchorSource }
     pendingJump: null, // { path, line } to apply once that document renders
   };
 
@@ -132,6 +132,7 @@
     window.scrollTo(0, scrollY);
 
     collectBlocks();
+    paintComments();
     if (sourceChanged && state.anchor !== null) setMode("normal");
     if (state.pendingJump?.path === message.path) {
       state.cursor = nearestBlock(state.pendingJump.line);
@@ -419,39 +420,49 @@
     if (!state.doc || state.blocks.length === 0) return;
     const [from, to] = selectionRange();
     const text = sourceOf(from, to);
-    perform(action, text, Number(state.blocks[from].dataset.sourceLine));
+    perform(action, text, Number(state.blocks[from].dataset.sourceLine), Number(state.blocks[to].dataset.sourceEnd));
     if (action !== "comment") leaveVisual();
   }
 
-  function perform(action, text, line) {
+  function perform(action, text, line, endLine) {
     if (!text) return;
     if (action === "copy") post({ type: "copy", text });
     if (action === "send") post({ type: "send", text: blockquote(text), purpose: "selection" });
-    if (action === "comment") openNoteInput(text, line);
+    if (action === "comment") openNoteInput(text, line, endLine);
   }
 
   // -------------------------------------------------------------- comments
 
-  // Comments are not persisted: closing the window loses them, by design.
+  // Comments are not persisted: stopping the daemon loses them, by design.
   let noteTarget = null;
   let nextCommentId = 1;
   let commentsInFlight = null; // ids included in a send that has not reported back
 
-  function openNoteInput(quote, line) {
-    noteTarget = { quote, line };
+  function commentTarget(quote, line, endLine) {
+    if (!state.doc) return null;
+    return {
+      path: state.doc.path,
+      label: promptPathFor(state.doc.path),
+      quote,
+      line,
+      endLine,
+      anchorSource: Number.isInteger(line) && Number.isInteger(endLine)
+        ? state.doc.source.split("\n").slice(line, endLine).join("\n") : null,
+    };
+  }
+
+  function openNoteInput(quote, line, endLine) {
+    noteTarget = commentTarget(quote, line, endLine);
     openCmdline("c");
     cmdInput.placeholder = "note, Enter to add";
   }
 
-  function addComment(quote, note, line) {
-    if (!state.doc || !quote) return;
+  function addComment(target, note) {
+    if (!target?.quote) return;
     state.comments.push({
+      ...target,
       id: nextCommentId++,
-      path: state.doc.path,
-      label: promptPathFor(state.doc.path),
-      quote,
       note: note.trim(),
-      line,
     });
     renderComments();
     setMessage(`${state.comments.length} pending comment${state.comments.length === 1 ? "" : "s"}`);
@@ -503,6 +514,7 @@
   }
 
   function renderComments() {
+    paintComments();
     commentsEl.replaceChildren(
       ...state.comments.map((c) => {
         const li = document.createElement("li");
@@ -529,6 +541,26 @@
     sendAllButton.hidden = state.comments.length === 0;
     sendAllButton.textContent = `Send all (${state.comments.length})`;
     renderStatus();
+  }
+
+  function paintComments() {
+    const lines = state.doc?.source.split("\n") ?? [];
+    const comments = state.comments.filter((c) => c.path === state.doc?.path
+      && c.anchorSource !== null
+      && lines.slice(c.line, c.endLine).join("\n") === c.anchorSource);
+    for (const block of state.blocks) {
+      const start = Number(block.dataset.sourceLine);
+      const end = Number(block.dataset.sourceEnd);
+      const attached = comments.filter((c) => c.line < end && c.endLine > start);
+      block.classList.toggle("commented", attached.length > 0);
+      if (attached.length) {
+        block.dataset.commentLabel = `${attached.length} comment${attached.length === 1 ? "" : "s"}`;
+        block.setAttribute("title", attached.map((c) => c.note || "(no note)").join("\n\n"));
+      } else {
+        delete block.dataset.commentLabel;
+        block.removeAttribute("title");
+      }
+    }
   }
 
   function jumpToComment(c) {
@@ -620,7 +652,8 @@
       if (!state.blocks.length) return;
       if (!arg) return actOnSelection("comment");
       const [from, to] = selectionRange();
-      addComment(sourceOf(from, to), arg, Number(state.blocks[from].dataset.sourceLine));
+      addComment(commentTarget(sourceOf(from, to), Number(state.blocks[from].dataset.sourceLine),
+        Number(state.blocks[to].dataset.sourceEnd)), arg);
       leaveVisual();
     },
     sendall: () => sendAllComments(),
@@ -780,7 +813,7 @@
       closeCmdline();
       if (prefix === "/") gotoMatch(1);
       else if (prefix === "c") {
-        if (target) addComment(target.quote, value, target.line);
+        if (target) addComment(target, value);
         setMode("normal");
       } else runCommand(value);
     } else if (event.key === "Tab") {
@@ -1078,7 +1111,7 @@
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
     const range = selection.getRangeAt(0);
     if (!docEl.contains(range.commonAncestorContainer)) return null;
-    return { text: selection.toString().trim(), rect: range.getBoundingClientRect(), anchor: selection.anchorNode };
+    return { text: selection.toString().trim(), rect: range.getBoundingClientRect(), range };
   }
 
   function placeToolbar() {
@@ -1106,8 +1139,13 @@
     if (!button) return;
     const found = mouseSelection();
     if (found) {
-      const block = found.anchor?.parentElement?.closest("[data-source-line]");
-      perform(button.dataset.action, found.text, block ? Number(block.dataset.sourceLine) : undefined);
+      // Range endpoints are in document order even for a backwards selection.
+      const element = (node) => node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+      const first = state.blocks[blockIndexOf(element(found.range.startContainer))];
+      const last = state.blocks[blockIndexOf(element(found.range.endContainer))];
+      perform(button.dataset.action, found.text,
+        first ? Number(first.dataset.sourceLine) : undefined,
+        last ? Number(last.dataset.sourceEnd) : undefined);
     }
     window.getSelection()?.removeAllRanges();
     toolbarEl.hidden = true;

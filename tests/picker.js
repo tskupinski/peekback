@@ -14,7 +14,11 @@ class Element {
     this.hidden = true;
     this.value = "";
     this.className = "";
-    this.classList = { toggle() {}, contains() { return false; } };
+    const classes = new Set();
+    this.classList = {
+      toggle(name, enabled) { if (enabled ?? !classes.has(name)) classes.add(name); else classes.delete(name); },
+      contains(name) { return classes.has(name); },
+    };
   }
   addEventListener(name, fn) { (this.listeners[name] ??= []).push(fn); }
   dispatch(name, values = {}) {
@@ -24,6 +28,8 @@ class Element {
   replaceChildren(...children) { this.children = children; }
   append(...children) { this.children.push(...children); }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
+  matches() { return false; }
   querySelector(selector) { return selector === ".active" ? this.children.find(c => c.className.includes(" active")) : null; }
   querySelectorAll() { return []; }
   focus() {}
@@ -42,10 +48,22 @@ async function main() {
     createElement: () => new Element(),
     body: new Element(), documentElement: new Element(), hasFocus: () => true,
   });
+  // Paragraph-only rendering fixture. Exercise comment handlers against source
+  // ranges without depending on a browser's Markdown/layout implementation.
+  Object.defineProperty(element("doc"), "innerHTML", { set(source) {
+    let line = 0;
+    this.children = source ? source.split("\n\n").map(text => {
+      const block = new Element();
+      const count = text.split("\n").length;
+      block.dataset = { sourceLine: String(line), sourceEnd: String(line + count) };
+      line += count + 1;
+      return block;
+    }) : [];
+  } });
   const messages = [];
   const window = Object.assign(new Element(), {
     matchMedia: () => ({ matches: false, addEventListener() {} }),
-    markdownit: () => ({ use() { return this; }, render() { return ""; } }),
+    markdownit: () => ({ use() { return this; }, render(source) { return source; } }),
     ipc: { postMessage: text => messages.push(JSON.parse(text)) },
     scrollTo() {},
   });
@@ -94,6 +112,54 @@ async function main() {
   input.dispatch("keydown", { key: "r", ctrlKey: true });
   assert.match(element("picker-note").textContent, /Loading/);
   console.log("Picker passed: scopes, async filtering, provenance search, warnings, >30 results, standalone opening, refresh.");
+
+  input.dispatch("keydown", { key: "Escape" });
+  const key = key => window.dispatch("keydown", { key });
+  const command = value => {
+    key(":");
+    element("cmd-input").value = value;
+    element("cmd-input").dispatch("keydown", { key: "Enter" });
+  };
+  const source = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
+  const render = async (path = "/comments.md", text = source) => {
+    receive({ type: "render", path, source: text, documents: [] });
+    await new Promise(setImmediate);
+  };
+  const marked = () => element("doc").children.filter(el => el.classList.contains("commented"));
+  await render();
+  key("v"); key("j"); command("c Review both paragraphs");
+  assert.equal(marked().length, 2);
+  assert.equal(marked()[0].dataset.commentLabel, "1 comment");
+  assert.equal(marked()[0].attributes.title, "Review both paragraphs");
+  command("c Another note");
+  assert.equal(marked()[1].dataset.commentLabel, "2 comments");
+  await render("/other.md");
+  assert.equal(marked().length, 0);
+  await render();
+  assert.equal(marked().length, 2);
+  await render("/comments.md", "New paragraph.\n\n" + source);
+  assert.equal(marked().length, 0); // Never mark unrelated text after edits.
+  await render();
+  command("sendall");
+  receive({ type: "send-result", purpose: "comments", ok: false, text: "failed" });
+  assert.equal(marked().length, 2);
+  command("sendall");
+  command("c Added while sending");
+  receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
+  assert.equal(marked().length, 1); // Only the acknowledged batch disappears.
+  assert.equal(marked()[0].attributes.title, "Added while sending");
+  element("comments").children[0].children[2].dispatch("click");
+  assert.equal(marked().length, 0);
+  assert.equal(element("doc").children[1].attributes.title, undefined);
+
+  key("g"); key("g"); key("c");
+  await render("/other.md");
+  element("cmd-input").value = "Keep the original target";
+  element("cmd-input").dispatch("keydown", { key: "Enter" });
+  assert.equal(marked().length, 0);
+  await render();
+  assert.equal(marked()[0].attributes.title, "Keep the original target");
+  console.log("Comments passed: ranges, overlapping notes, document switches, stale anchors, removal, send lifecycle, captured targets.");
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

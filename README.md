@@ -166,6 +166,13 @@ Peekback uses `CODEX_THREAD_ID` (or `CODEX_SESSION_ID`) to select that session.
 Text selected with the mouse gets a small toolbar with the same Copy, Send
 and Comment actions.
 
+Blocks with pending comments are highlighted and show a comment-count badge.
+Hover over a marked block to read its notes, or use `Space c` to open the pending
+comments picker. Markers disappear when comments are removed or successfully
+sent. If live edits change the text at a comment's saved lines, its marker is
+hidden; the original quote and note remain in the pending list. Comments stay
+in memory until the daemon stops.
+
 The document picker has **Current session** and **All sessions** scopes. All
 sessions reads retained tracker history for both agents, including ended
 sessions. It groups identical paths, sorts by latest activity, and shows the

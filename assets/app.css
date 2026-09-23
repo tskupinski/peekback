@@ -404,6 +404,33 @@ html[data-theme] ::highlight(search) { background: var(--ansi-3); color: var(--b
 
 /* ---- comments ---- */
 
+.markdown .commented {
+  background: color-mix(in srgb, var(--banner-fg) 8%, var(--bg));
+  box-shadow: -3px 0 var(--banner-fg);
+}
+.markdown .commented.selected {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  box-shadow: -3px 0 var(--banner-fg), 0 0 0 6px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.markdown pre.mermaid.commented { flex-direction: column; align-items: center; }
+.markdown .commented::after {
+  content: attr(data-comment-label);
+  display: block;
+  width: fit-content;
+  margin: 6px 0 0 8px;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--banner-fg) 40%, transparent);
+  border-radius: 4px;
+  background: var(--banner-bg);
+  color: var(--banner-fg);
+  font: 11px/1.6 var(--mono);
+  font-weight: 500;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  align-self: flex-start;
+}
+
 .comment {
   position: relative;
   padding: 6px 22px 6px 8px;
