@@ -100,6 +100,21 @@ impl View {
     /// Shows the window in front of other apps without taking keyboard focus
     /// away from the terminal.
     pub fn bring_forward(&self) {
+        self.order_front();
+        set_in_app_switcher(true);
+    }
+
+    /// Shows the window and gives it keyboard focus.
+    pub fn focus(&self) {
+        self.order_front();
+        self.window.set_focus();
+        let _ = self.webview.focus();
+        // macOS ignores a request to activate from an app that has just become
+        // a regular one, so it joins the switcher only once it is in front.
+        set_in_app_switcher(true);
+    }
+
+    fn order_front(&self) {
         #[cfg(target_os = "macos")]
         {
             use objc2_app_kit::{NSApplication, NSWindow};
@@ -113,15 +128,9 @@ impl View {
         self.window.set_visible(true);
     }
 
-    /// Shows the window and gives it keyboard focus.
-    pub fn focus(&self) {
-        self.bring_forward();
-        self.window.set_focus();
-        let _ = self.webview.focus();
-    }
-
     pub fn hide(&self) {
         self.window.set_visible(false);
+        set_in_app_switcher(false);
     }
 
     /// Hides the window and hands focus back to whatever application was
@@ -134,6 +143,7 @@ impl View {
             let mtm = objc2::MainThreadMarker::new().expect("main thread");
             NSApplication::sharedApplication(mtm).hide(None);
         }
+        set_in_app_switcher(false);
     }
 
     pub fn is_focused(&self) -> bool {
@@ -143,6 +153,25 @@ impl View {
     pub fn is_visible(&self) -> bool {
         self.window.is_visible()
     }
+}
+
+/// A visible viewer is reachable with Cmd+Tab like any window the user works
+/// in. A hidden one leaves the switcher and the Dock, since the daemon behind
+/// it runs all the time.
+fn set_in_app_switcher(listed: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+        let mtm = objc2::MainThreadMarker::new().expect("main thread");
+        let app = NSApplication::sharedApplication(mtm);
+        let policy =
+            if listed { NSApplicationActivationPolicy::Regular } else { NSApplicationActivationPolicy::Accessory };
+        if app.activationPolicy() != policy {
+            app.setActivationPolicy(policy);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = listed;
 }
 
 fn is_app_url(url: &str) -> bool {

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- List the viewer in Cmd+Tab and the Dock while it is shown, so it is one
+  keystroke away from the terminal. A hidden viewer stays out of both.
+
 ## 0.1.1 — 2026-09-24
 
 Updates the package README, which still described the crates as unpublished.
