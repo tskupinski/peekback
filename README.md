@@ -90,6 +90,9 @@ Codex desktop/IDE composer integration is not supported.
 
 ### Upgrade
 
+Send or copy pending comments before stopping the daemon; they are kept only
+in memory.
+
 ```sh
 cargo install peekback --locked
 peekback setup
@@ -157,7 +160,7 @@ Peekback uses `CODEX_THREAD_ID` (or `CODEX_SESSION_ID`) to select that session.
 | `S` | send all pending comments as one prompt |
 | `/` | search, then `n` / `N` |
 | `Space d` or `Ctrl-P` | document picker |
-| `Tab` in document picker | switch between current session and all stored sessions |
+| `Tab` / `Shift-Tab` in document picker | cycle Current session, All sessions, and Bookmarks |
 | `Space s` | session picker |
 | `Space c` | pending comments (`Enter` jumps, `Ctrl-D` removes) |
 | `:` | command line: `:doc`, `:session`, `:send`, `:c note`, `:sendall`, `:sidebar`, `:q`, `:help` |
@@ -196,8 +199,10 @@ the config each time the scope opens, and `Ctrl-R` refreshes it.
 
 Nothing is ever submitted for you. Every send lands in the prompt as a paste
 and waits for you to press Enter. Control characters are stripped before
-sending. If the agent that registered the session is no longer running, the
-text is only copied, since its terminal may now hold a shell.
+sending. If the tracked agent process is no longer running, automatic sending
+falls back to the clipboard; a pinned paste backend refuses the send. Entries
+created before process tracking retain their previous behavior until fresh
+hook activity records the agent's identity.
 
 ### Commands
 
@@ -248,9 +253,10 @@ the live session the browser runs inside, if any, and are standalone otherwise.
 `--all-sessions` browses retained history without requiring any live session.
 It merges paths across Claude Code and Codex, preserves session provenance in
 the evidence view (`e`) and plain listing, and supports filtering by session ID.
-`r` reloads stored history. Previewing from this mode opens without a send-back
-target. It cannot be combined with session/pane selectors or `--candidates`;
-it reads the tracker rather than scanning every old project.
+`r` reloads stored history. Previews keep the browser's originating live session
+as their send-back target when one is available. It cannot be combined with
+session/pane selectors or `--candidates`; it reads the tracker rather than
+scanning every old project.
 Files found only by a live filesystem scan may therefore be absent from All
 sessions. Installing hooks does not automatically import every past session.
 

@@ -2,17 +2,17 @@
 
 ## 0.1.1 — 2026-09-24
 
-Published on [crates.io](https://crates.io/crates/peekback/0.1.1). Updates the
-package README, which still described the crates as unpublished.
+Updates the package README, which still described the crates as unpublished.
 
 - Highlight blocks with pending comments and show comment counts and notes on
   hover. Keep selections attached to their original document while composing.
 - Keep the viewer on its embedded page: block navigation, new windows and
   dropped items, ignore page messages from other origins, and route Mermaid's
   SVG links through the link handler.
-- Never paste into a terminal whose agent has exited; copy instead. Strip
-  control characters from sent text, refuse multi-line tmux pastes into panes
-  without bracketed paste, and use a separate tmux buffer per send.
+- When a tracked agent process has exited, use the clipboard instead of pasting
+  into its terminal. Strip control characters from sent text, refuse multi-line
+  tmux pastes into panes without bracketed paste, and use a separate tmux buffer
+  per send.
 - Fix Kitty sends, which passed `--bracketed-paste` without a value.
 - Stay in the session the viewer was opened for when opening a file from All
   sessions. Current session keeps listing its files, and sends still go to it.

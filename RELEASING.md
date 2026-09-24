@@ -20,7 +20,7 @@ create tags, or create GitHub releases.
 
 ## Validation evidence
 
-The [CI run for commit 1ab081e](https://github.com/tskupinski/peekback/actions/runs/35879152030)
+The [CI run for commit d9e4ecd](https://github.com/tskupinski/peekback/actions/runs/35974796395)
 passed the app job and both standalone library jobs. This is automated evidence,
 not a substitute for the manual acceptance checks on each release.
 
@@ -209,12 +209,21 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
 - [ ] Create/edit a Markdown file in each session. Confirm it appears in
       `peekback browse`; use `p` to render it in the native viewer.
 - [ ] Browse `--all-sessions` and the viewer's All sessions picker (`Ctrl-P`,
-      then `Tab`). Check provenance, filtering, and standalone previews.
+      then `Tab`). Check provenance and filtering. Previews should preserve the
+      originating live session, or open standalone when there is none.
+- [ ] Configure bookmarked files, folders, and globs. Check the Bookmarks picker
+      and refresh after editing the config; opening a bookmark keeps the session.
 - [ ] Check Mermaid, math, syntax highlighting, live reload, normal window
       stacking, and the global hotkey after the first `peekback show`.
+- [ ] Confirm `show` and terminal previews take focus, and `show --no-focus`
+      leaves keyboard focus in the terminal. Add/remove/send comments and check
+      their block markers, including across live reloads.
 - [ ] Copy a selection and send one through a tested terminal backend. Confirm
       it lands in the intended prompt without submitting it. Record the backend;
       keep WezTerm/Kitty marked unverified unless actually exercised.
+- [ ] Confirm clipboard fallback after a tracked agent process exits. Fresh
+      hook activity records process identity; older entries without it retain
+      the previous behavior until refreshed.
 - [ ] End the sessions; verify their retained files remain queryable and live
       registry entries disappear.
 - [ ] Upgrade over an earlier installation, restart the daemon, and verify the
