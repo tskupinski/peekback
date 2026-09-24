@@ -1,5 +1,6 @@
 mod activity;
 mod assets;
+mod bookmarks;
 mod browse;
 mod client;
 mod config;

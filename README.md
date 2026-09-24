@@ -173,7 +173,8 @@ sent. If live edits change the text at a comment's saved lines, its marker is
 hidden; the original quote and note remain in the pending list. Comments stay
 in memory until the daemon stops.
 
-The document picker has **Current session** and **All sessions** scopes. All
+The document picker has **Current session**, **All sessions** and
+**Bookmarks** scopes; `Tab` and `Shift-Tab` cycle through them. All
 sessions reads retained tracker history for both agents, including ended
 sessions. It groups identical paths, sorts by latest activity, and shows the
 agent/session origins; filter by path or session ID. It keeps the viewer's
@@ -184,6 +185,12 @@ keeps the viewer in the session it was opened for: Current session still lists
 that session's files, and selections and comments are still sent to it. A file
 never picks the session itself, since it can belong to several. A viewer opened
 without a session shows the file standalone, with no send-back target.
+
+**Bookmarks** lists Markdown you always want within reach, such as your global
+`CLAUDE.md` or shared snippets, configured with `bookmarks` (see
+[Configuration](#configuration)). Opening a bookmark also keeps the viewer's
+session, so you can ask that agent to edit the file. The list is rebuilt from
+the config each time the scope opens, and `Ctrl-R` refreshes it.
 
 Nothing is ever submitted for you. Every send lands in the prompt as a paste
 and waits for you to press Enter. Control characters are stripped before
@@ -356,9 +363,24 @@ split = 0.5              # share of the terminal's width for right / left
 theme = "auto"           # or system: keep the page's own light / dark palettes
 # font = "JetBrains Mono"
 # font_size = 13
+bookmarks = [
+  "~/.claude/CLAUDE.md",   # starts with ~ or /: the same file everywhere
+  "~/notes/snippets/",     # a folder: every Markdown file in it, recursively
+  "CLAUDE.md",             # anything else: relative to the session's project
+  "docs/**/*.md",          # globs: *, **, ?, [abc] and {a,b}
+]
 ```
 
 The daemon reads the file when it starts; run `peekback quit` after editing.
+`bookmarks` is the exception and is read whenever the Bookmarks scope opens.
+
+Bookmarks list only existing Markdown files, in config order, without
+duplicates. A relative entry is skipped when the viewer has no session, and a
+missing file is simply left out, so `CLAUDE.md` works in projects that lack
+one. Folders and globs skip hidden files and folders and do not follow
+symlinked folders; symlinked files are followed. The list stops at 200 files,
+and entries that cannot be listed, such as an invalid glob, show a warning in
+the picker.
 
 ### How text reaches the prompt
 

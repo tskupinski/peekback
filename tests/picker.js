@@ -102,7 +102,7 @@ async function main() {
 
   window.dispatch("keydown", { key: "p", ctrlKey: true });
   assert.equal(messages.at(-1).type, "list-all-documents"); // Refresh on reopen.
-  input.dispatch("keydown", { key: "Tab" });
+  input.dispatch("keydown", { key: "Tab", shiftKey: true }); // Shift-Tab cycles backwards.
   receive({ type: "all-documents", documents, warnings: [] }); // Late reply must not change scope.
   assert.equal(element("picker-current").attributes["aria-pressed"], "true");
   assert.equal(element("picker-list").children[0].children[0].textContent, "current.md");
@@ -112,6 +112,33 @@ async function main() {
   input.dispatch("keydown", { key: "r", ctrlKey: true });
   assert.match(element("picker-note").textContent, /Loading/);
   console.log("Picker passed: scopes, async filtering, provenance search, warnings, >30 results, standalone opening, refresh.");
+
+  element("picker-bookmarks").dispatch("click");
+  assert.deepEqual(messages.at(-1), { type: "list-bookmarks" });
+  assert.equal(element("picker-bookmarks").attributes["aria-pressed"], "true");
+  assert.match(element("picker-note").textContent, /Loading bookmarks/);
+  receive({ type: "bookmarks", documents: [], found: 0, warnings: [] });
+  assert.match(element("picker-list").children[0].textContent, /No bookmarked Markdown files\. Add bookmarks = /);
+  const marks = [
+    { path: "/home/.claude/CLAUDE.md", label: "~/.claude/CLAUDE.md", touched_at: 1 },
+    { path: "/project/CLAUDE.md", label: "CLAUDE.md", touched_at: 2 },
+  ];
+  input.dispatch("keydown", { key: "r", ctrlKey: true });
+  assert.deepEqual(messages.at(-1), { type: "list-bookmarks" }); // Ctrl-R rereads the config.
+  receive({ type: "bookmarks", documents: marks, found: 250, warnings: ["docs/[.md: unclosed character class"] });
+  assert.deepEqual(element("picker-list").children.map(li => li.children[0].textContent), ["~/.claude/CLAUDE.md", "CLAUDE.md"]);
+  assert.match(element("picker-note").textContent, /Showing 2 of 250 bookmarked files\. Some bookmarks could not be listed:\ndocs\/\[\.md/);
+  input.dispatch("keydown", { key: "Tab" });
+  assert.equal(element("picker-current").attributes["aria-pressed"], "true"); // Tab wraps around.
+  input.dispatch("keydown", { key: "Tab", shiftKey: true });
+  input.value = "project";
+  input.dispatch("input");
+  input.dispatch("keydown", { key: "Enter" });
+  assert.deepEqual(messages.at(-1), { type: "open-bookmark", path: "/project/CLAUDE.md" });
+  window.dispatch("keydown", { key: "p", ctrlKey: true });
+  assert.deepEqual(messages.at(-1), { type: "list-bookmarks" }); // Reopening keeps the scope and refreshes.
+  input.dispatch("keydown", { key: "Escape" });
+  console.log("Bookmarks passed: scope cycling, config hint, cap and warnings, refresh, opening.");
 
   input.dispatch("keydown", { key: "Escape" });
   const key = key => window.dispatch("keydown", { key });

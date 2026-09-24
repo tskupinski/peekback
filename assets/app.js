@@ -20,6 +20,7 @@
   const pickerScope = $("picker-scope");
   const pickerCurrent = $("picker-current");
   const pickerAll = $("picker-all");
+  const pickerBookmarks = $("picker-bookmarks");
   const pickerNote = $("picker-note");
   const commentsEl = $("comments");
   const sendAllButton = $("send-all");
@@ -663,6 +664,15 @@
   };
 
   function documentCandidates() {
+    if (picker.scope === "bookmarks") {
+      return bookmarks.documents.map((d) => ({
+        label: d.label,
+        search: `${d.label} ${d.path}`,
+        meta: d.touched_at ? `edited ${ago(d.touched_at)}` : "",
+        current: d.path === state.doc?.path,
+        run: () => post({ type: "open-bookmark", path: d.path }),
+      }));
+    }
     if (picker.scope === "all") {
       return picker.documents.map((d) => {
         const provenance = d.sessions.map((s) => `${s.agent} / ${s.session_id}`).join(" · ");
@@ -837,6 +847,21 @@
   // An fzf-style overlay: type to filter, Enter to open. Replaces the
   // sidebar as the way to move between documents and sessions.
   const picker = { kind: null, scope: "current", documents: [], warnings: [], loading: false, items: [], filtered: [], index: 0 };
+  const bookmarks = { documents: [], found: 0, warnings: [], loading: false };
+  const SCOPES = ["current", "all", "bookmarks"];
+  const BOOKMARKS_HINT = 'Add bookmarks = ["~/.claude/CLAUDE.md", "CLAUDE.md"] to ~/.config/peekback/config.toml. '
+    + "Entries can be files, folders or globs; ones not starting with / or ~ follow the session's project.";
+
+  // Read by the daemon on every request, so config edits apply on the next open.
+  function refreshBookmarks() {
+    bookmarks.loading = true;
+    post({ type: "list-bookmarks" });
+  }
+
+  function refreshScope() {
+    if (picker.scope === "all") refreshAllDocuments();
+    if (picker.scope === "bookmarks") refreshBookmarks();
+  }
 
   function refreshAllDocuments() {
     picker.loading = true;
@@ -852,20 +877,20 @@
 
   function setPickerScope(scope) {
     picker.scope = scope;
-    if (scope === "all") refreshAllDocuments();
+    refreshScope();
     updatePickerItems();
     pickerInput.focus();
   }
 
-  for (const [button, scope] of [[pickerCurrent, "current"], [pickerAll, "all"]]) {
+  for (const [button, scope] of [[pickerCurrent, "current"], [pickerAll, "all"], [pickerBookmarks, "bookmarks"]]) {
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", () => setPickerScope(scope));
   }
 
   function openPicker(kind) {
     picker.kind = kind;
-    if (kind === "documents" && !state.doc?.sessionId) picker.scope = "all";
-    if (kind === "documents" && picker.scope === "all") refreshAllDocuments();
+    if (kind === "documents" && picker.scope === "current" && !state.doc?.sessionId) picker.scope = "all";
+    if (kind === "documents") refreshScope();
     pickerInput.value = "";
     pickerInput.placeholder = { documents: "open document", sessions: "switch session", comments: "pending comments, Ctrl-D removes" }[kind];
     pickerEl.hidden = false;
@@ -890,13 +915,24 @@
   function renderPicker() {
     const documents = picker.kind === "documents";
     const all = documents && picker.scope === "all";
+    const marked = documents && picker.scope === "bookmarks";
     pickerScope.hidden = !documents;
-    pickerCurrent.setAttribute("aria-pressed", String(!all));
+    pickerCurrent.setAttribute("aria-pressed", String(documents && picker.scope === "current"));
     pickerAll.setAttribute("aria-pressed", String(all));
-    pickerNote.hidden = !all;
-    pickerNote.textContent = picker.loading ? "Loading retained history…" : picker.warnings.length
-      ? `Some history could not be read (${picker.warnings.length} warnings):\n${picker.warnings.join("\n")}`
-      : "Stored history, including ended sessions. Opens without a send target.";
+    pickerBookmarks.setAttribute("aria-pressed", String(marked));
+    pickerNote.hidden = !all && !marked;
+    const opens = state.doc?.sessionId ? "Opens in this session." : "Opens without a send target.";
+    if (all) {
+      pickerNote.textContent = picker.loading ? "Loading retained history…" : picker.warnings.length
+        ? `Some history could not be read (${picker.warnings.length} warnings):\n${picker.warnings.join("\n")}`
+        : `Stored history, including ended sessions. ${opens}`;
+    } else if (marked) {
+      const shown = bookmarks.found > bookmarks.documents.length
+        ? `Showing ${bookmarks.documents.length} of ${bookmarks.found} bookmarked files. ` : "";
+      pickerNote.textContent = bookmarks.loading ? "Loading bookmarks…" : bookmarks.warnings.length
+        ? `${shown}Some bookmarks could not be listed:\n${bookmarks.warnings.join("\n")}`
+        : `${shown}From ~/.config/peekback/config.toml. ${opens}`;
+    }
     const start = Math.max(0, picker.index - 29);
     pickerList.replaceChildren(
       ...picker.filtered.slice(start, start + 30).map((c, offset) => {
@@ -923,7 +959,9 @@
       const li = document.createElement("li");
       li.className = "empty";
       li.textContent = all && picker.loading ? "loading…" : all && picker.documents.length === 0
-        ? "No existing Markdown files in retained history" : "no matches";
+        ? "No existing Markdown files in retained history"
+        : marked && bookmarks.loading ? "loading…" : marked && bookmarks.documents.length === 0
+          ? `No bookmarked Markdown files. ${BOOKMARKS_HINT}` : "no matches";
       pickerList.append(li);
     }
   }
@@ -949,10 +987,11 @@
     else if (event.key === "Enter") choosePicker();
     else if (event.key === "Tab" && picker.kind === "documents") {
       event.preventDefault();
-      setPickerScope(picker.scope === "all" ? "current" : "all");
-    } else if (ctrl && event.key === "r" && picker.kind === "documents" && picker.scope === "all") {
+      const step = event.shiftKey ? SCOPES.length - 1 : 1;
+      setPickerScope(SCOPES[(SCOPES.indexOf(picker.scope) + step) % SCOPES.length]);
+    } else if (ctrl && event.key === "r" && picker.kind === "documents" && picker.scope !== "current") {
       event.preventDefault();
-      refreshAllDocuments();
+      refreshScope();
       updatePickerItems();
     }
     else if (event.key === "ArrowDown" || (ctrl && (event.key === "n" || event.key === "j"))) {
@@ -1275,6 +1314,13 @@
         picker.warnings = message.warnings;
         picker.loading = false;
         if (!pickerEl.hidden && picker.kind === "documents" && picker.scope === "all") updatePickerItems();
+        break;
+      case "bookmarks":
+        bookmarks.documents = message.documents;
+        bookmarks.found = message.found;
+        bookmarks.warnings = message.warnings;
+        bookmarks.loading = false;
+        if (!pickerEl.hidden && picker.kind === "documents" && picker.scope === "bookmarks") updatePickerItems();
         break;
       case "documents":
         if (state.doc?.sessionId === message.session_id) {

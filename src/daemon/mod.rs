@@ -21,7 +21,7 @@ use crate::paths;
 use crate::protocol::{Request, Response};
 use crate::registry::{self, Session};
 use crate::theme::{self, Theme};
-use crate::{config, send};
+use crate::{bookmarks, config, send};
 
 /// Everything that reaches the main thread from elsewhere: socket requests,
 /// file changes, hotkey presses, and messages from the page.
@@ -32,6 +32,7 @@ pub enum UserEvent {
     Hotkey,
     Page(PageMessage),
     AllDocumentsLoaded(discovery::AllDocuments),
+    BookmarksLoaded(bookmarks::Bookmarks),
 }
 
 /// Messages the page sends through `window.ipc.postMessage`.
@@ -41,6 +42,8 @@ pub enum PageMessage {
     Ready,
     ListAllDocuments,
     SwitchTracked { path: PathBuf },
+    ListBookmarks,
+    OpenBookmark { path: PathBuf },
     Switch { session_id: Option<String>, path: Option<PathBuf> },
     Send { text: String, purpose: Option<String> },
     Copy { text: String },
@@ -56,6 +59,7 @@ pub enum DaemonMessage<'a> {
     Sessions { sessions: &'a [Session], current: Option<&'a str> },
     Documents { session_id: &'a str, documents: &'a [Document] },
     AllDocuments { documents: &'a [discovery::TrackedDocument], warnings: &'a [String] },
+    Bookmarks { documents: &'a [Document], found: usize, warnings: &'a [String] },
     Banner { text: &'a str },
     Toast { text: &'a str },
     Theme { theme: Option<&'a Theme> },
@@ -106,6 +110,7 @@ pub fn run() -> Result<()> {
     let mut current_theme: Option<Theme> = None;
     let mut all_documents = discovery::AllDocuments::default();
     let mut loading_all_documents = false;
+    let mut bookmark_list = bookmarks::Bookmarks::default();
 
     eprintln!("peekback daemon listening on {}", paths::socket_path().display());
     event_loop.run(move |event, _, control_flow| {
@@ -165,14 +170,38 @@ pub fn run() -> Result<()> {
                     return;
                 }
                 // A path can belong to several sessions, including ended ones,
-                // so it never picks the session. The viewer stays in the one it
-                // was opened for, which keeps its documents and send target.
-                let session_id = current
-                    .as_ref()
-                    .and_then(|c| c.session.as_ref())
-                    .filter(|s| registry::find(&s.session_id).is_some())
-                    .map(|s| s.session_id.clone());
-                if let Err(e) = show(session_id, Some(path), &mut current, &mut current_theme) {
+                // so it never picks the session.
+                if let Err(e) = show(live_session_id(&current), Some(path), &mut current, &mut current_theme) {
+                    view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
+                }
+            }
+            Event::UserEvent(UserEvent::Page(PageMessage::ListBookmarks)) => {
+                // Read on every request, so edits apply without a restart.
+                let entries = config::load().bookmarks;
+                let cwd = current.as_ref().and_then(|c| c.session.as_ref()).map(|s| s.cwd.clone());
+                let proxy = proxy.clone();
+                std::thread::spawn(move || {
+                    let home = dirs::home_dir().unwrap_or_default();
+                    let report = bookmarks::list(&entries, cwd.as_deref(), &home);
+                    let _ = proxy.send_event(UserEvent::BookmarksLoaded(report));
+                });
+            }
+            Event::UserEvent(UserEvent::BookmarksLoaded(report)) => {
+                bookmark_list = report;
+                if page_ready {
+                    view.push(&DaemonMessage::Bookmarks {
+                        documents: &bookmark_list.documents,
+                        found: bookmark_list.found,
+                        warnings: &bookmark_list.warnings,
+                    });
+                }
+            }
+            Event::UserEvent(UserEvent::Page(PageMessage::OpenBookmark { path })) => {
+                if !bookmark_list.documents.iter().any(|d| d.path == path) {
+                    view.push(&DaemonMessage::Toast { text: "That file is not among the bookmarks" });
+                    return;
+                }
+                if let Err(e) = show(live_session_id(&current), Some(path), &mut current, &mut current_theme) {
                     view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
                 }
             }
@@ -345,6 +374,17 @@ fn open(session_id: Option<String>, path: Option<PathBuf>) -> Result<Current> {
     };
     let source = fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
     Ok(Current { session, documents, path, source, missing: false })
+}
+
+/// Files opened from outside the session, from All sessions or bookmarks, keep
+/// the viewer in the session it was opened for, with its documents and send
+/// target, while that session is live.
+fn live_session_id(current: &Option<Current>) -> Option<String> {
+    current
+        .as_ref()
+        .and_then(|c| c.session.as_ref())
+        .filter(|s| registry::find(&s.session_id).is_some())
+        .map(|s| s.session_id.clone())
 }
 
 /// The terminal window to sit on: the session's own, else the most recently

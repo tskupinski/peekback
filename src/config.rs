@@ -24,6 +24,9 @@ pub struct Config {
     /// Overrides for the monospace font the terminal theme would supply.
     pub font: Option<String>,
     pub font_size: Option<f64>,
+    /// Markdown files, directories or globs listed in the picker's Bookmarks
+    /// scope. Entries not starting with `/` or `~` follow the session's project.
+    pub bookmarks: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -45,6 +48,7 @@ impl Default for Config {
             theme: "auto".into(),
             font: None,
             font_size: None,
+            bookmarks: Vec::new(),
         }
     }
 }

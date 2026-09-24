@@ -192,8 +192,9 @@ backend from the CLI and does not require the daemon.
 Tao owns the main-thread event loop. Socket and watcher threads pass messages
 through an event proxy; UI state and JavaScript evaluation stay on the main
 thread. All-session picker queries run on a worker, with at most one active
-query, and return documents plus warnings. The page may open a tracked path
-only from the daemon's returned list.
+query, and return documents plus warnings. Bookmark listing also runs on a
+worker. The page may open a tracked path or bookmark only from the daemon's
+most recent list.
 
 Wry hosts the embedded page at `peekback://app/`. The page sends messages through
 `window.ipc.postMessage`; Rust pushes updates through JavaScript evaluation.
@@ -219,9 +220,21 @@ or hides it when already focused. The hotkey exists only while the daemon runs.
 
 A watcher reloads the current document. If it is deleted, the last rendered
 content remains with a banner. Registry changes update the live session list
-and current-session documents. The document picker has Current session and
-All sessions scopes, switched with Tab. All sessions refreshes on opening and
-with Ctrl-R; partial-history warnings appear in the picker.
+and current-session documents. The document picker has Current session, All
+sessions and Bookmarks scopes, cycled with Tab and Shift-Tab. All sessions and
+Bookmarks refresh on opening and with Ctrl-R; partial-history and bookmark
+warnings appear in the picker.
+
+Bookmarks come from the `bookmarks` config list, reread for every request.
+Entries starting with `/` or `~` are absolute; others resolve against the
+viewer's session cwd and are skipped without a session. An entry is a file, a
+directory (Markdown recursively) or a glob matched with globset, walking only
+from the deepest literal directory. Walks skip hidden names, do not follow
+directory symlinks, stop at depth 16 and 20,000 visited entries, and list at
+most 200 files in config order without duplicates; the page is told how many
+matched. Missing files are omitted silently; invalid globs and explicit
+non-Markdown files produce warnings. Opening a bookmark keeps the live session,
+like All sessions.
 
 Keyboard and mouse selections map back to Markdown. Copy writes to the
 clipboard; Send pastes a blockquote; Comment accumulates notes for a combined

@@ -18,6 +18,10 @@ package README, which still described the crates as unpublished.
   sessions. Current session keeps listing its files, and sends still go to it.
   Previously the viewer dropped the session, emptying Current session.
   `peekback browse --all-sessions` likewise keeps the session it runs inside.
+- Add a Bookmarks scope to the document picker, configured with `bookmarks` in
+  `config.toml`: files, folders or globs, absolute or relative to the session's
+  project. It rereads the config on every open, and opening a bookmark keeps
+  the viewer's session as the send target.
 - Reject retention cutoffs in the future and refuse maintenance when a
   session's history holds unexpected files (session-activity).
 
