@@ -214,8 +214,9 @@ message rather than navigating the web view away from the app.
 
 The window uses normal stacking. Right, left, and over placements are
 borderless and positioned relative to the terminal; free placement is decorated.
-The app uses macOS accessory activation, without a Dock icon. `show` brings the
-window forward without taking keyboard focus. The global hotkey focuses it,
+The app uses macOS accessory activation, without a Dock icon. `show` and the
+terminal browser's `p` focus the window; `show --no-focus` only brings it
+forward, and show requests from older clients without the field do the same. The global hotkey focuses it,
 or hides it when already focused. The hotkey exists only while the daemon runs.
 
 A watcher reloads the current document. If it is deleted, the last rendered

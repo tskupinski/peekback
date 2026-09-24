@@ -59,6 +59,10 @@ enum Command {
         /// tmux pane id whose session to show, e.g. %3
         #[arg(long)]
         pane: Option<String>,
+        /// Bring the viewer forward without taking keyboard focus, for scripts
+        /// and agents that should not interrupt typing
+        #[arg(long)]
+        no_focus: bool,
     },
     /// Paste stdin into a session's prompt
     Send {
@@ -86,7 +90,7 @@ fn main() -> Result<()> {
         Command::Setup(args) => setup::run(args),
         Command::Browse(args) => browse::run(args),
         Command::Activity { command } => activity::run(command),
-        Command::Show { file, session, pane } => show(file, session, pane),
+        Command::Show { file, session, pane, no_focus } => show(file, session, pane, !no_focus),
         Command::Send { session, pane } => send(session, pane),
         Command::Daemon => daemon::run(),
         Command::Status { prune } => status(prune),
@@ -101,7 +105,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn show(file: Option<PathBuf>, session: Option<String>, pane: Option<String>) -> Result<()> {
+fn show(file: Option<PathBuf>, session: Option<String>, pane: Option<String>, focus: bool) -> Result<()> {
     let path = file.map(|f| f.canonicalize().with_context(|| format!("cannot read {}", f.display()))).transpose()?;
     let resolved = session::resolve(session.as_deref(), pane.as_deref());
     let session_id = match (resolved, &path, session.is_some() || pane.is_some()) {
@@ -109,7 +113,7 @@ fn show(file: Option<PathBuf>, session: Option<String>, pane: Option<String>) ->
         (Err(_), Some(_), false) => None,
         (Err(e), _, _) => return Err(e),
     };
-    match client::request_starting_daemon(&Request::Show { session_id, path })? {
+    match client::request_starting_daemon(&Request::Show { session_id, path, focus })? {
         Response::Ok => Ok(()),
         other => bail_on(other),
     }

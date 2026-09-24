@@ -129,7 +129,9 @@ The viewer uses normal window stacking: switching to another app lets that
 app cover it. It comes to the front when explicitly shown or focused.
 
 From inside a Claude Code prompt, `! peekback show` opens the viewer on that
-exact session without focusing it. `peekback show path/to/file.md` shows a
+exact session and focuses it; `Esc` returns to the terminal. Add `--no-focus`
+to bring it forward without taking keyboard focus, for scripts or agents that
+should not interrupt your typing. `peekback show path/to/file.md` shows a
 specific file.
 
 For Codex CLI, use the global hotkey, a tmux binding, or `peekback show
@@ -201,7 +203,7 @@ text is only copied, since its terminal may now hold a shell.
 
 ```
 peekback setup [--agent claude|codex|all] [--dry-run]  configure hooks
-peekback show [FILE] [--session ID] [--pane %N]       show a document
+peekback show [FILE] [--session ID] [--pane %N] [--no-focus]  show a document
 peekback browse [--session ID] [--candidates]        browse session files
 peekback browse --all-sessions [--list]              browse retained history
 peekback send [--session ID] [--pane %N] < text       paste text into a prompt

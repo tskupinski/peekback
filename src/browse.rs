@@ -470,7 +470,7 @@ fn preview_request(key: Option<&SessionKey>, path: &Path) -> Result<Request> {
     // Ended sessions still have history, but cannot receive selections back.
     let session_id =
         key.and_then(|key| registry::find(&key.session_id).filter(|s| s.agent == key.agent)).map(|s| s.session_id);
-    Ok(Request::Show { session_id, path: Some(path) })
+    Ok(Request::Show { session_id, path: Some(path), focus: true })
 }
 
 fn text_preview(path: &Path) -> Vec<String> {

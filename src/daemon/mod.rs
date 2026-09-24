@@ -208,10 +208,14 @@ pub fn run() -> Result<()> {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => view.hide(),
             Event::UserEvent(UserEvent::Request { request, reply }) => {
                 let response = match request {
-                    Request::Show { session_id, path } => {
+                    Request::Show { session_id, path, focus } => {
                         match show(session_id, path, &mut current, &mut current_theme) {
                             Ok(()) => {
-                                view.bring_forward();
+                                if focus {
+                                    view.focus();
+                                } else {
+                                    view.bring_forward();
+                                }
                                 Response::Ok
                             }
                             Err(e) => Response::Error { message: format!("{e:#}") },

@@ -22,6 +22,8 @@ package README, which still described the crates as unpublished.
   `config.toml`: files, folders or globs, absolute or relative to the session's
   project. It rereads the config on every open, and opening a bookmark keeps
   the viewer's session as the send target.
+- Focus the viewer when `peekback show` or `p` in the terminal browser opens
+  it, as the hotkey does. `show --no-focus` keeps the previous behavior.
 - Reject retention cutoffs in the future and refuse maintenance when a
   session's history holds unexpected files (session-activity).
 

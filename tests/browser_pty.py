@@ -105,7 +105,7 @@ def main():
                 os.write(master, b"p")
                 expect(master, "Opened Markdown in Peekback.")
                 assert requests[0] == dict(
-                    type="show", session_id="terminal-test", path=str(notes.resolve())
+                    type="show", session_id="terminal-test", path=str(notes.resolve()), focus=True
                 )
                 os.write(master, b"e")
                 expect(master, "Hook / Create / Unknown")
@@ -123,14 +123,14 @@ def main():
                 expect(master, "Codex / terminal-test")
                 os.write(master, b"p")
                 expect(master, "Opened Markdown in Peekback.")
-                assert requests[1] == dict(type="show", session_id=None, path=str(notes.resolve()))
+                assert requests[1] == dict(type="show", session_id=None, path=str(notes.resolve()), focus=True)
                 os.write(master, b"q")
             # Run from inside a live session, previews stay in that session.
             with terminal(dict(env, CODEX_THREAD_ID="terminal-test"), ["--all-sessions"]) as (_, master, _):
                 expect(master, "All sessions")
                 os.write(master, b"/notes\rp")
                 expect(master, "Opened Markdown in Peekback.")
-                assert requests[2] == dict(type="show", session_id="terminal-test", path=str(notes.resolve()))
+                assert requests[2] == dict(type="show", session_id="terminal-test", path=str(notes.resolve()), focus=True)
                 os.write(master, b"q")
             hook["hook_event_name"] = "SessionEnd"
             record()
@@ -138,7 +138,7 @@ def main():
                 expect(master, "retained history")
                 os.write(master, b"/notes\rp")
                 expect(master, "Opened Markdown in Peekback.")
-                assert requests[3] == dict(type="show", session_id=None, path=str(notes.resolve()))
+                assert requests[3] == dict(type="show", session_id=None, path=str(notes.resolve()), focus=True)
                 os.write(master, b"p")
                 expect(master, "waiting for daemon reply")
                 assert not Path(root, "daemon.log").exists()
