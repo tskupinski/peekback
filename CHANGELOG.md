@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-09-24
+
+Published on [crates.io](https://crates.io/crates/peekback/0.1.1). Updates the
+package README, which still described the crates as unpublished.
 
 - Highlight blocks with pending comments and show comment counts and notes on
   hover. Keep selections attached to their original document while composing.

@@ -1932,7 +1932,7 @@ dependencies = [
 
 [[package]]
 name = "peekback"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2339,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "session-activity"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "libc",

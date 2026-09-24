@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-09-24
+
+Published on [crates.io](https://crates.io/crates/session-activity/0.1.1).
 
 - Reject retention cutoffs in the future. A cutoff cannot be lowered, so one
   given in milliseconds would silently stop recording the session.
