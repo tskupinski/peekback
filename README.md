@@ -313,9 +313,11 @@ Both commands return a JSON report; add `--apply` to commit. Compaction packs
 history into fewer files while preserving every raw event. Retention removes
 events strictly older than the Unix timestamp in seconds and persists that
 cutoff, preventing old transcript events from being reimported. Events at the
-cutoff are retained. A later command cannot lower an existing cutoff.
+cutoff are retained. A later command cannot lower an existing cutoff, so
+cutoffs in the future are rejected.
 
-Maintenance refuses damaged history. It publishes a synced checkpoint before
+Maintenance refuses damaged history and unexpected files in a session's
+history directory. It publishes a synced checkpoint before
 removing old batches, so interrupted cleanup does not duplicate events. Readers,
 writers, and maintenance coordinate through advisory locks on Unix. All readers
 must support checkpoints before applying maintenance; development builds from

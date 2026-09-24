@@ -102,10 +102,16 @@ impl Store {
         retained_from(&dir)
     }
     /// Pack history into fewer files, optionally retaining only timestamps at
-    /// or after `before`. Preview is read-only apart from the advisory lock.
-    /// Refuses damaged history. Never reconciles or discards raw observations
-    /// unless an explicit retention cutoff is supplied.
+    /// or after `before`, in Unix seconds. Preview is read-only apart from the
+    /// advisory lock. Refuses damaged history, unexpected files, and cutoffs in
+    /// the future. Never reconciles or discards raw observations unless an
+    /// explicit retention cutoff is supplied.
     pub fn maintain(&self, session: &SessionKey, before: Option<i64>, apply: bool) -> Result<MaintenanceReport> {
+        // A cutoff can never be lowered, and appends older than it are dropped,
+        // so a future one (such as milliseconds passed as seconds) would
+        // silently stop recording this session for good.
+        let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())?;
+        ensure!(before.is_none_or(|cutoff| cutoff <= now), "retention cutoff is in the future");
         let dir = self.directory(session)?;
         let mut report = MaintenanceReport { dry_run: !apply, ..Default::default() };
         if !dir.try_exists()? {
@@ -115,6 +121,15 @@ impl Store {
         let before = before.max(retained_from(&dir)?);
         report.retained_from = before;
         let paths = active_paths(&dir)?;
+        // Covered names must match exactly what readers treat as active, or a
+        // batch could be packed while its source stays visible.
+        for path in paths.iter().filter(|path| path.extension().is_some_and(|e| e == "json")) {
+            ensure!(
+                path.file_name().and_then(|n| n.to_str()).is_some_and(|name| safe_name(name, ".json")),
+                "refusing maintenance: unexpected file in history: {}",
+                path.display()
+            );
+        }
         let history = self.read_unlocked(session)?;
         ensure!(history.warnings.is_empty(), "refusing maintenance: history contains unreadable or invalid batches");
         report.batches_before = paths.len();
@@ -147,7 +162,6 @@ impl Store {
         }
         covered.sort();
         covered.dedup();
-        ensure!(covered.iter().all(|name| safe_name(name, ".json")), "invalid source batch name");
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let prefix = format!("compact-{nonce}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
         let mut names = Vec::new();

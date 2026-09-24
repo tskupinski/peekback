@@ -11,6 +11,8 @@
   control characters from sent text, refuse multi-line tmux pastes into panes
   without bracketed paste, and use a separate tmux buffer per send.
 - Fix Kitty sends, which passed `--bracketed-paste` without a value.
+- Reject retention cutoffs in the future and refuse maintenance when a
+  session's history holds unexpected files (session-activity).
 
 ## 0.1.0 — 2026-09-23
 

@@ -133,11 +133,12 @@ last argument to apply it. Supplying `Some(unix_seconds)` also drops events
 strictly older than that cutoff. The report includes batch/event counts and
 cleanup warnings. A persistent cutoff, exposed by `Store::retained_from`,
 filters subsequent appends and reads; callers importing transient observations
-should apply it too. Later maintenance can advance but never lower the cutoff.
-Maintenance of an absent session is a no-op.
+should apply it too. Later maintenance can advance but never lower the cutoff,
+so a cutoff in the future is rejected. Maintenance of an absent session is a
+no-op.
 
 Maintenance preserves raw events without reconciliation and refuses any
-damaged batch. It writes synced `.pack` chunks (each at most 16 MiB), then
+damaged batch or unexpected `.json` file in the session directory. It writes synced `.pack` chunks (each at most 16 MiB), then
 atomically publishes a synced `.checkpoint` before deleting original batches.
 The checkpoint identifies covered originals, making interrupted cleanup safe
 to retry; uncommitted packs are ignored. A malformed checkpoint is a hard error

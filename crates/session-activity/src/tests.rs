@@ -337,6 +337,47 @@ fn retention_is_explicit_inclusive_and_prevents_old_imports() {
 }
 
 #[test]
+fn future_cutoffs_are_rejected_so_recording_cannot_stop_for_good() {
+    let temp = Temp::new();
+    let store = Store::new(&temp.0);
+    let session = key(Agent::Codex);
+    store.append(&session, &patch_event(Path::new("/project"))).unwrap();
+    let milliseconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    for apply in [false, true] {
+        let error = store.maintain(&session, Some(milliseconds), apply).unwrap_err();
+        assert!(error.to_string().contains("future"), "{error}");
+    }
+    assert_eq!(store.retained_from(&session).unwrap(), None);
+    store.append(&session, &patch_event(Path::new("/project"))).unwrap();
+    assert_eq!(store.events(&session).unwrap().len(), 6);
+}
+
+#[test]
+fn unexpected_history_files_stop_preview_and_apply_alike() {
+    let temp = Temp::new();
+    let store = Store::new(&temp.0);
+    let session = key(Agent::Codex);
+    store.append(&session, &patch_event(Path::new("/project"))).unwrap();
+    let dir = temp.0.join("codex/same-id");
+    let batch = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).next().unwrap();
+    #[allow(unused_mut)]
+    let mut copies = vec![dir.join("notes (1).json")];
+    #[cfg(target_os = "linux")] // APFS refuses names that are not UTF-8.
+    copies.push(dir.join(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"copy-\xff.json")));
+    for copy in copies {
+        fs::copy(&batch, &copy).unwrap();
+        for apply in [false, true] {
+            let error = store.maintain(&session, None, apply).unwrap_err();
+            assert!(error.to_string().contains("unexpected file"), "{error}");
+        }
+        assert!(!dir.join(".checkpoint").exists());
+        fs::remove_file(copy).unwrap();
+    }
+    store.maintain(&session, None, true).unwrap();
+    assert_eq!(store.events(&session).unwrap().len(), 3);
+}
+
+#[test]
 fn checkpoint_survives_interrupted_cleanup_and_ignores_uncommitted_packs() {
     let temp = Temp::new();
     let store = Store::new(&temp.0);
@@ -361,7 +402,7 @@ fn checkpoint_survives_interrupted_cleanup_and_ignores_uncommitted_packs() {
     assert_eq!(store.events(&session).unwrap().len(), 3);
     fs::write(dir.join("corrupt.json"), "{").unwrap();
     let checkpoint = fs::read(dir.join(".checkpoint")).unwrap();
-    assert!(store.maintain(&session, Some(i64::MAX), true).is_err());
+    assert!(store.maintain(&session, Some(0), true).is_err());
     assert_eq!(fs::read(dir.join(".checkpoint")).unwrap(), checkpoint);
 }
 

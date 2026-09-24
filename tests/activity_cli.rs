@@ -126,19 +126,21 @@ fn maintenance_commands_preview_then_apply_and_pruned_sessions_stay_closed() {
     assert!(!root.join("activity/codex/integration/.checkpoint").exists());
     run(&["activity", "compact", "--agent", "codex", "--session", "integration", "--apply"]);
     assert_eq!(query(&root, "events").as_array().unwrap().len(), 2);
-    run(&["activity", "retain", "--agent", "codex", "--session", "integration", "--before", "9223372036854775807"]);
+    // Retention keeps events at the cutoff second and rejects future cutoffs.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs().to_string();
+    let future = (now.parse::<u64>().unwrap() * 1000).to_string();
+    let retain = |before: &str, apply: bool| {
+        let mut args = vec!["activity", "retain", "--agent", "codex", "--session", "integration", "--before", before];
+        args.extend(apply.then_some("--apply"));
+        Command::new(env!("CARGO_BIN_EXE_peekback")).args(args).env("PEEKBACK_STATE_DIR", &root).output().unwrap()
+    };
+    let rejected = retain(&future, true);
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("retention cutoff is in the future"));
+    assert!(retain(&now, false).status.success());
     assert_eq!(query(&root, "events").as_array().unwrap().len(), 2);
-    run(&[
-        "activity",
-        "retain",
-        "--agent",
-        "codex",
-        "--session",
-        "integration",
-        "--before",
-        "9223372036854775807",
-        "--apply",
-    ]);
+    assert!(retain(&now, true).status.success());
     assert!(query(&root, "events").as_array().unwrap().is_empty());
     let record = root.join("sessions/integration.json");
     let mut session: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Reject retention cutoffs in the future. A cutoff cannot be lowered, so one
+  given in milliseconds would silently stop recording the session.
+- Refuse maintenance, in preview and apply alike, when a session directory
+  holds a `.json` file that is not a valid batch name. Such a file could be
+  packed while staying visible to readers, duplicating its events.
+
 ## 0.1.0 — 2026-09-23
 
 First standalone library release, developed alongside Peekback and published
