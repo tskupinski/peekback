@@ -1,12 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- Stay in the session the viewer was opened for when opening a file from All
-  sessions. Current session keeps listing its files, and sends still go to it.
-  Previously the viewer dropped the session, emptying Current session.
-  `peekback browse --all-sessions` likewise keeps the session it runs inside.
-
 ## 0.1.1 — 2026-09-24
 
 Published on [crates.io](https://crates.io/crates/peekback/0.1.1). Updates the
@@ -21,6 +14,10 @@ package README, which still described the crates as unpublished.
   control characters from sent text, refuse multi-line tmux pastes into panes
   without bracketed paste, and use a separate tmux buffer per send.
 - Fix Kitty sends, which passed `--bracketed-paste` without a value.
+- Stay in the session the viewer was opened for when opening a file from All
+  sessions. Current session keeps listing its files, and sends still go to it.
+  Previously the viewer dropped the session, emptying Current session.
+  `peekback browse --all-sessions` likewise keeps the session it runs inside.
 - Reject retention cutoffs in the future and refuse maintenance when a
   session's history holds unexpected files (session-activity).
 
