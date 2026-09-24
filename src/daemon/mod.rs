@@ -164,9 +164,15 @@ pub fn run() -> Result<()> {
                     view.push(&DaemonMessage::Toast { text: "That file is not in the tracked documents" });
                     return;
                 }
-                // A path can belong to several sessions, including ended ones.
-                // Never infer a send-back target from a cross-session selection.
-                if let Err(e) = show(None, Some(path), &mut current, &mut current_theme) {
+                // A path can belong to several sessions, including ended ones,
+                // so it never picks the session. The viewer stays in the one it
+                // was opened for, which keeps its documents and send target.
+                let session_id = current
+                    .as_ref()
+                    .and_then(|c| c.session.as_ref())
+                    .filter(|s| registry::find(&s.session_id).is_some())
+                    .map(|s| s.session_id.clone());
+                if let Err(e) = show(session_id, Some(path), &mut current, &mut current_theme) {
                     view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
                 }
             }

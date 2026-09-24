@@ -179,8 +179,11 @@ sessions. It groups identical paths, sorts by latest activity, and shows the
 agent/session origins; filter by path or session ID. It keeps the viewer's
 existing rules: existing Markdown files, excluding reads and failed operations.
 The All sessions scope refreshes when opened; `Ctrl-R` refreshes it while open.
-Incomplete history is reported in the picker. Selecting a file from this scope opens a standalone
-preview with no send-back target, since a file can belong to several sessions.
+Incomplete history is reported in the picker. Selecting a file from this scope
+keeps the viewer in the session it was opened for: Current session still lists
+that session's files, and selections and comments are still sent to it. A file
+never picks the session itself, since it can belong to several. A viewer opened
+without a session shows the file standalone, with no send-back target.
 
 Nothing is ever submitted for you. Every send lands in the prompt as a paste
 and waits for you to press Enter. Control characters are stripped before
@@ -230,7 +233,8 @@ between the list and preview in either layout. It uses the
 same `session-activity` library as the Markdown viewer. Browsing does not start
 the viewer daemon; press `p` on a Markdown file to open its rendered preview.
 Live sessions keep the connection for sending selections back. Files from ended
-sessions open as standalone documents.
+sessions open as standalone documents. With `--all-sessions`, previews stay in
+the live session the browser runs inside, if any, and are standalone otherwise.
 
 `--all-sessions` browses retained history without requiring any live session.
 It merges paths across Claude Code and Codex, preserves session provenance in

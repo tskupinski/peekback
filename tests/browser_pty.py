@@ -58,6 +58,8 @@ def main():
     # Short path avoids macOS Unix-domain socket path limits.
     with tempfile.TemporaryDirectory(prefix="pb-ui-", dir="/tmp") as root:
         env = dict(os.environ, PEEKBACK_STATE_DIR=root, TERM="xterm-256color")
+        for key in ("CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+            env.pop(key, None)
         notes = Path(root, "notes.md")
         notes.write_text("# Terminal test\n\nMarkdown preview from the browser.\n")
         Path(root, "main.rs").write_text("fn main() {}\n")
@@ -83,11 +85,11 @@ def main():
             server.settimeout(10)
 
             def receive():
-                for index in range(4):
+                for index in range(5):
                     conn, _ = server.accept()
                     with conn, conn.makefile("rb") as reader:
                         requests.append(json.loads(reader.readline()))
-                        if index == 3:
+                        if index == 4:
                             # A connected but stalled daemon must not freeze the
                             # browser indefinitely or trigger a second daemon.
                             time.sleep(3.5)
@@ -123,13 +125,20 @@ def main():
                 expect(master, "Opened Markdown in Peekback.")
                 assert requests[1] == dict(type="show", session_id=None, path=str(notes.resolve()))
                 os.write(master, b"q")
+            # Run from inside a live session, previews stay in that session.
+            with terminal(dict(env, CODEX_THREAD_ID="terminal-test"), ["--all-sessions"]) as (_, master, _):
+                expect(master, "All sessions")
+                os.write(master, b"/notes\rp")
+                expect(master, "Opened Markdown in Peekback.")
+                assert requests[2] == dict(type="show", session_id="terminal-test", path=str(notes.resolve()))
+                os.write(master, b"q")
             hook["hook_event_name"] = "SessionEnd"
             record()
             with terminal(env) as (_, master, _):
                 expect(master, "retained history")
                 os.write(master, b"/notes\rp")
                 expect(master, "Opened Markdown in Peekback.")
-                assert requests[2] == dict(type="show", session_id=None, path=str(notes.resolve()))
+                assert requests[3] == dict(type="show", session_id=None, path=str(notes.resolve()))
                 os.write(master, b"p")
                 expect(master, "waiting for daemon reply")
                 assert not Path(root, "daemon.log").exists()

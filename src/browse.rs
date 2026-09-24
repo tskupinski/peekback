@@ -116,6 +116,9 @@ pub fn run(args: Args) -> Result<()> {
         return print_list(&snapshot);
     }
     let mut browser = Browser::new(snapshot);
+    if args.all_sessions {
+        browser.origin = session::inside().map(|s| s.activity_key());
+    }
     let _terminal = Terminal::enter()?;
     loop {
         browser.draw()?;
@@ -223,6 +226,9 @@ struct Browser {
     mode: Mode,
     content: Vec<String>,
     message: String,
+    /// The session previews stay in when browsing all sessions: the one this
+    /// browser runs inside. A file's own sessions never choose it.
+    origin: Option<SessionKey>,
 }
 
 impl Browser {
@@ -238,6 +244,7 @@ impl Browser {
             mode: Mode::Text,
             content: Vec::new(),
             message: String::new(),
+            origin: None,
         };
         browser.filter(None);
         browser
@@ -338,7 +345,7 @@ impl Browser {
     fn open_preview(&mut self) {
         let result = (|| {
             let file = self.current().context("Select a file first")?;
-            let request = preview_request(self.snapshot.key.as_ref(), &file.path)?;
+            let request = preview_request(self.snapshot.key.as_ref().or(self.origin.as_ref()), &file.path)?;
             match client::request_starting_daemon(&request)? {
                 Response::Ok => Ok(()),
                 Response::Error { message } => anyhow::bail!("{message}"),

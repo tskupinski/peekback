@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Stay in the session the viewer was opened for when opening a file from All
+  sessions. Current session keeps listing its files, and sends still go to it.
+  Previously the viewer dropped the session, emptying Current session.
+  `peekback browse --all-sessions` likewise keeps the session it runs inside.
+
 ## 0.1.1 — 2026-09-24
 
 Published on [crates.io](https://crates.io/crates/peekback/0.1.1). Updates the

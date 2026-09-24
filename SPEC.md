@@ -131,8 +131,9 @@ Both views sort by latest observed activity.
 All sessions mode reads retained history only. It neither parses all old
 transcripts nor scans old projects. It merges identical paths while keeping
 agent/session provenance. Consequently, a candidate visible in a live session
-may not appear in All sessions. All-session Markdown previews are standalone,
-without an inferred send-back target.
+may not appear in All sessions. An all-session Markdown preview never infers a
+send-back target from the file: it stays in the session the viewer or browser
+was opened from, and is standalone when there is none.
 
 ## Storage and maintenance
 
@@ -169,8 +170,10 @@ focused pane. Filtering and refresh are local interactions. Piped output or
 explanation.
 
 The browser does not start the viewer until `p` is pressed on Markdown. Live
-session previews retain their send target. Ended-session and all-session
-previews open standalone. `q`, Esc, and Ctrl-C exit; Esc while editing a filter
+session previews retain their send target. Ended-session previews open
+standalone; all-session previews keep the live session the browser runs
+inside, found from the agent's environment variables, and are standalone
+without one. `q`, Esc, and Ctrl-C exit; Esc while editing a filter
 only finishes filter editing.
 
 ## Viewer daemon and IPC
@@ -243,7 +246,9 @@ target. Hooks record the agent process (the nearest non-shell ancestor, with
 its start time against PID reuse); when it has exited, the automatic backend
 becomes the clipboard and a pinned one refuses. Sent text loses control
 characters except tab and newline. tmux sends multi-line text only to panes
-with bracketed paste enabled, and Kitty always brackets. A standalone document has no send target. Sends report their backend
+with bracketed paste enabled, and Kitty always brackets. The send target is the
+session the viewer was opened for, including while it shows a file from another
+session. A standalone document has no send target. Sends report their backend
 or error and never press Enter. Terminal remote-control availability and focus
 can still affect delivery; WezTerm and Kitty remain unverified on real installs.
 Codex desktop and IDE composers are outside the supported integration.

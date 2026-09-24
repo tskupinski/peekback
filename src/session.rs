@@ -26,6 +26,11 @@ pub fn resolve(explicit: Option<&str>, pane: Option<&str>) -> Result<Session> {
     }
 }
 
+/// The live session this process runs inside, if any. Never guesses.
+pub fn inside() -> Option<Session> {
+    current_id(|key| std::env::var(key).ok()).and_then(|id| registry::find(&id))
+}
+
 fn current_id(mut get: impl FnMut(&str) -> Option<String>) -> Option<String> {
     ["CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_CODE_SESSION_ID"]
         .into_iter()
