@@ -5,7 +5,7 @@ use tao::dpi::{LogicalPosition, LogicalSize};
 use tao::event_loop::EventLoop;
 use tao::window::{Window, WindowBuilder};
 use wry::http::{Request, Response, StatusCode, header};
-use wry::{WebView, WebViewBuilder};
+use wry::{NewWindowResponse, WebView, WebViewBuilder};
 
 use crate::assets;
 use crate::config::Placement;
@@ -13,6 +13,7 @@ use crate::daemon::terminal::Frame;
 use crate::daemon::{DaemonMessage, PageMessage, UserEvent};
 
 const SCHEME: &str = "peekback";
+const ORIGIN: &str = "peekback://app/";
 const START_URL: &str = "peekback://app/index.html";
 
 pub struct View {
@@ -35,11 +36,22 @@ pub fn create(event_loop: &EventLoop<UserEvent>, placement: Placement, split: f6
     let proxy = event_loop.create_proxy();
     let webview = WebViewBuilder::new()
         .with_custom_protocol(SCHEME.into(), |_id, request| serve(request))
-        .with_ipc_handler(move |message| match serde_json::from_str::<PageMessage>(message.body()) {
-            Ok(page_message) => {
-                let _ = proxy.send_event(UserEvent::Page(page_message));
+        // Rendered documents are untrusted. The page must never leave the
+        // embedded app, and only the app may talk to the daemon.
+        .with_navigation_handler(|url| is_app_url(&url))
+        .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+        .with_drag_drop_handler(|_| true)
+        .with_ipc_handler(move |message| {
+            if !is_app_url(&message.uri().to_string()) {
+                eprintln!("ignored page message from {}", message.uri());
+                return;
             }
-            Err(e) => eprintln!("bad page message {:?}: {e}", message.body()),
+            match serde_json::from_str::<PageMessage>(message.body()) {
+                Ok(page_message) => {
+                    let _ = proxy.send_event(UserEvent::Page(page_message));
+                }
+                Err(e) => eprintln!("bad page message {:?}: {e}", message.body()),
+            }
         })
         .with_devtools(cfg!(debug_assertions))
         .with_url(START_URL)
@@ -133,6 +145,10 @@ impl View {
     }
 }
 
+fn is_app_url(url: &str) -> bool {
+    url.starts_with(ORIGIN)
+}
+
 fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let path = request.uri().path().trim_start_matches('/');
     match assets::get(path) {
@@ -142,5 +158,21 @@ fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
             .header(header::CONTENT_TYPE, "text/plain")
             .body(Cow::Owned(format!("not found: {path}").into_bytes()))
             .unwrap(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_app_url;
+
+    #[test]
+    fn only_the_embedded_app_is_trusted() {
+        assert!(is_app_url("peekback://app/index.html"));
+        assert!(is_app_url("peekback://app/vendor/katex/katex.min.css"));
+        assert!(!is_app_url("https://example.com/"));
+        assert!(!is_app_url("peekback://app.example.com/index.html"));
+        assert!(!is_app_url("about:blank"));
+        assert!(!is_app_url("data:text/html,x"));
+        assert!(!is_app_url("file:///etc/passwd"));
     }
 }

@@ -1160,15 +1160,20 @@
   });
 
   document.addEventListener("click", (event) => {
-    const link = event.target.closest("a[href]");
-    if (!link) return;
-    const href = link.getAttribute("href");
-    if (href.startsWith("#")) return;
+    const link = event.target.closest("a");
+    const href = link && linkTarget(link);
+    if (href === null || href.startsWith("#")) return;
     event.preventDefault();
     if (/^https?:\/\//.test(href)) post({ type: "open-external", url: href });
     else if (/\.(md|markdown)$/i.test(href)) openRelativeLink(href);
     else setMessage("only web links and Markdown files open from here");
   });
+
+  // Mermaid draws its links as SVG anchors, which carry xlink:href instead
+  // of href. Either kind must go through the handler above, never the webview.
+  function linkTarget(link) {
+    return link.getAttribute("href") ?? link.getAttributeNS("http://www.w3.org/1999/xlink", "href");
+  }
 
   // A link to another Markdown file resolves against the current document
   // and opens if the session lists it.

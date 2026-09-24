@@ -160,6 +160,25 @@ async function main() {
   await render();
   assert.equal(marked()[0].attributes.title, "Keep the original target");
   console.log("Comments passed: ranges, overlapping notes, document switches, stale anchors, removal, send lifecycle, captured targets.");
+
+  const anchor = (attributes, xlink = {}) => ({
+    getAttribute: name => attributes[name] ?? null,
+    getAttributeNS: (ns, name) => ns === "http://www.w3.org/1999/xlink" ? xlink[name] ?? null : null,
+  });
+  const click = link => {
+    let prevented = false;
+    document.dispatch("click", { target: { closest: () => link }, preventDefault() { prevented = true; } });
+    return prevented;
+  };
+  const sent = messages.length;
+  assert.equal(click(anchor({}, { href: "https://example.com/" })), true); // Mermaid's SVG links.
+  assert.deepEqual(messages.at(-1), { type: "open-external", url: "https://example.com/" });
+  assert.equal(click(anchor({ href: "javascript:alert(1)" })), true);
+  assert.equal(click(anchor({}, { href: "file:///etc/passwd" })), true);
+  assert.equal(messages.length, sent + 1);
+  assert.equal(click(anchor({ href: "#section" })), false);
+  assert.equal(click(anchor({})), false);
+  console.log("Links passed: HTML and SVG anchors never navigate the webview.");
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

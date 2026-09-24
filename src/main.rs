@@ -8,6 +8,7 @@ mod discovery;
 mod hooks;
 mod lifecycle;
 mod paths;
+mod process;
 mod protocol;
 mod registry;
 mod send;

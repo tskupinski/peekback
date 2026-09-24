@@ -35,6 +35,8 @@ pub struct Terminal {
     pub kitty_window: Option<String>,
     pub kitty_listen_on: Option<String>,
     pub wezterm_pane: Option<String>,
+    /// The agent process running in this terminal, when the hook could see it.
+    pub agent: Option<crate::process::ProcessId>,
 }
 
 impl Session {

@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -50,14 +51,30 @@ pub struct Outcome {
     pub note: String,
 }
 
+static NEXT_BUFFER: AtomicU64 = AtomicU64::new(0);
+
 /// The backend `send` would use for this session.
 pub fn probe(session: &Session, pinned: Option<Backend>) -> Backend {
+    if pinned.is_none() && !agent_running(session) {
+        return Backend::Clipboard;
+    }
     pinned.unwrap_or_else(|| PROBE_ORDER.into_iter().find(|b| available(*b, session)).unwrap_or(Backend::Clipboard))
 }
 
+/// A session entry can outlive its agent when the agent is killed without a
+/// SessionEnd hook. Its terminal may then hold a shell, where every pasted
+/// newline would run a command. Entries from before agent tracking are trusted.
+fn agent_running(session: &Session) -> bool {
+    session.terminal.agent.is_none_or(|agent| agent.is_running())
+}
+
 pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Outcome> {
-    let text = text.trim_end_matches('\n');
+    let text = paste_safe(text);
+    let text = text.as_str();
     let backend = probe(session, pinned);
+    if backend != Backend::Clipboard && !agent_running(session) {
+        bail!("the session's agent is no longer running, so its terminal may now hold something else");
+    }
     let note = match backend {
         Backend::Tmux => {
             send_tmux(session, text)?;
@@ -77,7 +94,9 @@ pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Ou
         }
         Backend::Clipboard => {
             copy(text)?;
-            if session.terminal.bundle_id.is_some() && !keystroke::trusted() {
+            if !agent_running(session) {
+                "Copied. The session's agent is no longer running, so nothing was pasted.".to_string()
+            } else if session.terminal.bundle_id.is_some() && !keystroke::trusted() {
                 "Copied. Paste it into the prompt. Grant peekback Accessibility for direct paste.".to_string()
             } else {
                 "Copied. Paste it into the prompt.".to_string()
@@ -85,6 +104,18 @@ pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Ou
         }
     };
     Ok(Outcome { backend, note })
+}
+
+/// Pasted text must stay text. Escape sequences can end a bracketed paste
+/// early, after which a newline submits the prompt, and a carriage return
+/// submits even inside one.
+fn paste_safe(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .chars()
+        .filter(|&c| c == '\n' || c == '\t' || !c.is_control())
+        .collect::<String>()
+        .trim_end_matches('\n')
+        .to_owned()
 }
 
 pub fn copy(text: &str) -> Result<()> {
@@ -117,8 +148,24 @@ fn tmux(socket: &str) -> Command {
 fn send_tmux(session: &Session, text: &str) -> Result<()> {
     let socket = session.terminal.tmux_socket.as_deref().ok_or_else(|| anyhow!("no tmux socket"))?;
     let pane = session.terminal.tmux_pane.as_deref().ok_or_else(|| anyhow!("no tmux pane"))?;
-    run_with_stdin(tmux(socket).args(["load-buffer", "-b", "peekback", "-"]), text)?;
-    run(tmux(socket).args(["paste-buffer", "-p", "-b", "peekback", "-t", pane, "-d"]))
+    // tmux brackets the paste only when the program asked for it. Without
+    // that, it turns every newline into Enter.
+    if text.contains('\n')
+        && tmux_output(socket, &["display-message", "-p", "-t", pane, "#{bracket_paste_flag}"])? != "1"
+    {
+        bail!("the tmux pane does not accept pasted text, so its newlines would be typed as Enter");
+    }
+    let buffer = format!("peekback-{}-{}", std::process::id(), NEXT_BUFFER.fetch_add(1, Ordering::Relaxed));
+    run_with_stdin(tmux(socket).args(["load-buffer", "-b", &buffer, "-"]), text)?;
+    run(tmux(socket).args(["paste-buffer", "-p", "-b", &buffer, "-t", pane, "-d"]))
+}
+
+fn tmux_output(socket: &str, args: &[&str]) -> Result<String> {
+    let output = tmux(socket).args(args).output().context("run tmux")?;
+    if !output.status.success() {
+        bail!("tmux failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 fn send_wezterm(session: &Session, text: &str) -> Result<()> {
@@ -135,7 +182,8 @@ fn send_kitty(session: &Session, text: &str) -> Result<()> {
             "--to",
             to,
             "send-text",
-            "--bracketed-paste",
+            // Always bracket, so a newline can never be typed as Enter.
+            "--bracketed-paste=enable",
             "--match",
             &format!("id:{window}"),
             "--stdin",
@@ -237,5 +285,30 @@ mod keystroke {
     }
     pub fn press_cmd_v() -> Result<()> {
         bail!("keystroke backend is macOS only")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::process::ProcessId;
+
+    #[test]
+    fn pasted_text_cannot_carry_control_sequences() {
+        assert_eq!(paste_safe("a\r\nb\rc\t\u{1b}[201~\nd\u{7f}\u{9b}\n\n"), "a\nbc\t[201~\nd");
+        assert_eq!(paste_safe("zażółć ✓"), "zażółć ✓");
+    }
+
+    #[test]
+    fn a_session_whose_agent_exited_falls_back_to_the_clipboard() {
+        let mut session: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "s", "cwd": "/tmp", "started_at": 0, "last_active_at": 0,
+            "terminal": { "tmux_pane": "%1", "tmux_socket": "/nonexistent" },
+        }))
+        .unwrap();
+        assert!(agent_running(&session)); // Entries from before agent tracking.
+        session.terminal.agent = Some(ProcessId { pid: u32::MAX, started_at_us: 0 });
+        assert_eq!(probe(&session, None), Backend::Clipboard);
+        assert!(send(&session, "text", Some(Backend::Tmux)).is_err());
     }
 }

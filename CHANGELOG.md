@@ -4,6 +4,13 @@
 
 - Highlight blocks with pending comments and show comment counts and notes on
   hover. Keep selections attached to their original document while composing.
+- Keep the viewer on its embedded page: block navigation, new windows and
+  dropped items, ignore page messages from other origins, and route Mermaid's
+  SVG links through the link handler.
+- Never paste into a terminal whose agent has exited; copy instead. Strip
+  control characters from sent text, refuse multi-line tmux pastes into panes
+  without bracketed paste, and use a separate tmux buffer per send.
+- Fix Kitty sends, which passed `--bracketed-paste` without a value.
 
 ## 0.1.0 — 2026-09-23
 

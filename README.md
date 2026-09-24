@@ -183,7 +183,9 @@ Incomplete history is reported in the picker. Selecting a file from this scope o
 preview with no send-back target, since a file can belong to several sessions.
 
 Nothing is ever submitted for you. Every send lands in the prompt as a paste
-and waits for you to press Enter.
+and waits for you to press Enter. Control characters are stripped before
+sending. If the agent that registered the session is no longer running, the
+text is only copied, since its terminal may now hold a shell.
 
 ### Commands
 
@@ -358,6 +360,8 @@ peekback probes, in order: tmux (using the pane and server socket recorded
 by the hook), WezTerm and Kitty remote control, macOS keystroke injection
 (clipboard plus Cmd+V into the terminal app, needs the Accessibility
 permission), and finally the clipboard with a toast asking you to paste.
+tmux refuses multi-line text when the program in the pane has not enabled
+bracketed paste, because tmux would type each newline as Enter.
 `peekback status` shows the result of the probe per session. WezTerm and
 Kitty are implemented to their documented interfaces but have not been
 exercised on a real install yet.

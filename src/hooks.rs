@@ -22,6 +22,7 @@ pub fn terminal() -> Terminal {
         kitty_window: get("KITTY_WINDOW_ID"),
         kitty_listen_on: get("KITTY_LISTEN_ON"),
         wezterm_pane: get("WEZTERM_PANE"),
+        agent: crate::process::hook_agent(),
     }
 }
 

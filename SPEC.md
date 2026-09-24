@@ -194,6 +194,10 @@ only from the daemon's returned list.
 
 Wry hosts the embedded page at `peekback://app/`. The page sends messages through
 `window.ipc.postMessage`; Rust pushes updates through JavaScript evaluation.
+Rendered documents are untrusted: the webview may not navigate away from
+`peekback://app/`, open windows, or load dropped items, and page messages from
+any other origin are ignored. Links, including Mermaid's SVG links, go through
+the page's click handler, which opens web links externally.
 There is no HTTP server or async runtime. Embedded rendering assets work offline.
 
 ## Viewer behavior
@@ -235,7 +239,11 @@ keystroke backend needs Accessibility permission and pastes into the terminal
 app's focused split/tab. Clipboard fallback asks the user to paste manually.
 
 The viewer re-reads the live session before sending so it can reject an ended
-target. A standalone document has no send target. Sends report their backend
+target. Hooks record the agent process (the nearest non-shell ancestor, with
+its start time against PID reuse); when it has exited, the automatic backend
+becomes the clipboard and a pinned one refuses. Sent text loses control
+characters except tab and newline. tmux sends multi-line text only to panes
+with bracketed paste enabled, and Kitty always brackets. A standalone document has no send target. Sends report their backend
 or error and never press Enter. Terminal remote-control availability and focus
 can still affect delivery; WezTerm and Kitty remain unverified on real installs.
 Codex desktop and IDE composers are outside the supported integration.
