@@ -10,12 +10,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, ensure};
 
 use crate::paths;
-use crate::protocol::{Request, Response};
+use crate::protocol::{Outgoing, Request, Response, unix_ms};
 
 const START_TIMEOUT: Duration = Duration::from_secs(3);
-/// Counted from the connection, and longer than the daemon may take to apply
-/// a request, so the daemon never acts on one its client already gave up on.
-pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+/// Counted from the connection. The request carries the same expiry, so the
+/// daemon never acts on one its client already gave up on.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_REPLY_BYTES: usize = 1024 * 1024;
 
 pub fn request(request: &Request) -> Result<Response> {
@@ -31,7 +31,8 @@ fn remaining(deadline: Instant) -> Result<Duration> {
 }
 
 fn exchange(mut stream: UnixStream, request: &Request, deadline: Instant) -> Result<Response> {
-    let mut line = serde_json::to_string(request)?;
+    let expires_at = std::time::SystemTime::now() + deadline.saturating_duration_since(Instant::now());
+    let mut line = serde_json::to_string(&Outgoing { request, expires_at_ms: unix_ms(expires_at) })?;
     line.push('\n');
     let mut pending = line.as_bytes();
     while !pending.is_empty() {

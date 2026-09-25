@@ -412,6 +412,11 @@ impl App {
                 result?;
             }
             UserEvent::Request { request, reply, deadline } => {
+                // Queued behind other work past its client's wait: never apply.
+                if Instant::now() >= deadline {
+                    let _ = reply.send(Response::Error { message: "Request timed out; nothing was changed".into() });
+                    return Ok(());
+                }
                 let response = match request {
                     Request::Show { session_id, path, focus } => {
                         if let Err(error) = self.show(

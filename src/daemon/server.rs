@@ -16,7 +16,7 @@ use tao::event_loop::EventLoopProxy;
 
 use crate::daemon::UserEvent;
 use crate::paths;
-use crate::protocol::{Request, Response};
+use crate::protocol::{Incoming, Response, unix_ms};
 
 /// Binds the socket and answers requests from a background thread. Each
 /// request is handed to the main thread, which owns all state, and the reply
@@ -46,21 +46,30 @@ pub fn start(proxy: EventLoopProxy<UserEvent>) -> Result<()> {
     Ok(())
 }
 
-/// How long after reading a request the event loop may still apply it.
+/// How long after reading a request the event loop may still apply it, for
+/// clients that send no expiry of their own.
 const APPLY_TIMEOUT: Duration = Duration::from_secs(2);
-const _: () = assert!(
-    crate::client::REQUEST_TIMEOUT.as_millis() > APPLY_TIMEOUT.as_millis(),
-    "a client must outwait the daemon applying its request"
-);
+/// Left for the reply to reach a client before its own expiry.
+const REPLY_MARGIN: Duration = Duration::from_millis(250);
+
+/// The client's expiry, converted to this process's clock when the request is
+/// read, so time the daemon spends stopped after that still counts.
+fn apply_deadline(expires_at_ms: Option<u64>, now: Instant, wall_ms: u64) -> Instant {
+    let own = now + APPLY_TIMEOUT;
+    let Some(expires_at_ms) = expires_at_ms else { return own };
+    let left = Duration::from_millis(expires_at_ms.saturating_sub(wall_ms)).saturating_sub(REPLY_MARGIN);
+    own.min(now + left)
+}
 
 fn handle(mut stream: UnixStream, proxy: EventLoopProxy<UserEvent>) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let line = read_request(&mut stream, deadline)?;
-    let response = match serde_json::from_slice::<Request>(&line) {
-        Ok(request) => {
+    let response = match serde_json::from_slice::<Incoming>(&line) {
+        Ok(Incoming { request, expires_at_ms }) => {
             let (reply, receiver) = mpsc::channel();
+            let deadline = apply_deadline(expires_at_ms, Instant::now(), unix_ms(std::time::SystemTime::now()));
             proxy
-                .send_event(UserEvent::Request { request, reply, deadline: Instant::now() + APPLY_TIMEOUT })
+                .send_event(UserEvent::Request { request, reply, deadline })
                 .map_err(|_| anyhow::anyhow!("event loop closed"))?;
             receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))?
         }
@@ -115,6 +124,20 @@ fn read_request(stream: &mut UnixStream, deadline: Instant) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_expires_when_its_client_stops_waiting() {
+        let now = Instant::now();
+        let at = |ms: u64| now + Duration::from_millis(ms);
+        // Plenty left: the daemon's own limit applies.
+        assert_eq!(apply_deadline(Some(13_000), now, 10_000), at(2_000));
+        // Read late, say after the daemon was stopped: only what the client
+        // still waits, less the time the reply needs.
+        assert_eq!(apply_deadline(Some(10_500), now, 10_000), at(250));
+        assert_eq!(apply_deadline(Some(10_100), now, 10_000), now);
+        assert_eq!(apply_deadline(Some(5_000), now, 10_000), now);
+        assert_eq!(apply_deadline(None, now, 10_000), at(2_000));
+    }
 
     #[test]
     fn requests_require_a_delimiter_and_obey_size_and_time_limits() {
