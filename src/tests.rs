@@ -493,3 +493,17 @@ fn files_scanned_while_another_session_works_in_the_same_place_are_shared() {
         [session_activity::SessionKey { agent: Agent::Claude, session_id: "same-place".into() }]
     );
 }
+
+#[test]
+fn a_session_whose_agent_exited_is_no_longer_live() {
+    let f = Fixture::new();
+    f.hook(None, "SessionStart", json!({}));
+    let root = f.0.join("state");
+    assert_eq!(crate::registry::load_all_in(&root).len(), 1); // Entries from before agent tracking.
+    let mut record: Value = serde_json::from_str(&fs::read_to_string(f.record()).unwrap()).unwrap();
+    record["terminal"]["agent"] = json!({"pid": std::process::id(), "started_at_us": 0});
+    fs::write(f.record(), record.to_string()).unwrap();
+    assert!(crate::registry::load_all_in(&root).is_empty()); // Same PID, different process.
+    f.hook(None, "UserPromptSubmit", json!({})); // The fixture's hook records no agent, like a resume.
+    assert_eq!(crate::registry::load_all_in(&root).len(), 1);
+}

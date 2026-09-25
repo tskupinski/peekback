@@ -55,24 +55,20 @@ static NEXT_BUFFER: AtomicU64 = AtomicU64::new(0);
 
 /// The backend `send` would use for this session.
 pub fn probe(session: &Session, pinned: Option<Backend>) -> Backend {
-    if pinned.is_none() && !agent_running(session) {
+    // The viewer can hold a session whose agent exited since it was shown. Its
+    // terminal may then hold a shell, where every pasted newline would run a
+    // command.
+    if pinned.is_none() && !session.agent_alive() {
         return Backend::Clipboard;
     }
     pinned.unwrap_or_else(|| PROBE_ORDER.into_iter().find(|b| available(*b, session)).unwrap_or(Backend::Clipboard))
-}
-
-/// A session entry can outlive its agent when the agent is killed without a
-/// SessionEnd hook. Its terminal may then hold a shell, where every pasted
-/// newline would run a command. Entries from before agent tracking are trusted.
-fn agent_running(session: &Session) -> bool {
-    session.terminal.agent.is_none_or(|agent| agent.is_running())
 }
 
 pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Outcome> {
     let text = paste_safe(text);
     let text = text.as_str();
     let backend = probe(session, pinned);
-    if backend != Backend::Clipboard && !agent_running(session) {
+    if backend != Backend::Clipboard && !session.agent_alive() {
         bail!("the session's agent is no longer running, so its terminal may now hold something else");
     }
     let note = match backend {
@@ -94,7 +90,7 @@ pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Ou
         }
         Backend::Clipboard => {
             copy(text)?;
-            if !agent_running(session) {
+            if !session.agent_alive() {
                 "Copied. The session's agent is no longer running, so nothing was pasted.".to_string()
             } else if session.terminal.bundle_id.is_some() && !keystroke::trusted() {
                 "Copied. Paste it into the prompt. Grant peekback Accessibility for direct paste.".to_string()
@@ -311,7 +307,7 @@ mod tests {
             "terminal": { "tmux_pane": "%1", "tmux_socket": "/nonexistent" },
         }))
         .unwrap();
-        assert!(agent_running(&session)); // Entries from before agent tracking.
+        assert!(session.agent_alive()); // Entries from before agent tracking.
         session.terminal.agent = Some(ProcessId { pid: u32::MAX, started_at_us: 0 });
         assert_eq!(probe(&session, None), Backend::Clipboard);
         assert!(send(&session, "text", Some(Backend::Tmux)).is_err());

@@ -11,7 +11,7 @@ pub const HOOK_HINT: &str = "no registered sessions; run peekback setup, then st
 /// environment so scripts run from inside a session can target another.
 pub fn resolve(explicit: Option<&str>, pane: Option<&str>) -> Result<Session> {
     if let Some(id) = explicit {
-        return registry::find(id).ok_or_else(|| anyhow::anyhow!("session {id} is not registered"));
+        return registry::find(id).ok_or_else(|| anyhow::anyhow!("session {id} is not registered or has ended"));
     }
     if let Some(pane) = pane {
         return registry::find_by_pane(pane)

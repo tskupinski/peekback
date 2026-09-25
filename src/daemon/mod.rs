@@ -411,7 +411,7 @@ pub fn run() -> Result<()> {
 /// so the viewer never keeps showing, and sending to, the previous one.
 fn open(session_id: Option<String>, path: Option<PathBuf>) -> Result<Current> {
     let session = match session_id {
-        Some(id) => Some(registry::find(&id).ok_or_else(|| anyhow!("session {id} is not registered"))?),
+        Some(id) => Some(registry::find(&id).ok_or_else(|| anyhow!("session {id} is not registered or has ended"))?),
         None => None,
     };
     let documents = session.as_ref().map(discovery::documents).unwrap_or_default();

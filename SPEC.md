@@ -84,9 +84,18 @@ survives session exit and pruning. A late tool hook can append observations
 without reopening a closed session; an explicit `SessionStart` reopens it.
 A resumed session keeps everything it captured before.
 
-`peekback status --prune` closes entries with no hook or transcript activity in
-24 hours. Pruning does not run a capture, so files from a turn that was still
-open when the agent died are not recorded.
+Hooks record the agent process, the nearest non-shell ancestor of the hook,
+with its start time against PID reuse. A registered session whose agent has
+exited is not live: listings, session resolution, the hotkey and concurrency
+checks skip it, as they skip ended sessions, and a later hook from a resumed
+process records the new agent. Entries from before process tracking count as
+live. This is verified for Claude Code, where hooks run through a shell child
+of the `claude` process; Codex is not yet verified.
+
+`peekback status --prune` closes entries whose agent has exited and entries
+with no hook or transcript activity in 24 hours. Pruning does not run a
+capture, so files from a turn that was still open when the agent died are not
+recorded.
 The live registry still uses native session IDs and rejects registration of
 an ID already owned by another agent; the retained store uses both agent and
 session ID. Hooks provide no reliable process generation, so an old start/end

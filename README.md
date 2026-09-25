@@ -207,9 +207,11 @@ the config each time the scope opens, and `Ctrl-R` refreshes it.
 Nothing is ever submitted for you. Every send lands in the prompt as a paste
 and waits for you to press Enter. Control characters are stripped before
 sending. If the tracked agent process is no longer running, automatic sending
-falls back to the clipboard; a pinned paste backend refuses the send. Entries
-created before process tracking retain their previous behavior until fresh
-hook activity records the agent's identity.
+falls back to the clipboard; a pinned paste backend refuses the send. Such a
+session also counts as ended everywhere else, so it drops out of
+`peekback status`, the session picker and the hotkey. Entries created before
+process tracking retain their previous behavior until fresh hook activity
+records the agent's identity.
 
 ### Commands
 

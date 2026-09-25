@@ -24,6 +24,10 @@
   not pick up files from worktrees inside it.
 - Remove `--candidates` from `browse` and `activity files`; every view now
   reads stored history.
+- Treat a session whose agent process has exited as ended, so an agent killed
+  without `SessionEnd` no longer lingers in the session list, the hotkey
+  fallback and session resolution. `peekback status --prune` now removes such
+  entries right away instead of after 24 hours idle.
 
 - List the viewer in Cmd+Tab and the Dock while it is shown, so it is one
   keystroke away from the terminal. A hidden viewer stays out of both.

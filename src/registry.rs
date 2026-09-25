@@ -62,6 +62,12 @@ impl Session {
         self.project_dir().map(|d| d.join("memory"))
     }
 
+    /// An agent killed without SessionEnd leaves its entry behind; the process
+    /// identity tells. Entries from before process tracking count as alive.
+    pub fn agent_alive(&self) -> bool {
+        self.terminal.agent.is_none_or(|agent| agent.is_running())
+    }
+
     /// Recent closed turns, then the open one, which has no end yet.
     pub fn turns(&self) -> impl Iterator<Item = crate::capture::Turn> + '_ {
         let open = self.turn_started_at.map(|started_at| crate::capture::Turn { started_at, ended_at: i64::MAX });
@@ -79,13 +85,18 @@ pub fn dir() -> PathBuf {
     paths::state_dir().join("sessions")
 }
 
-/// All registered sessions, most recently active first. Unreadable entries
-/// are skipped rather than failing the whole listing.
+/// Live sessions, most recently active first. Unreadable entries are skipped
+/// rather than failing the whole listing.
 pub fn load_all() -> Vec<Session> {
     load_all_in(&paths::state_dir())
 }
 
 pub fn load_all_in(root: &Path) -> Vec<Session> {
+    registered_in(root).into_iter().filter(Session::agent_alive).collect()
+}
+
+/// Entries without an end marker, including ones whose agent has exited.
+fn registered_in(root: &Path) -> Vec<Session> {
     let Ok(entries) = fs::read_dir(root.join("sessions")) else { return Vec::new() };
     let mut sessions: Vec<Session> = entries
         .flatten()
@@ -103,7 +114,12 @@ pub fn valid_id(id: &str) -> bool {
     session_activity::valid_id(id)
 }
 
+/// A live session: registered, not ended, and its agent still running.
 pub fn find(session_id: &str) -> Option<Session> {
+    registered(session_id).filter(Session::agent_alive)
+}
+
+fn registered(session_id: &str) -> Option<Session> {
     if !valid_id(session_id) {
         return None;
     }
@@ -120,17 +136,18 @@ pub fn newest() -> Option<Session> {
     load_all().into_iter().next()
 }
 
-/// Removes entries with no hook or transcript activity for `max_idle_secs`.
-/// A session that died without SessionEnd leaves one behind.
+/// Removes entries whose agent has exited or that had no hook or transcript
+/// activity for `max_idle_secs`. A session that died without SessionEnd
+/// leaves one behind.
 pub fn prune(max_idle_secs: i64) -> Vec<Session> {
     let now = now_unix();
+    let root = paths::state_dir();
     let mut removed = Vec::new();
-    for session in load_all() {
-        let root = paths::state_dir();
+    for session in registered_in(&root) {
         let Ok(_lock) = crate::lifecycle::lock(&root, &session.session_id) else { continue };
-        // Re-read under the lock: a hook could have refreshed this session
-        // after load_all produced its snapshot.
-        let Some(session) = find(&session.session_id) else { continue };
+        // Re-read under the lock: a hook could have refreshed this session,
+        // or resumed it in a new process, after the listing was taken.
+        let Some(session) = registered(&session.session_id) else { continue };
         let last_write = session
             .transcript_path
             .as_ref()
@@ -138,7 +155,7 @@ pub fn prune(max_idle_secs: i64) -> Vec<Session> {
             .map(unix_secs)
             .unwrap_or(0)
             .max(session.last_active_at);
-        if now - last_write > max_idle_secs
+        if (now - last_write > max_idle_secs || !session.agent_alive())
             && valid_id(&session.session_id)
             && crate::lifecycle::end(&root, &session.activity_key()).is_ok()
         {
