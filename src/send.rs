@@ -160,6 +160,11 @@ fn send_tmux(session: &Session, text: &str) -> Result<()> {
     run(tmux(socket).args(["paste-buffer", "-p", "-b", &buffer, "-t", pane, "-d"]))
 }
 
+/// The pane the most recently used client of this tmux server is on.
+pub fn tmux_active_pane(socket: &str) -> Option<String> {
+    tmux_output(socket, &["display-message", "-p", "#{pane_id}"]).ok().filter(|pane| !pane.is_empty())
+}
+
 fn tmux_output(socket: &str, args: &[&str]) -> Result<String> {
     let output = tmux(socket).args(args).output().context("run tmux")?;
     if !output.status.success() {

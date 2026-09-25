@@ -21,7 +21,7 @@ use crate::paths;
 use crate::protocol::{Request, Response};
 use crate::registry::{self, Session};
 use crate::theme::{self, Theme};
-use crate::{bookmarks, config, send};
+use crate::{bookmarks, config, send, session};
 
 /// Everything that reaches the main thread from elsewhere: socket requests,
 /// file changes, hotkey presses, and messages from the page.
@@ -55,15 +55,44 @@ pub enum PageMessage {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum DaemonMessage<'a> {
-    Render { path: &'a Path, source: &'a str, session: Option<&'a Session>, documents: &'a [Document] },
-    Sessions { sessions: &'a [Session], current: Option<&'a str> },
-    Documents { session_id: &'a str, documents: &'a [Document] },
-    AllDocuments { documents: &'a [discovery::TrackedDocument], warnings: &'a [String] },
-    Bookmarks { documents: &'a [Document], found: usize, warnings: &'a [String] },
-    Banner { text: &'a str },
-    Toast { text: &'a str },
-    Theme { theme: Option<&'a Theme> },
-    SendResult { ok: bool, purpose: Option<&'a str>, text: &'a str },
+    /// No path means the session has no Markdown yet; the page shows an empty state.
+    Render {
+        path: Option<&'a Path>,
+        source: &'a str,
+        session: Option<&'a Session>,
+        documents: &'a [Document],
+    },
+    Sessions {
+        sessions: &'a [Session],
+        current: Option<&'a str>,
+    },
+    Documents {
+        session_id: &'a str,
+        documents: &'a [Document],
+    },
+    AllDocuments {
+        documents: &'a [discovery::TrackedDocument],
+        warnings: &'a [String],
+    },
+    Bookmarks {
+        documents: &'a [Document],
+        found: usize,
+        warnings: &'a [String],
+    },
+    Banner {
+        text: &'a str,
+    },
+    Toast {
+        text: &'a str,
+    },
+    Theme {
+        theme: Option<&'a Theme>,
+    },
+    SendResult {
+        ok: bool,
+        purpose: Option<&'a str>,
+        text: &'a str,
+    },
 }
 
 const DELETED_BANNER: &str = "This file was deleted. Showing the last rendered version.";
@@ -71,7 +100,7 @@ const DELETED_BANNER: &str = "This file was deleted. Showing the last rendered v
 struct Current {
     session: Option<Session>,
     documents: Vec<Document>,
-    path: PathBuf,
+    path: Option<PathBuf>,
     source: String,
     missing: bool,
 }
@@ -122,8 +151,13 @@ pub fn run() -> Result<()> {
                         current_theme: &mut Option<Theme>|
          -> Result<()> {
             let next = open(session_id, path)?;
-            if let Err(e) = doc_watcher.watch(&next.path) {
-                eprintln!("no live reload for {}: {e}", next.path.display());
+            match &next.path {
+                Some(path) => {
+                    if let Err(e) = doc_watcher.watch(path) {
+                        eprintln!("no live reload for {}: {e}", path.display());
+                    }
+                }
+                None => doc_watcher.clear(),
             }
             let theme = next.session.as_ref().and_then(|s| theme::detect(&s.terminal, &config));
             if theme != *current_theme {
@@ -222,7 +256,7 @@ pub fn run() -> Result<()> {
                         }
                     }
                     Request::Status => Response::Status {
-                        document: current.as_ref().map(|c| c.path.clone()),
+                        document: current.as_ref().and_then(|c| c.path.clone()),
                         session_id: current.as_ref().and_then(|c| c.session.as_ref()).map(|s| s.session_id.clone()),
                     },
                     Request::Hide => {
@@ -245,10 +279,10 @@ pub fn run() -> Result<()> {
                     view.place(terminal_frame(current.as_ref().and_then(|c| c.session.as_ref())));
                     view.focus();
                 } else {
-                    // The daemon is never inside a session; the newest one is
-                    // the only sensible target for a hotkey.
+                    // The daemon is never inside a session; the one the user
+                    // last worked in is the best guess for a hotkey.
                     if let Err(e) =
-                        show(registry::newest().map(|s| s.session_id), None, &mut current, &mut current_theme)
+                        show(session::focused().map(|s| s.session_id), None, &mut current, &mut current_theme)
                     {
                         eprintln!("hotkey: {e:#}");
                         if page_ready {
@@ -287,7 +321,8 @@ pub fn run() -> Result<()> {
             Event::UserEvent(UserEvent::Page(PageMessage::Hide)) => view.hide_and_return_focus(),
             Event::UserEvent(UserEvent::DocChanged) => {
                 let Some(doc) = current.as_mut() else { return };
-                match fs::read_to_string(&doc.path) {
+                let Some(path) = doc.path.clone() else { return };
+                match fs::read_to_string(&path) {
                     // A truncate-then-write shows up as an empty file for a
                     // moment; the write that follows triggers another event.
                     Ok(source) if source.is_empty() && !doc.source.is_empty() && !doc.missing => {}
@@ -297,16 +332,17 @@ pub fn run() -> Result<()> {
                         view.push(&render_message(doc));
                     }
                     Ok(_) => {}
-                    Err(_) if !doc.path.exists() => {
+                    Err(_) if !path.exists() => {
                         doc.missing = true;
                         if page_ready {
                             view.push(&DaemonMessage::Banner { text: DELETED_BANNER });
                         }
                     }
-                    Err(e) => eprintln!("reread {}: {e}", doc.path.display()),
+                    Err(e) => eprintln!("reread {}: {e}", path.display()),
                 }
             }
             Event::UserEvent(UserEvent::RegistryChanged) => {
+                let mut first_document = None;
                 if let Some(doc) = current.as_mut() {
                     if let Some(session) = doc.session.as_ref().and_then(|s| registry::find(&s.session_id)) {
                         doc.documents = discovery::documents(&session);
@@ -316,7 +352,17 @@ pub fn run() -> Result<()> {
                                 documents: &doc.documents,
                             });
                         }
+                        if doc.path.is_none() {
+                            first_document = doc.documents.first().map(|d| d.path.clone());
+                        }
                         doc.session = Some(session);
+                    }
+                }
+                // A session shown before it wrote any Markdown opens its
+                // first document as soon as one appears.
+                if let Some(path) = first_document {
+                    if let Err(e) = show(live_session_id(&current), Some(path), &mut current, &mut current_theme) {
+                        eprintln!("open first document: {e:#}");
                     }
                 }
                 if page_ready {
@@ -361,7 +407,8 @@ pub fn run() -> Result<()> {
 }
 
 /// Resolves what to show: the session's documents, and the requested path
-/// or the newest of them.
+/// or the newest of them. A session without Markdown still becomes current,
+/// so the viewer never keeps showing, and sending to, the previous one.
 fn open(session_id: Option<String>, path: Option<PathBuf>) -> Result<Current> {
     let session = match session_id {
         Some(id) => Some(registry::find(&id).ok_or_else(|| anyhow!("session {id} is not registered"))?),
@@ -369,14 +416,14 @@ fn open(session_id: Option<String>, path: Option<PathBuf>) -> Result<Current> {
     };
     let documents = session.as_ref().map(discovery::documents).unwrap_or_default();
     let path = match (path, session.is_some()) {
-        (Some(path), _) => path,
+        (Some(path), _) => Some(path),
         (None, false) => bail!("nothing to show: no session and no file"),
-        (None, true) => documents
-            .first()
-            .map(|d| d.path.clone())
-            .ok_or_else(|| anyhow!("this session has not written any Markdown yet"))?,
+        (None, true) => documents.first().map(|d| d.path.clone()),
     };
-    let source = fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
+    let source = match &path {
+        Some(path) => fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?,
+        None => String::new(),
+    };
     Ok(Current { session, documents, path, source, missing: false })
 }
 
@@ -403,7 +450,7 @@ fn terminal_frame(session: Option<&Session>) -> Option<terminal::Frame> {
 
 fn render_message(current: &Current) -> DaemonMessage<'_> {
     DaemonMessage::Render {
-        path: &current.path,
+        path: current.path.as_deref(),
         source: &current.source,
         session: current.session.as_ref(),
         documents: &current.documents,

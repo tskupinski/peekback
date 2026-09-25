@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Switch the viewer to a session even before it writes Markdown. It showed an
+  error and kept the previous session's document, file list and send target, so
+  a fresh session looked like it held the old session's files and sends went to
+  the old session. The viewer now shows an empty state and opens the session's
+  first document when it appears.
+- Open the hotkey on the session in the tmux pane you last used, falling back
+  to the most recently active session.
 - List the viewer in Cmd+Tab and the Dock while it is shown, so it is one
   keystroke away from the terminal. A hidden viewer stays out of both.
 

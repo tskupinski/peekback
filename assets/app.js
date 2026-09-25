@@ -2,6 +2,7 @@
   const $ = (id) => document.getElementById(id);
   const docEl = $("doc");
   const bannerEl = $("banner");
+  const noDocumentsEl = $("no-documents");
   const sessionsEl = $("sessions");
   const documentsEl = $("documents");
   const toastEl = $("toast");
@@ -30,7 +31,7 @@
   // ---------------------------------------------------------------- state
 
   const state = {
-    doc: null, // { path, source, label, sessionId, documents }
+    doc: null, // { path, source, label, sessionId, documents }; path is null before a session's first Markdown
     lastRender: null, // the render message, so the page can re-render itself
     sessions: [],
     currentSession: null,
@@ -101,6 +102,7 @@
     };
     document.title = `${state.doc.label} - peekback`;
     bannerEl.hidden = true;
+    noDocumentsEl.hidden = message.path !== null;
 
     const { frontmatter, body, offset } = splitFrontmatter(message.source);
     docEl.innerHTML = md.render(body);
@@ -171,6 +173,7 @@
   }
 
   function labelFor(path, documents) {
+    if (path === null) return "no Markdown yet";
     return documents.find((d) => d.path === path)?.label ?? path.split("/").pop();
   }
 
@@ -961,7 +964,8 @@
       li.textContent = all && picker.loading ? "loading…" : all && picker.documents.length === 0
         ? "No existing Markdown files in retained history"
         : marked && bookmarks.loading ? "loading…" : marked && bookmarks.documents.length === 0
-          ? `No bookmarked Markdown files. ${BOOKMARKS_HINT}` : "no matches";
+          ? `No bookmarked Markdown files. ${BOOKMARKS_HINT}`
+          : documents && state.doc?.sessionId && picker.items.length === 0 ? "This session has not written any Markdown yet" : "no matches";
       pickerList.append(li);
     }
   }

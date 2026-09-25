@@ -206,6 +206,23 @@ async function main() {
   assert.equal(click(anchor({ href: "#section" })), false);
   assert.equal(click(anchor({})), false);
   console.log("Links passed: HTML and SVG anchors never navigate the webview.");
+
+  const posted = messages.length;
+  receive({ type: "render", path: null, source: "", session: { session_id: "fresh" }, documents: [] });
+  await new Promise(setImmediate);
+  assert.equal(element("no-documents").hidden, false);
+  assert.equal(element("doc").children.length, 0);
+  key("y"); key("s"); key("c"); key("]"); key("d");
+  assert.equal(messages.length, posted); // Nothing to copy, send, comment on or cycle to.
+  window.dispatch("keydown", { key: "p", ctrlKey: true });
+  element("picker-current").dispatch("click");
+  assert.match(element("picker-list").children[0].textContent, /has not written any Markdown yet/);
+  input.dispatch("keydown", { key: "Escape" });
+  receive({ type: "render", path: "/first.md", source: "First.", session: { session_id: "fresh" },
+    documents: [{ path: "/first.md", label: "first.md", touched_at: 2 }] });
+  await new Promise(setImmediate);
+  assert.equal(element("no-documents").hidden, true);
+  console.log("Empty session passed: placeholder, inert actions, picker hint, first document replaces it.");
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

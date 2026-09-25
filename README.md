@@ -120,12 +120,14 @@ archive using [RELEASING.md](RELEASING.md).
 After a session appears in `peekback status`, run `peekback show` once. This
 starts the daemon and registers the global hotkey; installing hooks or running
 `status` alone does not start it. `peekback browse` also starts the viewer when
-you press `p` on a Markdown file. If no session has produced Markdown yet, use
-`peekback show README.md` to open a specific document.
+you press `p` on a Markdown file. A session that has not produced Markdown yet
+shows an empty viewer that opens its first document when one appears; use
+`peekback show README.md` to open a specific document meanwhile.
 
 While the daemon is running, press `Cmd+Shift+M` from anywhere. The viewer appears over the right half of
-your terminal window, showing the newest Markdown file of your most recently
-active session, and takes keyboard focus. Press `Esc` to drop it and return
+your terminal window, showing the newest Markdown file of the session in the
+tmux pane you last used, else of your most recently active session, and takes
+keyboard focus. Press `Esc` to drop it and return
 to the terminal.
 
 The viewer uses normal window stacking: switching to another app lets that

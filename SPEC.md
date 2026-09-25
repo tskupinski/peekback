@@ -217,7 +217,13 @@ borderless and positioned relative to the terminal; free placement is decorated.
 The app uses macOS accessory activation, without a Dock icon. `show` and the
 terminal browser's `p` focus the window; `show --no-focus` only brings it
 forward, and show requests from older clients without the field do the same. The global hotkey focuses it,
-or hides it when already focused. The hotkey exists only while the daemon runs.
+or hides it when already focused. When hidden, it opens the session in the active pane of each registered
+session's tmux server, newest first, else the most recently active session. The hotkey exists only while the
+daemon runs.
+
+Showing a session always makes it current, including its documents and send target. A session without Markdown
+renders an empty state instead of keeping the previous session's document, and opens its first document when a
+registry change lists one.
 
 A watcher reloads the current document. If it is deleted, the last rendered
 content remains with a banner. Registry changes update the live session list

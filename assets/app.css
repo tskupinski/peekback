@@ -101,6 +101,7 @@ body {
 }
 .item .meta:empty { display: none; }
 .empty { color: var(--muted); font-style: italic; }
+.no-documents { max-width: 860px; margin: 0 auto; padding: 24px 28px 0 32px; }
 
 .toast {
   position: fixed;

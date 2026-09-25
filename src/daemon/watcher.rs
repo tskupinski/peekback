@@ -49,6 +49,13 @@ impl DocWatcher {
         self.watched_dir = Some(dir);
         Ok(())
     }
+
+    pub fn clear(&mut self) {
+        *self.watched_file.lock().unwrap() = None;
+        if let Some(old) = self.watched_dir.take() {
+            let _ = self.inner.unwatch(&old);
+        }
+    }
 }
 
 /// Watches the session registry directory so the sidebar follows sessions
