@@ -13,12 +13,14 @@ use crate::paths;
 use crate::protocol::{Request, Response};
 
 const START_TIMEOUT: Duration = Duration::from_secs(3);
+/// Counted from the connection, and longer than the daemon may take to apply
+/// a request, so the daemon never acts on one its client already gave up on.
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_REPLY_BYTES: usize = 1024 * 1024;
 
 pub fn request(request: &Request) -> Result<Response> {
-    let deadline = Instant::now() + START_TIMEOUT;
     let stream = UnixStream::connect(paths::socket_path()).context("daemon not running")?;
-    exchange(stream, request, deadline)
+    exchange(stream, request, Instant::now() + REQUEST_TIMEOUT)
 }
 
 fn remaining(deadline: Instant) -> Result<Duration> {
@@ -59,7 +61,7 @@ pub fn request_starting_daemon(request: &Request) -> Result<Response> {
     let deadline = Instant::now() + START_TIMEOUT;
     let path = paths::socket_path();
     match UnixStream::connect(&path) {
-        Ok(stream) => return exchange(stream, request, deadline),
+        Ok(stream) => return exchange(stream, request, Instant::now() + REQUEST_TIMEOUT),
         Err(error) if unavailable(&error) => spawn_daemon()?,
         Err(error) => return Err(error).context("connecting to daemon"),
     }
@@ -67,7 +69,7 @@ pub fn request_starting_daemon(request: &Request) -> Result<Response> {
         match UnixStream::connect(&path) {
             // Once connected, never retry a request or spawn another daemon:
             // it may have already acted on a request whose reply was delayed.
-            Ok(stream) => return exchange(stream, request, deadline),
+            Ok(stream) => return exchange(stream, request, Instant::now() + REQUEST_TIMEOUT),
             Err(error) if !unavailable(&error) => return Err(error).context("connecting to daemon"),
             Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
             Err(_) => {

@@ -46,6 +46,13 @@ pub fn start(proxy: EventLoopProxy<UserEvent>) -> Result<()> {
     Ok(())
 }
 
+/// How long after reading a request the event loop may still apply it.
+const APPLY_TIMEOUT: Duration = Duration::from_secs(2);
+const _: () = assert!(
+    crate::client::REQUEST_TIMEOUT.as_millis() > APPLY_TIMEOUT.as_millis(),
+    "a client must outwait the daemon applying its request"
+);
+
 fn handle(mut stream: UnixStream, proxy: EventLoopProxy<UserEvent>) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let line = read_request(&mut stream, deadline)?;
@@ -53,7 +60,7 @@ fn handle(mut stream: UnixStream, proxy: EventLoopProxy<UserEvent>) -> Result<()
         Ok(request) => {
             let (reply, receiver) = mpsc::channel();
             proxy
-                .send_event(UserEvent::Request { request, reply, deadline: Instant::now() + Duration::from_secs(2) })
+                .send_event(UserEvent::Request { request, reply, deadline: Instant::now() + APPLY_TIMEOUT })
                 .map_err(|_| anyhow::anyhow!("event loop closed"))?;
             receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))?
         }
