@@ -668,6 +668,24 @@ fn an_unwritable_turn_history_does_not_keep_an_ended_session_live() {
 }
 
 #[test]
+fn an_unsavable_capture_job_still_closes_the_turn_and_the_session() {
+    let f = Fixture::new();
+    f.hook(None, "UserPromptSubmit", json!({}));
+    let root = f.0.join("state");
+    fs::write(root.join("pending-captures"), "not a directory").unwrap();
+    fs::write(f.project().join("new.md"), "# New").unwrap();
+    let hook = |event: &str| {
+        let input = json!({"session_id":"test-session", "hook_event_name":event, "cwd":f.project()});
+        crate::hooks::register(&root, Agent::Claude, &input, crate::registry::now_unix(), Default::default())
+    };
+    assert!(hook("Stop").is_err());
+    assert!(f.session().turn_started_at.is_none());
+    assert_eq!(documents(&f), [f.project().join("new.md")]); // Captured without a job.
+    assert!(hook("SessionEnd").is_err());
+    assert!(crate::registry::load_all_in(&root).is_empty());
+}
+
+#[test]
 fn damaged_turn_history_does_not_block_captures_or_turn_transitions() {
     for damaged in ["claude.other.json", "claude.test-session.json"] {
         let f = Fixture::new();

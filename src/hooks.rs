@@ -54,18 +54,25 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
         }
         _ => None,
     };
-    let queued = if closed.is_some() || event == "SessionEnd" || event == "Stop" {
-        previous.as_ref().map_or(Ok(()), |s| {
-            let mut context = s.clone();
-            if event == "Stop" && context.transcript_path.is_none() {
-                context.transcript_path = input["transcript_path"].as_str().filter(|p| !p.is_empty()).map(Into::into);
+    let closing = closed.is_some() || event == "SessionEnd" || event == "Stop";
+    let capture_context = previous.as_ref().filter(|_| closing).map(|s| {
+        let mut context = s.clone();
+        if event == "Stop" && context.transcript_path.is_none() {
+            context.transcript_path = input["transcript_path"].as_str().filter(|p| !p.is_empty()).map(Into::into);
+        }
+        context
+    });
+    // A job that cannot be saved must not keep the session open or its turn
+    // unclosed. Capture now from the same context instead, and report why no
+    // retry is possible after the session is updated.
+    let queued = match &capture_context {
+        Some(context) => crate::capture_jobs::enqueue(root, context, closed).inspect_err(|_| {
+            if let Err(error) = capture::capture(root, context, &store, closed) {
+                eprintln!("capture without a pending job: {error:#}");
             }
-            crate::capture_jobs::enqueue(root, &context, closed)
-        })
-    } else {
-        Ok(())
+        }),
+        None => Ok(()),
     };
-    queued?;
     let retained = if closed.is_some() || event == "SessionEnd" {
         previous.as_ref().map_or(Ok(()), |s| crate::turn_history::record(root, s, closed))
     } else {
@@ -76,11 +83,11 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
         crate::lifecycle::mark_ended(root, &key)?;
         let captured = crate::capture_jobs::retry(root, &key);
         crate::lifecycle::end(root, &key)?;
-        return retained.and(captured);
+        return queued.and(retained).and(captured);
     }
-    let Some(cwd) = input["cwd"].as_str().map(Path::new).filter(|p| p.is_absolute()) else { return Ok(()) };
+    let Some(cwd) = input["cwd"].as_str().map(Path::new).filter(|p| p.is_absolute()) else { return queued };
     if !input["transcript_path"].is_null() && !input["transcript_path"].is_string() {
-        return Ok(());
+        return queued;
     }
     let mut session = Session {
         session_id: id.into(),
@@ -119,7 +126,7 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     // Late tools may contribute useful history, but only SessionStart can
     // explicitly reopen a session after an end marker has been published.
     if event != "SessionStart" && crate::lifecycle::ended(root, &key) {
-        return Ok(());
+        return queued;
     }
     // A failed capture must still record the new turn state, so its error is
     // reported after the registry write.
@@ -157,5 +164,5 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     }
     result?;
     let captured = crate::capture_jobs::retry(root, &key);
-    retained.and(captured)
+    queued.and(retained).and(captured)
 }
