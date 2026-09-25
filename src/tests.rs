@@ -788,10 +788,10 @@ fn failed_exit_capture_is_retryable_without_a_live_session() {
     fs::remove_file(dir.join(".checkpoint")).unwrap();
     let key = crate::registry::SessionKey { agent: Agent::Claude, session_id: "test-session".into() };
     let _lock = crate::lifecycle::lock(&root, &key.session_id).unwrap();
-    crate::capture_jobs::retry(&root, &key).unwrap();
+    crate::capture_jobs::retry(&root, &key, crate::capture_jobs::Retry::Explicit).unwrap();
     let first = store(&f).read(&key).unwrap().events;
     assert!(first.iter().any(|event| event.path == file));
-    crate::capture_jobs::retry(&root, &key).unwrap();
+    crate::capture_jobs::retry(&root, &key, crate::capture_jobs::Retry::Explicit).unwrap();
     assert_eq!(store(&f).read(&key).unwrap().events.len(), first.len());
 }
 
@@ -812,4 +812,61 @@ fn stop_can_supply_a_previously_unknown_transcript_without_changing_turn_roots()
     .unwrap();
     f.hook(None, "Stop", json!({"transcript_path":transcript}));
     assert_eq!(documents(&f), [external]);
+}
+
+#[test]
+fn a_capture_that_keeps_failing_stops_being_retried_automatically() {
+    use crate::capture_jobs::{Retry, retry};
+    let f = Fixture::new();
+    f.hook(None, "UserPromptSubmit", json!({}));
+    let root = f.0.join("state");
+    let damaged = root.join("turns/claude.test-session.json");
+    fs::create_dir_all(damaged.parent().unwrap()).unwrap();
+    fs::write(&damaged, "{").unwrap();
+    let hook = |event: &str| {
+        let input = json!({"session_id":"test-session", "hook_event_name":event, "cwd":f.project()});
+        crate::hooks::register(&root, Agent::Claude, &input, crate::registry::now_unix(), Default::default())
+    };
+    let jobs = root.join("pending-captures/claude/test-session");
+    let attempts = || -> Vec<u64> {
+        let mut found: Vec<u64> = fs::read_dir(&jobs)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .map(|e| {
+                serde_json::from_slice::<Value>(&fs::read(e.path()).unwrap()).unwrap()["attempts"].as_u64().unwrap()
+            })
+            .collect();
+        found.sort();
+        found
+    };
+    assert!(hook("Stop").is_err());
+    assert_eq!(attempts(), [1]);
+    hook("PostToolUse").unwrap(); // Tool hooks do not retry.
+    assert_eq!(attempts(), [1]);
+    let key = crate::registry::SessionKey { agent: Agent::Claude, session_id: "test-session".into() };
+    let lock = crate::lifecycle::lock(&root, &key.session_id).unwrap();
+    assert!(retry(&root, &key, Retry::Automatic).is_err());
+    let exhausted = retry(&root, &key, Retry::Automatic).unwrap_err();
+    assert!(format!("{exhausted:#}").contains("no longer retried automatically"));
+    retry(&root, &key, Retry::Automatic).unwrap();
+    assert_eq!(attempts(), [3]);
+    fs::remove_file(&damaged).unwrap();
+    retry(&root, &key, Retry::Explicit).unwrap();
+    assert!(attempts().is_empty());
+    drop(lock);
+}
+
+#[test]
+fn an_unreadable_capture_job_is_set_aside_after_one_failure() {
+    use crate::capture_jobs::{Retry, retry};
+    let f = Fixture::new();
+    let root = f.0.join("state");
+    let jobs = root.join("pending-captures/claude/test-session");
+    fs::create_dir_all(&jobs).unwrap();
+    fs::write(jobs.join("1.json"), "{").unwrap();
+    let key = crate::registry::SessionKey { agent: Agent::Claude, session_id: "test-session".into() };
+    assert!(retry(&root, &key, Retry::Automatic).is_err());
+    assert!(jobs.join("1.corrupt").exists());
+    retry(&root, &key, Retry::Automatic).unwrap();
 }

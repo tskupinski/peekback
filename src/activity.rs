@@ -66,7 +66,7 @@ pub fn run(command: Command) -> Result<()> {
             let key = SessionKey { agent: parse_agent(&agent), session_id: session };
             let root = paths::state_dir();
             let _lock = crate::lifecycle::lock(&root, &key.session_id)?;
-            crate::capture_jobs::retry(&root, &key)
+            crate::capture_jobs::retry(&root, &key, crate::capture_jobs::Retry::Explicit)
         }
         Command::Compact { agent, session, apply } => {
             let key = SessionKey { agent: parse_agent(&agent), session_id: session };

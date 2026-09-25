@@ -167,8 +167,12 @@ bounds. Capture and transcript backfill run under the lifecycle lock; a resume
 in another directory cannot change the closed turn's scan roots.
 
 Jobs are removed only after both history and file evidence are stored. Later
-hooks retry them idempotently. `peekback activity retry --agent <AGENT>
---session <ID>` also retries jobs after session exit. A retry preserves context,
+prompt, stop, start and end hooks retry them idempotently; tool hooks, which
+come many times a turn, do not. A job counts its failures, and after three
+only `peekback activity retry --agent <AGENT> --session <ID>` retries it,
+which also works after session exit. An unreadable job is renamed to
+`.corrupt` and reported once. If a job cannot be saved at all, the hook
+captures from the same context immediately and still closes the turn. A retry preserves context,
 not a filesystem snapshot: files changed again before retry may no longer
 provide evidence for the original turn.
 

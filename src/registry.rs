@@ -168,7 +168,9 @@ pub(crate) fn prune_in(root: &Path, max_idle_secs: i64) -> Vec<Session> {
         if let Err(error) = crate::turn_history::record(root, &session, turn) {
             eprintln!("retain turns before pruning {}: {error:#}", session.session_id);
         }
-        if let Err(error) = crate::capture_jobs::retry(root, &session.activity_key()) {
+        if let Err(error) =
+            crate::capture_jobs::retry(root, &session.activity_key(), crate::capture_jobs::Retry::Automatic)
+        {
             eprintln!("capture before pruning {}: {error:#}", session.session_id);
         }
         if crate::lifecycle::end(root, &session.activity_key()).is_ok() {

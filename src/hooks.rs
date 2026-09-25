@@ -8,6 +8,7 @@ use serde_json::Value;
 use session_activity::{Agent, Store};
 
 use crate::capture::{self, Turn};
+use crate::capture_jobs::Retry;
 use crate::registry::{Session, Terminal};
 
 static NEXT_WRITE: AtomicU64 = AtomicU64::new(0);
@@ -81,7 +82,7 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     if event == "SessionEnd" {
         // Closing the session must survive an interrupted capture.
         crate::lifecycle::mark_ended(root, &key)?;
-        let captured = crate::capture_jobs::retry(root, &key);
+        let captured = crate::capture_jobs::retry(root, &key, Retry::Automatic);
         crate::lifecycle::end(root, &key)?;
         return queued.and(retained).and(captured);
     }
@@ -163,6 +164,10 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
         let _ = fs::remove_file(tmp);
     }
     result?;
-    let captured = crate::capture_jobs::retry(root, &key);
+    // Tool hooks come many times a turn; boundaries are enough to retry at.
+    if matches!(event, "PostToolUse" | "PostToolUseFailure") {
+        return queued.and(retained);
+    }
+    let captured = crate::capture_jobs::retry(root, &key, Retry::Automatic);
     queued.and(retained).and(captured)
 }
