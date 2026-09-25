@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use session_activity::{FileActivity, Operation, Outcome, SessionKey, Store};
+use session_activity::{FileActivity, Operation, Outcome, Store};
 
 use crate::registry::Session;
 
@@ -14,54 +14,6 @@ pub struct Document {
     pub scanned: bool,
     /// Scanned while another session was working in the same place.
     pub shared: bool,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct TrackedDocument {
-    #[serde(flatten)]
-    pub document: Document,
-    pub sessions: Vec<SessionKey>,
-}
-
-#[derive(Default)]
-pub struct AllDocuments {
-    pub documents: Vec<TrackedDocument>,
-    pub warnings: Vec<String>,
-}
-
-/// Retained history only: no live registry lookups.
-pub fn all_documents(store: &Store) -> AllDocuments {
-    let report = store.read_all();
-    // Reconcile outcomes before filtering, as with current-session discovery.
-    let events = session_activity::reconcile(report.events);
-    let documents = session_activity::files(
-        events.into_iter().filter(|e| e.operation != Operation::Read && e.outcome != Outcome::Failed),
-    )
-    .into_iter()
-    .filter(|file| file.exists && is_markdown(&file.path))
-    .map(|file| {
-        let mut sessions = Vec::new();
-        for event in file.events.iter().rev() {
-            if !sessions.contains(&event.session) {
-                sessions.push(event.session.clone());
-            }
-        }
-        TrackedDocument {
-            document: Document {
-                label: file.path.display().to_string(),
-                scanned: scanned(&file),
-                shared: false,
-                path: file.path,
-                touched_at: file.last_touched_at,
-            },
-            sessions,
-        }
-    })
-    .collect();
-    AllDocuments {
-        documents,
-        warnings: report.warnings.into_iter().map(|w| format!("{}: {}", w.path.display(), w.message)).collect(),
-    }
 }
 
 pub fn documents(session: &Session) -> Vec<Document> {

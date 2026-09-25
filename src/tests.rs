@@ -76,46 +76,6 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn all_session_documents_merge_paths_keep_provenance_and_skip_unusable_history() {
-    use session_activity::{FileEvent, Operation, Outcome, SessionKey, Source, Store};
-    let f = Fixture::new();
-    let store = Store::new(f.0.join("history"));
-    for name in ["shared.md", "newest.MARKDOWN", "read.md", "failed.md", "code.rs", "untracked.md"] {
-        fs::write(f.project().join(name), "# Content").unwrap();
-    }
-    for agent in [Agent::Claude, Agent::Codex] {
-        let key = SessionKey { agent, session_id: "same-id".into() };
-        let event =
-            FileEvent::new(&key, &f.project(), std::path::Path::new("shared.md"), 10, Operation::Write, Source::Hook);
-        store.append(&key, &[event]).unwrap();
-        store.maintain(&key, None, true).unwrap();
-    }
-    let key = SessionKey { agent: Agent::Codex, session_id: "ended".into() };
-    for (name, operation, outcome, timestamp) in [
-        ("newest.MARKDOWN", Operation::Modify, Outcome::Succeeded, 20),
-        ("read.md", Operation::Read, Outcome::Succeeded, 30),
-        ("failed.md", Operation::Write, Outcome::Failed, 30),
-        ("code.rs", Operation::Write, Outcome::Succeeded, 30),
-        ("missing.md", Operation::Delete, Outcome::Succeeded, 30),
-    ] {
-        let mut event =
-            FileEvent::new(&key, &f.project(), std::path::Path::new(name), timestamp, operation, Source::Hook);
-        event.outcome = outcome;
-        store.append(&key, &[event]).unwrap();
-    }
-    fs::write(f.0.join("history/codex/ended/damaged.json"), "{").unwrap();
-    let report = discovery::all_documents(&store);
-    assert_eq!(report.documents.len(), 2);
-    assert_eq!(report.documents[0].document.path, f.project().join("newest.MARKDOWN"));
-    assert_eq!(report.documents[1].document.path, f.project().join("shared.md"));
-    assert_eq!(report.documents[1].sessions.len(), 2);
-    assert_ne!(report.documents[1].sessions[0].agent, report.documents[1].sessions[1].agent);
-    assert_eq!(report.warnings.len(), 1);
-    assert!(report.warnings[0].contains("damaged.json"));
-    assert!(!f.record().exists()); // No live registry entries required.
-}
-
-#[test]
 fn codex_hook_lifecycle_without_transcript() {
     let f = Fixture::new();
     f.hook(Some("codex"), "SessionStart", json!({}));

@@ -167,7 +167,7 @@ Peekback uses `CODEX_THREAD_ID` (or `CODEX_SESSION_ID`) to select that session.
 | `S` | send all pending comments as one prompt |
 | `/` | search, then `n` / `N` |
 | `Space d` or `Ctrl-P` | document picker |
-| `Tab` / `Shift-Tab` in document picker | cycle Current session, All sessions, and Bookmarks |
+| `Tab` / `Shift-Tab` in document picker | cycle Current session, Scratchpad, and Bookmarks |
 | `Space s` | session picker |
 | `Space c` | pending comments (`Enter` jumps, `Ctrl-D` removes) |
 | `:` | command line: `:doc`, `:session`, `:send`, `:c note`, `:sendall`, `:sidebar`, `:q`, `:help` |
@@ -185,18 +185,16 @@ sent. If live edits change the text at a comment's saved lines, its marker is
 hidden; the original quote and note remain in the pending list. Comments stay
 in memory until the daemon stops.
 
-The document picker has **Current session**, **All sessions** and
-**Bookmarks** scopes; `Tab` and `Shift-Tab` cycle through them. All
-sessions reads retained tracker history for both agents, including ended
-sessions. It groups identical paths, sorts by latest activity, and shows the
-agent/session origins; filter by path or session ID. It keeps the viewer's
-existing rules: existing Markdown files, excluding reads and failed operations.
-The All sessions scope refreshes when opened; `Ctrl-R` refreshes it while open.
-Incomplete history is reported in the picker. Selecting a file from this scope
-keeps the viewer in the session it was opened for: Current session still lists
-that session's files, and selections and comments are still sent to it. A file
-never picks the session itself, since it can belong to several. A viewer opened
-without a session shows the file standalone, with no send-back target.
+The document picker has **Current session**, **Scratchpad** and
+**Bookmarks** scopes; `Tab` and `Shift-Tab` cycle through them. Current
+session lists the Markdown the session wrote, as recorded by its hooks and turn
+captures. **Scratchpad** lists every Markdown file in the Claude Code session's
+scratchpad, newest first, read live when the scope opens, so a file shows up as
+soon as the agent writes it, even mid-turn. `Ctrl-R` refreshes it while open.
+Codex sessions have no scratchpad. Opening a file from Scratchpad or Bookmarks
+keeps the viewer in its session, so selections and comments are still sent to
+it. A viewer opened without a session shows the file standalone, with no
+send-back target.
 
 **Bookmarks** lists Markdown you always want within reach, such as your global
 `CLAUDE.md` or shared snippets, configured with `bookmarks` (see
@@ -265,7 +263,7 @@ the evidence view (`e`) and plain listing, and supports filtering by session ID.
 `r` reloads stored history. Previews keep the browser's originating live session
 as their send-back target when one is available. It cannot be combined with
 session/pane selectors. Every view reads the same stored history, so a file
-listed for a session is also listed in All sessions. Installing hooks does not
+listed for a session is also listed in `--all-sessions`. Installing hooks does not
 automatically import every past session.
 
 | Key | Action |

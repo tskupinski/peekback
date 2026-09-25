@@ -124,7 +124,9 @@ attributed writes.
 Ownership is decided once, when evidence is captured, and stored. Views only
 read the store: nothing is inferred from the filesystem at display time, so a
 session's files do not change when someone else edits them later, and a
-resumed session, the terminal browser and All sessions all show the same list.
+resumed session, the terminal browser and `browse --all-sessions` all show the
+same list. The viewer's Scratchpad scope is the one live listing,
+because only its own session writes there.
 
 ### Sources
 
@@ -189,10 +191,10 @@ existing `.md` or `.markdown` files, excluding reads and failed operations after
 reconciliation, and marks scan evidence. Both sort by latest observed activity
 and refresh from the store when the registry changes.
 
-All sessions mode reads the same stored history for every session, merging
-identical paths while keeping agent/session provenance. An all-session
-Markdown preview never infers a send-back target from the file: it stays in the
-session the viewer or browser was opened from, and is standalone when there is
+The terminal browser's all-sessions mode reads the same stored history for
+every session, merging identical paths while keeping agent/session provenance.
+Its Markdown previews never infer a send-back target from the file: they stay
+in the session the browser runs inside, and are standalone when there is
 none.
 
 ## Storage and maintenance
@@ -252,10 +254,10 @@ backend from the CLI and does not require the daemon.
 
 Tao owns the main-thread event loop. Socket and watcher threads pass messages
 through an event proxy; UI state and JavaScript evaluation stay on the main
-thread. All-session picker queries run on a worker, with at most one active
-query, and return documents plus warnings. Bookmark listing also runs on a
-worker. The page may open a tracked path or bookmark only from the daemon's
-most recent list.
+thread. Scratchpad and bookmark listings run on workers and return documents
+plus warnings; a scratchpad listing that arrives after the viewer moved to
+another session is discarded. The page may open a scratchpad file or bookmark
+only from the daemon's most recent list.
 
 Wry hosts the embedded page at `peekback://app/`. The page sends messages through
 `window.ipc.postMessage`; Rust pushes updates through JavaScript evaluation.
@@ -288,10 +290,17 @@ registry change lists one.
 
 A watcher reloads the current document. If it is deleted, the last rendered
 content remains with a banner. Registry changes update the live session list
-and current-session documents. The document picker has Current session, All
-sessions and Bookmarks scopes, cycled with Tab and Shift-Tab. All sessions and
-Bookmarks refresh on opening and with Ctrl-R; partial-history and bookmark
-warnings appear in the picker.
+and current-session documents. The document picker has Current session,
+Scratchpad and Bookmarks scopes, cycled with Tab and Shift-Tab. Scratchpad and
+Bookmarks refresh on opening and with Ctrl-R, and their warnings appear in the
+picker.
+
+Scratchpad lists Markdown under the Claude Code session's scratchpad, read at
+display time: the directory belongs to that session alone, so a live listing
+cannot pick up another session's files. It uses the bookmark walk and limits,
+sorted newest first and labelled relative to the scratchpad. Sessions without
+a scratchpad, such as Codex sessions, and standalone documents show that there
+is none. Opening a scratchpad file keeps the live session.
 
 Bookmarks come from the `bookmarks` config list, reread for every request.
 Entries starting with `/` or `~` are absolute; others resolve against the
@@ -302,7 +311,7 @@ directory symlinks, stop at depth 16 and 20,000 visited entries, and list at
 most 200 files in config order without duplicates; the page is told how many
 matched. Missing files are omitted silently; invalid globs and explicit
 non-Markdown files produce warnings. Opening a bookmark keeps the live session,
-like All sessions.
+like Scratchpad.
 
 Keyboard and mouse selections map back to Markdown. Copy writes to the
 clipboard; Send pastes a blockquote; Comment accumulates notes for a combined

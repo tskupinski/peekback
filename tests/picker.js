@@ -81,37 +81,42 @@ async function main() {
   assert.equal(element("picker-list").children[0].children[0].textContent, "current.md");
   const input = element("picker-input");
   input.dispatch("keydown", { key: "Tab" });
-  assert.equal(messages.at(-1).type, "list-all-documents");
-  assert.match(element("picker-note").textContent, /Loading/);
-  input.value = "ended-session";
+  assert.deepEqual(messages.at(-1), { type: "list-scratchpad" });
+  assert.equal(element("picker-scratchpad").attributes["aria-pressed"], "true");
+  assert.match(element("picker-note").textContent, /Loading scratchpad/);
+  input.value = "note-4";
   input.dispatch("input");
-  const documents = Array.from({ length: 45 }, (_, index) => ({
-    path: `/project-${index}/note.md`, label: `/project-${index}/note.md`, touched_at: index + 1,
-    sessions: [{ agent: "codex", session_id: "ended-session" }],
+  const notes = Array.from({ length: 45 }, (_, index) => ({
+    path: `/scratch/note-${index}.md`, label: `note-${index}.md`, touched_at: 100 - index,
   }));
-  receive({ type: "all-documents", documents, warnings: ["one damaged batch"] });
-  assert.equal(input.value, "ended-session"); // Keep input typed while loading.
-  assert.match(element("picker-note").textContent, /one damaged batch/);
+  receive({ type: "scratchpad", available: true, documents: notes, found: 250, warnings: [] });
+  assert.equal(input.value, "note-4"); // Keep input typed while loading.
+  assert.match(element("picker-note").textContent, /Showing 45 of 250 files\. Markdown in this session's scratchpad/);
+  input.value = "";
+  input.dispatch("input");
   assert.equal(element("picker-list").children.length, 30);
   for (let i = 0; i < 35; i++) input.dispatch("keydown", { key: "ArrowDown" });
   const active = element("picker-list").querySelector(".active");
-  assert.equal(active.children[0].textContent, "/project-35/note.md");
+  assert.equal(active.children[0].textContent, "note-35.md");
   input.dispatch("keydown", { key: "Enter" });
-  assert.deepEqual(messages.at(-1), { type: "switch-tracked", path: "/project-35/note.md" });
+  assert.deepEqual(messages.at(-1), { type: "open-scratchpad", path: "/scratch/note-35.md" });
   assert.equal(element("picker").hidden, true);
 
   window.dispatch("keydown", { key: "p", ctrlKey: true });
-  assert.equal(messages.at(-1).type, "list-all-documents"); // Refresh on reopen.
+  assert.deepEqual(messages.at(-1), { type: "list-scratchpad" }); // Refresh on reopen.
   input.dispatch("keydown", { key: "Tab", shiftKey: true }); // Shift-Tab cycles backwards.
-  receive({ type: "all-documents", documents, warnings: [] }); // Late reply must not change scope.
+  receive({ type: "scratchpad", available: true, documents: notes, found: 45, warnings: [] }); // Late reply keeps scope.
   assert.equal(element("picker-current").attributes["aria-pressed"], "true");
   assert.equal(element("picker-list").children[0].children[0].textContent, "current.md");
-  element("picker-all").dispatch("click");
-  receive({ type: "all-documents", documents: [], warnings: [] });
-  assert.match(element("picker-list").children[0].textContent, /No existing Markdown/);
+  element("picker-scratchpad").dispatch("click");
+  receive({ type: "scratchpad", available: true, documents: [], found: 0, warnings: [] });
+  assert.match(element("picker-list").children[0].textContent, /No Markdown in this session's scratchpad yet/);
+  receive({ type: "scratchpad", available: false, documents: [], found: 0, warnings: [] });
+  assert.match(element("picker-list").children[0].textContent, /No scratchpad for this session/);
+  assert.match(element("picker-note").textContent, /Only Claude Code sessions/);
   input.dispatch("keydown", { key: "r", ctrlKey: true });
   assert.match(element("picker-note").textContent, /Loading/);
-  console.log("Picker passed: scopes, async filtering, provenance search, warnings, >30 results, standalone opening, refresh.");
+  console.log("Picker passed: scopes, scratchpad listing, filtering, caps, >30 results, opening, refresh, no scratchpad.");
 
   element("picker-bookmarks").dispatch("click");
   assert.deepEqual(messages.at(-1), { type: "list-bookmarks" });

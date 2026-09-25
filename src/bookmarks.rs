@@ -7,14 +7,15 @@ use serde::Serialize;
 
 use crate::discovery::{self, Document};
 
-/// More would stop being a list of favourites and make the picker slow.
+/// More would stop being a list of favourites, or of one session's notes, and
+/// make the picker slow.
 pub const MAX_DOCUMENTS: usize = 200;
 /// Directory entries one refresh may visit, so `~/**/*.md` cannot stall it.
 const SCAN_BUDGET: usize = 20_000;
 const MAX_DEPTH: usize = 16;
 
 #[derive(Debug, Default, Serialize)]
-pub struct Bookmarks {
+pub struct Listing {
     pub documents: Vec<Document>,
     /// Matching files found, which exceeds `documents.len()` when capped.
     pub found: usize,
@@ -26,8 +27,8 @@ pub struct Bookmarks {
 /// project of the viewer's session, and is skipped without one. An entry is a
 /// file, a directory (its Markdown, recursively) or a glob. Missing files are
 /// left out quietly, since a relative entry may exist only in some projects.
-pub fn list(entries: &[String], cwd: Option<&Path>, home: &Path) -> Bookmarks {
-    let mut scan = Scan { budget: SCAN_BUDGET, seen: HashSet::new(), bookmarks: Bookmarks::default() };
+pub fn list(entries: &[String], cwd: Option<&Path>, home: &Path) -> Listing {
+    let mut scan = Scan { budget: SCAN_BUDGET, seen: HashSet::new(), listing: Listing::default() };
     for entry in entries {
         let Some((path, base)) = resolve(entry, cwd, home) else { continue };
         let mut found = Vec::new();
@@ -45,24 +46,48 @@ pub fn list(entries: &[String], cwd: Option<&Path>, home: &Path) -> Bookmarks {
             Ok(())
         };
         if let Err(message) = result {
-            scan.bookmarks.warnings.push(format!("{entry}: {message}"));
+            scan.listing.warnings.push(format!("{entry}: {message}"));
         }
         found.sort();
         for file in found {
             scan.add(file, &base, home);
         }
         if scan.budget == 0 {
-            scan.bookmarks.warnings.push(format!("{entry}: stopped after scanning {SCAN_BUDGET} entries"));
+            scan.listing.warnings.push(format!("{entry}: stopped after scanning {SCAN_BUDGET} entries"));
             break;
         }
     }
-    scan.bookmarks
+    scan.listing
+}
+
+/// Markdown under one folder, such as a session's scratchpad, newest first and
+/// labelled relative to it, with the same limits as bookmarks.
+pub fn folder(dir: &Path) -> Listing {
+    let mut scan = Scan { budget: SCAN_BUDGET, seen: HashSet::new(), listing: Listing::default() };
+    let mut found = Vec::new();
+    walk(dir, &mut scan.budget, &mut |file| found.push((modified(file), file.to_owned())));
+    found.sort_by(|a, b| b.cmp(a));
+    for (_, file) in found {
+        scan.add(file, &Base::Project(dir.to_owned()), dir);
+    }
+    if scan.budget == 0 {
+        scan.listing.warnings.push(format!("stopped after scanning {SCAN_BUDGET} entries"));
+    }
+    scan.listing
+}
+
+fn modified(path: &Path) -> i64 {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 struct Scan {
     budget: usize,
     seen: HashSet<PathBuf>,
-    bookmarks: Bookmarks,
+    listing: Listing,
 }
 
 impl Scan {
@@ -70,15 +95,11 @@ impl Scan {
         if !self.seen.insert(path.clone()) {
             return;
         }
-        self.bookmarks.found += 1;
-        if self.bookmarks.documents.len() == MAX_DOCUMENTS {
+        self.listing.found += 1;
+        if self.listing.documents.len() == MAX_DOCUMENTS {
             return;
         }
-        let touched_at = fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_secs() as i64);
+        let touched_at = modified(&path);
         let label = match base {
             Base::Project(cwd) => path.strip_prefix(cwd).unwrap_or(&path).display().to_string(),
             Base::Absolute => match path.strip_prefix(home) {
@@ -86,7 +107,7 @@ impl Scan {
                 Err(_) => path.display().to_string(),
             },
         };
-        self.bookmarks.documents.push(Document { path, touched_at, label, scanned: false, shared: false });
+        self.listing.documents.push(Document { path, touched_at, label, scanned: false, shared: false });
     }
 }
 
@@ -205,7 +226,7 @@ mod tests {
         }
     }
 
-    fn labels(bookmarks: &Bookmarks) -> Vec<&str> {
+    fn labels(bookmarks: &Listing) -> Vec<&str> {
         bookmarks.documents.iter().map(|d| d.label.as_str()).collect()
     }
 
@@ -284,5 +305,21 @@ mod tests {
         assert!(bookmarks.warnings[1].starts_with("docs/[.md: "));
         assert_eq!(bookmarks.documents.len(), MAX_DOCUMENTS);
         assert_eq!(bookmarks.found, MAX_DOCUMENTS + 5);
+    }
+
+    #[test]
+    fn a_folder_lists_its_markdown_newest_first_relative_to_it() {
+        let temp = Temp::new();
+        let old = temp.file("plans/old.md");
+        let new = temp.file("new.md");
+        temp.file(".hidden/secret.md");
+        fs::write(temp.0.join("data.json"), "{}").unwrap();
+        let at = |secs| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        fs::File::options().write(true).open(&old).unwrap().set_modified(at(1_000)).unwrap();
+        fs::File::options().write(true).open(&new).unwrap().set_modified(at(2_000)).unwrap();
+        let listing = folder(&temp.0);
+        assert_eq!(labels(&listing), ["new.md", "plans/old.md"]);
+        assert_eq!(listing.documents[1].touched_at, 1_000);
+        assert!(folder(&temp.0.join("missing")).documents.is_empty());
     }
 }

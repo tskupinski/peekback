@@ -31,8 +31,8 @@ pub enum UserEvent {
     RegistryChanged,
     Hotkey,
     Page(PageMessage),
-    AllDocumentsLoaded(discovery::AllDocuments),
-    BookmarksLoaded(bookmarks::Bookmarks),
+    BookmarksLoaded(bookmarks::Listing),
+    ScratchpadLoaded { session_id: String, listing: bookmarks::Listing },
 }
 
 /// Messages the page sends through `window.ipc.postMessage`.
@@ -40,8 +40,8 @@ pub enum UserEvent {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum PageMessage {
     Ready,
-    ListAllDocuments,
-    SwitchTracked { path: PathBuf },
+    ListScratchpad,
+    OpenScratchpad { path: PathBuf },
     ListBookmarks,
     OpenBookmark { path: PathBuf },
     Switch { session_id: Option<String>, path: Option<PathBuf> },
@@ -70,8 +70,11 @@ pub enum DaemonMessage<'a> {
         session_id: &'a str,
         documents: &'a [Document],
     },
-    AllDocuments {
-        documents: &'a [discovery::TrackedDocument],
+    Scratchpad {
+        /// False when the session has no scratchpad, such as a Codex session.
+        available: bool,
+        documents: &'a [Document],
+        found: usize,
         warnings: &'a [String],
     },
     Bookmarks {
@@ -137,9 +140,8 @@ pub fn run() -> Result<()> {
     let mut current: Option<Current> = None;
     let mut page_ready = false;
     let mut current_theme: Option<Theme> = None;
-    let mut all_documents = discovery::AllDocuments::default();
-    let mut loading_all_documents = false;
-    let mut bookmark_list = bookmarks::Bookmarks::default();
+    let mut scratchpad_list = bookmarks::Listing::default();
+    let mut bookmark_list = bookmarks::Listing::default();
 
     eprintln!("peekback daemon listening on {}", paths::socket_path().display());
     event_loop.run(move |event, _, control_flow| {
@@ -176,35 +178,42 @@ pub fn run() -> Result<()> {
         };
 
         match event {
-            Event::UserEvent(UserEvent::Page(PageMessage::ListAllDocuments)) => {
-                if !loading_all_documents {
-                    loading_all_documents = true;
-                    let proxy = proxy.clone();
-                    // Retained histories may be large. Keep the viewer responsive
-                    // and allow only one all-session query at a time.
-                    std::thread::spawn(move || {
-                        let report = discovery::all_documents(&crate::activity::store());
-                        let _ = proxy.send_event(UserEvent::AllDocumentsLoaded(report));
-                    });
-                }
+            Event::UserEvent(UserEvent::Page(PageMessage::ListScratchpad)) => {
+                let session = current.as_ref().and_then(|c| c.session.as_ref());
+                // Codex sessions and standalone documents have no scratchpad.
+                let Some((session_id, dir)) = session.and_then(|s| Some((s.session_id.clone(), s.scratchpad_dir()?)))
+                else {
+                    scratchpad_list = bookmarks::Listing::default();
+                    view.push(&DaemonMessage::Scratchpad { available: false, documents: &[], found: 0, warnings: &[] });
+                    return;
+                };
+                let proxy = proxy.clone();
+                std::thread::spawn(move || {
+                    let listing = bookmarks::folder(&dir);
+                    let _ = proxy.send_event(UserEvent::ScratchpadLoaded { session_id, listing });
+                });
             }
-            Event::UserEvent(UserEvent::AllDocumentsLoaded(report)) => {
-                loading_all_documents = false;
-                all_documents = report;
-                if page_ready {
-                    view.push(&DaemonMessage::AllDocuments {
-                        documents: &all_documents.documents,
-                        warnings: &all_documents.warnings,
-                    });
-                }
-            }
-            Event::UserEvent(UserEvent::Page(PageMessage::SwitchTracked { path })) => {
-                if !all_documents.documents.iter().any(|d| d.document.path == path) {
-                    view.push(&DaemonMessage::Toast { text: "That file is not in the tracked documents" });
+            Event::UserEvent(UserEvent::ScratchpadLoaded { session_id, listing }) => {
+                // The viewer may have moved to another session meanwhile, and
+                // its files must not open with that session as send target.
+                if live_session_id(&current).as_deref() != Some(session_id.as_str()) {
                     return;
                 }
-                // A path can belong to several sessions, including ended ones,
-                // so it never picks the session.
+                scratchpad_list = listing;
+                if page_ready {
+                    view.push(&DaemonMessage::Scratchpad {
+                        available: true,
+                        documents: &scratchpad_list.documents,
+                        found: scratchpad_list.found,
+                        warnings: &scratchpad_list.warnings,
+                    });
+                }
+            }
+            Event::UserEvent(UserEvent::Page(PageMessage::OpenScratchpad { path })) => {
+                if !scratchpad_list.documents.iter().any(|d| d.path == path) {
+                    view.push(&DaemonMessage::Toast { text: "That file is not in this session's scratchpad" });
+                    return;
+                }
                 if let Err(e) = show(live_session_id(&current), Some(path), &mut current, &mut current_theme) {
                     view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
                 }
@@ -427,9 +436,9 @@ fn open(session_id: Option<String>, path: Option<PathBuf>) -> Result<Current> {
     Ok(Current { session, documents, path, source, missing: false })
 }
 
-/// Files opened from outside the session, from All sessions or bookmarks, keep
-/// the viewer in the session it was opened for, with its documents and send
-/// target, while that session is live.
+/// Files opened from the scratchpad or bookmarks keep the viewer in the
+/// session it was opened for, with its documents and send target, while that
+/// session is live.
 fn live_session_id(current: &Option<Current>) -> Option<String> {
     current
         .as_ref()

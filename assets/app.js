@@ -20,7 +20,7 @@
   const pickerList = $("picker-list");
   const pickerScope = $("picker-scope");
   const pickerCurrent = $("picker-current");
-  const pickerAll = $("picker-all");
+  const pickerScratchpad = $("picker-scratchpad");
   const pickerBookmarks = $("picker-bookmarks");
   const pickerNote = $("picker-note");
   const commentsEl = $("comments");
@@ -676,17 +676,13 @@
         run: () => post({ type: "open-bookmark", path: d.path }),
       }));
     }
-    if (picker.scope === "all") {
-      return picker.documents.map((d) => {
-        const provenance = d.sessions.map((s) => `${s.agent} / ${s.session_id}`).join(" · ");
-        return {
-          label: d.label,
-          search: `${d.label} ${provenance}`,
-          meta: `${ago(d.touched_at)} · ${provenance}`,
-          current: d.path === state.doc?.path,
-          run: () => post({ type: "switch-tracked", path: d.path }),
-        };
-      });
+    if (picker.scope === "scratchpad") {
+      return scratchpad.documents.map((d) => ({
+        label: d.label,
+        meta: d.touched_at ? ago(d.touched_at) : "",
+        current: d.path === state.doc?.path,
+        run: () => post({ type: "open-scratchpad", path: d.path }),
+      }));
     }
     if (!state.doc) return [];
     return state.doc.documents.map((d) => ({
@@ -855,9 +851,10 @@
 
   // An fzf-style overlay: type to filter, Enter to open. Replaces the
   // sidebar as the way to move between documents and sessions.
-  const picker = { kind: null, scope: "current", documents: [], warnings: [], loading: false, items: [], filtered: [], index: 0 };
+  const picker = { kind: null, scope: "current", items: [], filtered: [], index: 0 };
+  const scratchpad = { documents: [], found: 0, warnings: [], loading: false, available: true };
   const bookmarks = { documents: [], found: 0, warnings: [], loading: false };
-  const SCOPES = ["current", "all", "bookmarks"];
+  const SCOPES = ["current", "scratchpad", "bookmarks"];
   const BOOKMARKS_HINT = 'Add bookmarks = ["~/.claude/CLAUDE.md", "CLAUDE.md"] to ~/.config/peekback/config.toml. '
     + "Entries can be files, folders or globs; ones not starting with / or ~ follow the session's project.";
 
@@ -867,16 +864,15 @@
     post({ type: "list-bookmarks" });
   }
 
-  function refreshScope() {
-    if (picker.scope === "all") refreshAllDocuments();
-    if (picker.scope === "bookmarks") refreshBookmarks();
+  // Listed live, so files show up as soon as they are written, mid-turn too.
+  function refreshScratchpad() {
+    scratchpad.loading = true;
+    post({ type: "list-scratchpad" });
   }
 
-  function refreshAllDocuments() {
-    picker.loading = true;
-    picker.documents = [];
-    picker.warnings = [];
-    post({ type: "list-all-documents" });
+  function refreshScope() {
+    if (picker.scope === "scratchpad") refreshScratchpad();
+    if (picker.scope === "bookmarks") refreshBookmarks();
   }
 
   function updatePickerItems() {
@@ -891,14 +887,14 @@
     pickerInput.focus();
   }
 
-  for (const [button, scope] of [[pickerCurrent, "current"], [pickerAll, "all"], [pickerBookmarks, "bookmarks"]]) {
+  for (const [button, scope] of [[pickerCurrent, "current"], [pickerScratchpad, "scratchpad"], [pickerBookmarks, "bookmarks"]]) {
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", () => setPickerScope(scope));
   }
 
   function openPicker(kind) {
     picker.kind = kind;
-    if (kind === "documents" && picker.scope === "current" && !state.doc?.sessionId) picker.scope = "all";
+    if (kind === "documents" && picker.scope !== "bookmarks" && !state.doc?.sessionId) picker.scope = "bookmarks";
     if (kind === "documents") refreshScope();
     pickerInput.value = "";
     pickerInput.placeholder = { documents: "open document", sessions: "switch session", comments: "pending comments, Ctrl-D removes" }[kind];
@@ -923,18 +919,21 @@
 
   function renderPicker() {
     const documents = picker.kind === "documents";
-    const all = documents && picker.scope === "all";
+    const scratch = documents && picker.scope === "scratchpad";
     const marked = documents && picker.scope === "bookmarks";
     pickerScope.hidden = !documents;
     pickerCurrent.setAttribute("aria-pressed", String(documents && picker.scope === "current"));
-    pickerAll.setAttribute("aria-pressed", String(all));
+    pickerScratchpad.setAttribute("aria-pressed", String(scratch));
     pickerBookmarks.setAttribute("aria-pressed", String(marked));
-    pickerNote.hidden = !all && !marked;
+    pickerNote.hidden = !scratch && !marked;
     const opens = state.doc?.sessionId ? "Opens in this session." : "Opens without a send target.";
-    if (all) {
-      pickerNote.textContent = picker.loading ? "Loading retained history…" : picker.warnings.length
-        ? `Some history could not be read (${picker.warnings.length} warnings):\n${picker.warnings.join("\n")}`
-        : `Stored history, including ended sessions. ${opens}`;
+    if (scratch) {
+      const shown = scratchpad.found > scratchpad.documents.length
+        ? `Showing ${scratchpad.documents.length} of ${scratchpad.found} files. ` : "";
+      pickerNote.textContent = scratchpad.loading ? "Loading scratchpad…" : !scratchpad.available
+        ? "Only Claude Code sessions have a scratchpad."
+        : scratchpad.warnings.length ? `${shown}${scratchpad.warnings.join("\n")}`
+          : `${shown}Markdown in this session's scratchpad, newest first.`;
     } else if (marked) {
       const shown = bookmarks.found > bookmarks.documents.length
         ? `Showing ${bookmarks.documents.length} of ${bookmarks.found} bookmarked files. ` : "";
@@ -967,8 +966,9 @@
     if (picker.filtered.length === 0) {
       const li = document.createElement("li");
       li.className = "empty";
-      li.textContent = all && picker.loading ? "loading…" : all && picker.documents.length === 0
-        ? "No existing Markdown files in retained history"
+      li.textContent = scratch && scratchpad.loading ? "loading…" : scratch && !scratchpad.available
+        ? "No scratchpad for this session"
+        : scratch && scratchpad.documents.length === 0 ? "No Markdown in this session's scratchpad yet"
         : marked && bookmarks.loading ? "loading…" : marked && bookmarks.documents.length === 0
           ? `No bookmarked Markdown files. ${BOOKMARKS_HINT}`
           : documents && state.doc?.sessionId && picker.items.length === 0 ? "This session has not written any Markdown yet" : "no matches";
@@ -1319,11 +1319,12 @@
   function receive(message) {
     switch (message.type) {
       case "render": render(message); break;
-      case "all-documents":
-        picker.documents = message.documents;
-        picker.warnings = message.warnings;
-        picker.loading = false;
-        if (!pickerEl.hidden && picker.kind === "documents" && picker.scope === "all") updatePickerItems();
+      case "scratchpad":
+        Object.assign(scratchpad, {
+          documents: message.documents, found: message.found, warnings: message.warnings,
+          available: message.available, loading: false,
+        });
+        if (!pickerEl.hidden && picker.kind === "documents" && picker.scope === "scratchpad") updatePickerItems();
         break;
       case "bookmarks":
         bookmarks.documents = message.documents;

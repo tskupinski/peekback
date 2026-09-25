@@ -15,7 +15,8 @@
   changed in the same directory, a file you edited after the agent wrote it
   could drop out, and resuming an old session widened the window to days.
   Now the files a turn's scan finds are kept with the session, so they stay
-  listed after later edits and after resuming, and All sessions shows them too.
+  listed after later edits and after resuming, and `browse --all-sessions`
+  shows them too.
 - Capture files written by subagents from their transcripts, since some Claude
   Code versions do not report subagent tool calls to hooks.
 - Mark files found only by a scan, and those found while another session was
@@ -24,6 +25,10 @@
   not pick up files from worktrees inside it.
 - Remove `--candidates` from `browse` and `activity files`; every view now
   reads stored history.
+- Replace the picker's All sessions scope with Scratchpad, which lists the
+  Markdown in the current Claude Code session's scratchpad, newest first, live
+  when the scope opens. All sessions mixed every session's history into one
+  list; `peekback browse --all-sessions` still browses it in the terminal.
 - Treat a session whose agent process has exited as ended, so an agent killed
   without `SessionEnd` no longer lingers in the session list, the hotkey
   fallback and session resolution. `peekback status --prune` now removes such
