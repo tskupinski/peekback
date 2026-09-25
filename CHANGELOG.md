@@ -5,7 +5,9 @@
 - Open the hotkey on the tmux pane you are actually in. The daemon inherited
   the pane of whichever terminal started it, and tmux answered every "which
   pane is active" query for that pane's window, so the hotkey kept opening a
-  session from that window.
+  session from that window. The active pane is now the one of the tmux
+  server's most recently used client, and a server with no client attached
+  has none.
 - Send to the pane the agent actually runs in when multiplexers are nested.
   A WezTerm window opened from tmux inherits `TMUX_PANE`, so text went to the
   tmux pane instead, and the hotkey and `--pane` could open it for the tmux

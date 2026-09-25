@@ -66,9 +66,24 @@ pub fn send(pane: &Pane, text: &str) -> Result<()> {
     run(tmux(socket).args(["paste-buffer", "-p", "-b", &buffer, "-t", id, "-d"]))
 }
 
-/// The pane the most recently used client of this tmux server is on.
+/// The pane the most recently used client of this tmux server is on. Asked
+/// per client rather than left to tmux's choice of current client, which
+/// falls back to a session even when no client is attached.
 pub fn active_pane(socket: &str) -> Option<String> {
-    output(tmux(socket).args(["display-message", "-p", "#{pane_id}"])).ok().filter(|pane| !pane.is_empty())
+    let clients = output(tmux(socket).args(["list-clients", "-F", "#{client_activity} #{pane_id}"])).ok()?;
+    most_recent_client_pane(&clients)
+}
+
+fn most_recent_client_pane(clients: &str) -> Option<String> {
+    clients
+        .lines()
+        .filter_map(|line| {
+            let (activity, pane) = line.split_once(' ')?;
+            Some((activity.parse::<u64>().ok()?, pane))
+        })
+        .filter(|(_, pane)| !pane.is_empty())
+        .max_by_key(|(activity, _)| *activity)
+        .map(|(_, pane)| pane.to_owned())
 }
 
 #[cfg(test)]
@@ -78,6 +93,13 @@ mod tests {
     #[test]
     fn tmux_commands_ignore_the_pane_they_were_started_from() {
         super::super::assert_no_ambient(&tmux("/socket"));
+    }
+
+    #[test]
+    fn the_active_pane_is_the_most_recently_used_clients() {
+        assert_eq!(most_recent_client_pane("1790353100 %3\n1790353127 %921\n1790353050 %887").as_deref(), Some("%921"));
+        assert_eq!(most_recent_client_pane(""), None);
+        assert_eq!(most_recent_client_pane("garbage\n1790353100 "), None);
     }
 
     #[test]
