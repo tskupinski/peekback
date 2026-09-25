@@ -870,3 +870,46 @@ fn an_unreadable_capture_job_is_set_aside_after_one_failure() {
     assert!(jobs.join("1.corrupt").exists());
     retry(&root, &key, Retry::Automatic).unwrap();
 }
+
+#[test]
+fn the_lifecycle_change_lands_before_a_capture_without_a_job_waits_on_the_store() {
+    use std::os::unix::io::AsRawFd;
+    let f = Fixture::new();
+    let root = f.0.join("state");
+    let key = crate::registry::SessionKey { agent: Agent::Claude, session_id: "test-session".into() };
+    let store_dir = root.join("activity/claude/test-session");
+    // A reader holding the store stalls the capture, which needs it
+    // exclusively. The hook would be killed at its timeout; the lifecycle
+    // change must already be on disk by then.
+    let hold_store = || {
+        fs::create_dir_all(&store_dir).unwrap();
+        let held = fs::File::options().create(true).truncate(false).write(true).open(store_dir.join(".lock")).unwrap();
+        assert_eq!(unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_SH) }, 0);
+        held
+    };
+    let run = |event: &'static str| {
+        let (root, cwd) = (root.clone(), f.project());
+        std::thread::spawn(move || {
+            let input = json!({"session_id":"test-session", "hook_event_name":event, "cwd":cwd});
+            crate::hooks::register(&root, Agent::Claude, &input, crate::registry::now_unix(), Default::default())
+        })
+    };
+    let settled = |check: &dyn Fn() -> bool| {
+        (0..100).any(|_| check() || (std::thread::sleep(std::time::Duration::from_millis(20)), false).1)
+    };
+    for event in ["Stop", "SessionEnd"] {
+        f.hook(None, "UserPromptSubmit", json!({}));
+        fs::write(f.project().join(format!("{event}.md")), "# New").unwrap(); // Something to capture.
+        fs::write(root.join("pending-captures"), "not a directory").unwrap();
+        let held = hold_store();
+        let hook = run(event);
+        let landed = settled(&|| match event {
+            "Stop" => f.session().turn_started_at.is_none(),
+            _ => crate::lifecycle::ended(&root, &key),
+        });
+        drop(held);
+        assert!(hook.join().unwrap().is_err()); // The unsaved job is still reported.
+        assert!(landed, "{event} did not persist its lifecycle change while the capture waited");
+        fs::remove_file(root.join("pending-captures")).unwrap();
+    }
+}

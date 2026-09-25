@@ -161,9 +161,11 @@ pub(crate) fn prune_in(root: &Path, max_idle_secs: i64) -> Vec<Session> {
         // A session that died mid-turn gets that turn captured, as SessionEnd
         // would have done.
         let turn = session.turn_started_at.map(|started_at| crate::capture::abandoned(&session, started_at));
-        if let Err(error) = crate::capture_jobs::enqueue(root, &session, turn) {
+        // Without a job, the session is still pruned and captured directly
+        // afterwards, as a hook does.
+        let queued = crate::capture_jobs::enqueue(root, &session, turn);
+        if let Err(error) = &queued {
             eprintln!("retain capture before pruning {}: {error:#}", session.session_id);
-            continue;
         }
         if let Err(error) = crate::turn_history::record(root, &session, turn) {
             eprintln!("retain turns before pruning {}: {error:#}", session.session_id);
@@ -173,7 +175,14 @@ pub(crate) fn prune_in(root: &Path, max_idle_secs: i64) -> Vec<Session> {
         {
             eprintln!("capture before pruning {}: {error:#}", session.session_id);
         }
-        if crate::lifecycle::end(root, &session.activity_key()).is_ok() {
+        let ended = crate::lifecycle::end(root, &session.activity_key()).is_ok();
+        if queued.is_err() {
+            let store = session_activity::Store::new(root.join("activity"));
+            if let Err(error) = crate::capture::capture(root, &session, &store, turn) {
+                eprintln!("capture after pruning {}: {error:#}", session.session_id);
+            }
+        }
+        if ended {
             removed.push(session);
         }
     }

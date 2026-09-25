@@ -172,7 +172,9 @@ come many times a turn, do not. A job counts its failures, and after three
 only `peekback activity retry --agent <AGENT> --session <ID>` retries it,
 which also works after session exit. An unreadable job is renamed to
 `.corrupt` and reported once. If a job cannot be saved at all, the hook
-captures from the same context immediately and still closes the turn. A retry preserves context,
+still closes the turn or session first, then captures from the same context,
+since a capture can wait on the store's lock past the hook's timeout. Pruning
+does the same. A retry preserves context,
 not a filesystem snapshot: files changed again before retry may no longer
 provide evidence for the original turn.
 
@@ -307,9 +309,11 @@ matching accepted list. Registry changes are coalesced; a five-second refresh
 also catches process exits and activity maintenance without a registry event.
 
 The socket accepts at most 16 concurrent connections, requests up to 64 KiB,
-and uses absolute read deadlines and bounded response waits. Queued socket
-opens expire before application rather than opening a file after their client
-has timed out. Page messages are capped at 4 MiB.
+and uses absolute read deadlines and bounded response waits. Each request
+carries the wall-clock time its client stops waiting, set at connection; the
+daemon converts it to its own clock when it reads the request, keeps a margin
+for the reply, and applies nothing after it, however long it was stopped or
+busy in between. Requests without one get two seconds from being read. Page messages are capped at 4 MiB.
 
 Wry hosts the embedded page at `peekback://app/`. The page sends messages through
 `window.ipc.postMessage`; Rust pushes updates through JavaScript evaluation.

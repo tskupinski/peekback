@@ -63,16 +63,17 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
         }
         context
     });
+    let queued = capture_context.as_ref().map_or(Ok(()), |context| crate::capture_jobs::enqueue(root, context, closed));
     // A job that cannot be saved must not keep the session open or its turn
-    // unclosed. Capture now from the same context instead, and report why no
-    // retry is possible after the session is updated.
-    let queued = match &capture_context {
-        Some(context) => crate::capture_jobs::enqueue(root, context, closed).inspect_err(|_| {
+    // unclosed. The lifecycle change is persisted first; then the capture runs
+    // from the same context, since it can wait on the store's lock past the
+    // hook's timeout. The save error is what the hook reports.
+    let without_job = || {
+        if let (Err(_), Some(context)) = (&queued, &capture_context) {
             if let Err(error) = capture::capture(root, context, &store, closed) {
                 eprintln!("capture without a pending job: {error:#}");
             }
-        }),
-        None => Ok(()),
+        }
     };
     let retained = if closed.is_some() || event == "SessionEnd" {
         previous.as_ref().map_or(Ok(()), |s| crate::turn_history::record(root, s, closed))
@@ -84,10 +85,15 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
         crate::lifecycle::mark_ended(root, &key)?;
         let captured = crate::capture_jobs::retry(root, &key, Retry::Automatic);
         crate::lifecycle::end(root, &key)?;
+        without_job();
         return queued.and(retained).and(captured);
     }
-    let Some(cwd) = input["cwd"].as_str().map(Path::new).filter(|p| p.is_absolute()) else { return queued };
+    let Some(cwd) = input["cwd"].as_str().map(Path::new).filter(|p| p.is_absolute()) else {
+        without_job();
+        return queued;
+    };
     if !input["transcript_path"].is_null() && !input["transcript_path"].is_string() {
+        without_job();
         return queued;
     }
     let mut session = Session {
@@ -127,6 +133,7 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     // Late tools may contribute useful history, but only SessionStart can
     // explicitly reopen a session after an end marker has been published.
     if event != "SessionStart" && crate::lifecycle::ended(root, &key) {
+        without_job();
         return queued;
     }
     // A failed capture must still record the new turn state, so its error is
@@ -164,6 +171,7 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
         let _ = fs::remove_file(tmp);
     }
     result?;
+    without_job();
     // Tool hooks come many times a turn; boundaries are enough to retry at.
     if matches!(event, "PostToolUse" | "PostToolUseFailure") {
         return queued.and(retained);
