@@ -61,14 +61,16 @@ async function main() {
     }) : [];
   } });
   const messages = [];
+  const schemeListeners = [];
+  let mermaidInits = 0;
   const window = Object.assign(new Element(), {
-    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    matchMedia: () => ({ matches: false, addEventListener(_, fn) { schemeListeners.push(fn); } }),
     markdownit: () => ({ use() { return this; }, render(source) { return source; } }),
     ipc: { postMessage: text => messages.push(JSON.parse(text)) },
     scrollTo() {},
   });
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../assets/app.js"), "utf8"), {
-    window, document, console, CSS: {}, mermaid: { initialize() {} }, renderMathInElement() {},
+    window, document, console, CSS: {}, mermaid: { initialize() { mermaidInits += 1; } }, renderMathInElement() {},
     localStorage: { getItem() { return null; }, setItem() {} },
     setInterval() {}, setTimeout() {}, clearTimeout() {},
   });
@@ -296,6 +298,11 @@ async function main() {
   key("s"); key("c");
   assert.equal(messages.length, beforeRender); // No action may use the previous render's block ranges.
   await new Promise(setImmediate);
+
+  // A system light/dark switch with system colors re-themes diagrams.
+  const initsBefore = mermaidInits;
+  for (const fn of schemeListeners) fn({ matches: true });
+  assert.equal(mermaidInits, initsBefore + 1);
   console.log("Session isolation passed: drafts, delivery identity, acknowledgments, copied drafts, stale listings, rendering actions.");
 }
 

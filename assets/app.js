@@ -268,13 +268,11 @@
     return 0.2126 * r + 0.7152 * g + 0.0722 * b;
   }
 
+  // Font overrides stay as applyTheme left them; only diagram colors follow
+  // the system scheme.
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (document.documentElement.dataset.theme) return;
     mermaidOptions = mermaidDefaults();
-    if (theme?.font_family) root.style.setProperty("--mono", `"${theme.font_family}", ui-monospace, Menlo, monospace`);
-    else root.style.removeProperty("--mono");
-    if (theme?.font_size) root.style.setProperty("--mono-size", `${theme.font_size}px`);
-    else root.style.removeProperty("--mono-size");
     mermaid.initialize(mermaidOptions);
     rerender();
   });
