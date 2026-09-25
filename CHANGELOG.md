@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Open the hotkey on the tmux pane you are actually in. The daemon inherited
+  the pane of whichever terminal started it, and tmux answered every "which
+  pane is active" query for that pane's window, so the hotkey kept opening a
+  session from that window.
+
 ## 0.2.0 - 2026-09-25
 
 Session files are now decided when each turn ends and stored, instead of

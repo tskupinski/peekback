@@ -137,7 +137,10 @@ fn available(backend: Backend, session: &Session) -> bool {
 
 fn tmux(socket: &str) -> Command {
     let mut cmd = Command::new("tmux");
-    cmd.arg("-S").arg(socket);
+    // The daemon inherits the pane of whichever agent hook spawned it, and
+    // tmux resolves untargeted commands against TMUX_PANE, which would pin
+    // "the active pane" to that pane's window forever.
+    cmd.arg("-S").arg(socket).env_remove("TMUX").env_remove("TMUX_PANE");
     cmd
 }
 
@@ -293,6 +296,14 @@ mod keystroke {
 mod tests {
     use super::*;
     use crate::process::ProcessId;
+
+    #[test]
+    fn tmux_commands_ignore_the_pane_they_were_started_from() {
+        let cmd = tmux("/socket");
+        let removed: Vec<_> = cmd.get_envs().filter(|(_, value)| value.is_none()).map(|(key, _)| key).collect();
+        assert!(removed.contains(&std::ffi::OsStr::new("TMUX")));
+        assert!(removed.contains(&std::ffi::OsStr::new("TMUX_PANE")));
+    }
 
     #[test]
     fn pasted_text_cannot_carry_control_sequences() {
