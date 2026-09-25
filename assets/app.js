@@ -866,7 +866,8 @@
 
   // Listed live, so files show up as soon as they are written, mid-turn too.
   function refreshScratchpad() {
-    scratchpad.loading = true;
+    // The previous list may belong to another session; never offer it meanwhile.
+    Object.assign(scratchpad, { documents: [], found: 0, warnings: [], loading: true });
     post({ type: "list-scratchpad" });
   }
 
@@ -931,7 +932,7 @@
       const shown = scratchpad.found > scratchpad.documents.length
         ? `Showing ${scratchpad.documents.length} of ${scratchpad.found} files. ` : "";
       pickerNote.textContent = scratchpad.loading ? "Loading scratchpad…" : !scratchpad.available
-        ? "Only Claude Code sessions have a scratchpad."
+        ? "No scratchpad: the session has ended, or it is not a Claude Code session."
         : scratchpad.warnings.length ? `${shown}${scratchpad.warnings.join("\n")}`
           : `${shown}Markdown in this session's scratchpad, newest first.`;
     } else if (marked) {

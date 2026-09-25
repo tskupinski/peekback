@@ -140,7 +140,9 @@ pub fn run() -> Result<()> {
     let mut current: Option<Current> = None;
     let mut page_ready = false;
     let mut current_theme: Option<Theme> = None;
-    let mut scratchpad_list = bookmarks::Listing::default();
+    // The session the scratchpad list belongs to; files from it may only open
+    // while that session is still the viewer's.
+    let mut scratchpad_list: (Option<String>, bookmarks::Listing) = Default::default();
     let mut bookmark_list = bookmarks::Listing::default();
 
     eprintln!("peekback daemon listening on {}", paths::socket_path().display());
@@ -179,11 +181,11 @@ pub fn run() -> Result<()> {
 
         match event {
             Event::UserEvent(UserEvent::Page(PageMessage::ListScratchpad)) => {
-                let session = current.as_ref().and_then(|c| c.session.as_ref());
-                // Codex sessions and standalone documents have no scratchpad.
+                scratchpad_list = Default::default();
+                // Ended and Codex sessions and standalone documents have none.
+                let session = live_session_id(&current).and_then(|id| registry::find(&id));
                 let Some((session_id, dir)) = session.and_then(|s| Some((s.session_id.clone(), s.scratchpad_dir()?)))
                 else {
-                    scratchpad_list = bookmarks::Listing::default();
                     view.push(&DaemonMessage::Scratchpad { available: false, documents: &[], found: 0, warnings: &[] });
                     return;
                 };
@@ -199,18 +201,21 @@ pub fn run() -> Result<()> {
                 if live_session_id(&current).as_deref() != Some(session_id.as_str()) {
                     return;
                 }
-                scratchpad_list = listing;
+                scratchpad_list = (Some(session_id), listing);
+                let listing = &scratchpad_list.1;
                 if page_ready {
                     view.push(&DaemonMessage::Scratchpad {
                         available: true,
-                        documents: &scratchpad_list.documents,
-                        found: scratchpad_list.found,
-                        warnings: &scratchpad_list.warnings,
+                        documents: &listing.documents,
+                        found: listing.found,
+                        warnings: &listing.warnings,
                     });
                 }
             }
             Event::UserEvent(UserEvent::Page(PageMessage::OpenScratchpad { path })) => {
-                if !scratchpad_list.documents.iter().any(|d| d.path == path) {
+                let (owner, listing) = &scratchpad_list;
+                let listed = listing.documents.iter().any(|d| d.path == path);
+                if owner.is_none() || *owner != live_session_id(&current) || !listed {
                     view.push(&DaemonMessage::Toast { text: "That file is not in this session's scratchpad" });
                     return;
                 }

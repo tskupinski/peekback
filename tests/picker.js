@@ -104,6 +104,7 @@ async function main() {
 
   window.dispatch("keydown", { key: "p", ctrlKey: true });
   assert.deepEqual(messages.at(-1), { type: "list-scratchpad" }); // Refresh on reopen.
+  assert.equal(element("picker-list").children[0].textContent, "loading…"); // Never the previous session's list.
   input.dispatch("keydown", { key: "Tab", shiftKey: true }); // Shift-Tab cycles backwards.
   receive({ type: "scratchpad", available: true, documents: notes, found: 45, warnings: [] }); // Late reply keeps scope.
   assert.equal(element("picker-current").attributes["aria-pressed"], "true");
@@ -113,7 +114,7 @@ async function main() {
   assert.match(element("picker-list").children[0].textContent, /No Markdown in this session's scratchpad yet/);
   receive({ type: "scratchpad", available: false, documents: [], found: 0, warnings: [] });
   assert.match(element("picker-list").children[0].textContent, /No scratchpad for this session/);
-  assert.match(element("picker-note").textContent, /Only Claude Code sessions/);
+  assert.match(element("picker-note").textContent, /has ended, or it is not a Claude Code session/);
   input.dispatch("keydown", { key: "r", ctrlKey: true });
   assert.match(element("picker-note").textContent, /Loading/);
   console.log("Picker passed: scopes, scratchpad listing, filtering, caps, >30 results, opening, refresh, no scratchpad.");
