@@ -99,7 +99,8 @@
 
     rendering = true;
     state.blocks = [];
-    if (!sameContext(state.doc?.context, message.context)) {
+    const contextChanged = !sameContext(state.doc?.context, message.context);
+    if (contextChanged) {
       for (const listing of [scratchpad, bookmarks]) Object.assign(listing, { documents: [], request_id: null, loading: false });
     }
     state.lastRender = message;
@@ -112,6 +113,9 @@
       documents: message.documents,
       label: labelFor(message.path, message.documents),
     };
+    // A live reload starts a new view too; an open listing is asked for again
+    // under it rather than left empty.
+    if (contextChanged && !pickerEl.hidden && picker.kind === "documents") refreshScope();
     document.title = `${state.doc.label} - peekback`;
     bannerEl.hidden = true;
     noDocumentsEl.hidden = message.path !== null;
@@ -527,7 +531,7 @@
     if (rendering || comments.length === 0) return setMessage("no pending comments for this session");
     if (commentsInFlight) return setMessage("still sending the previous batch");
     const request_id = post({ type: "send", text: commentsPrompt(comments), purpose: "comments" });
-    commentsInFlight = { request_id, ids: comments.map(c => c.id) };
+    if (request_id !== null) commentsInFlight = { request_id, ids: comments.map(c => c.id) };
   }
 
   function onSendResult(message) {
@@ -1339,12 +1343,20 @@
     setMessage(text);
   }
 
+  // The daemon drops larger messages without a reply.
+  const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
+
   function post(message) {
     if (["send", "switch", "list-bookmarks", "list-scratchpad", "open-bookmark", "open-scratchpad"].includes(message.type)) {
       message.context = state.doc?.context ?? { generation: 0, session: null };
       message.request_id ??= nextRequestId++;
     }
-    window.ipc.postMessage(JSON.stringify(message));
+    const body = JSON.stringify(message);
+    if (new TextEncoder().encode(body).length > MAX_MESSAGE_BYTES) {
+      toast("Too large to send; select less text");
+      return null;
+    }
+    window.ipc.postMessage(body);
     return message.request_id;
   }
 

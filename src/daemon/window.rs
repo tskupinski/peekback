@@ -47,6 +47,7 @@ pub fn create(event_loop: &EventLoop<UserEvent>, placement: Placement, split: f6
                 return;
             }
             if message.body().len() > 4 * 1024 * 1024 {
+                eprintln!("ignored page message of {} bytes", message.body().len());
                 return;
             }
             match serde_json::from_str::<PageMessage>(message.body()) {

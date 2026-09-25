@@ -70,7 +70,7 @@ async function main() {
     scrollTo() {},
   });
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../assets/app.js"), "utf8"), {
-    window, document, console, CSS: {}, mermaid: { initialize() { mermaidInits += 1; } }, renderMathInElement() {},
+    window, document, console, CSS: {}, TextEncoder, mermaid: { initialize() { mermaidInits += 1; } }, renderMathInElement() {},
     localStorage: { getItem() { return null; }, setItem() {} },
     setInterval() {}, setTimeout() {}, clearTimeout() {},
   });
@@ -149,6 +149,12 @@ async function main() {
   receive({ type: "bookmarks", documents: marks, found: 250, warnings: ["docs/[.md: unclosed character class"] });
   assert.deepEqual(element("picker-list").children.map(li => li.children[0].textContent), ["~/.claude/CLAUDE.md", "CLAUDE.md"]);
   assert.match(element("picker-note").textContent, /Showing 2 of 250 bookmarked files\. Some bookmarks could not be listed:\ndocs\/\[\.md/);
+  // A live reload of the viewed file is a new view; the open listing is asked for again.
+  receive({ type: "render", path: "/current.md", source: "Edited", session: { session_id: "live" },
+    documents: [{ path: "/current.md", label: "current.md", touched_at: 1 }] });
+  expectRequest({ type: "list-bookmarks" });
+  receive({ type: "bookmarks", documents: marks, found: 250, warnings: ["docs/[.md: unclosed character class"] });
+  await new Promise(setImmediate);
   input.dispatch("keydown", { key: "Tab" });
   assert.equal(element("picker-current").attributes["aria-pressed"], "true"); // Tab wraps around.
   input.dispatch("keydown", { key: "Tab", shiftKey: true });
@@ -200,6 +206,19 @@ async function main() {
   element("comments").children[0].children[2].dispatch("click");
   assert.equal(marked().length, 0);
   assert.equal(element("doc").children[1].attributes.title, undefined);
+
+  // Too large for the daemon: refused in the page, and not left "in flight".
+  const huge = "x".repeat(4.5 * 1024 * 1024);
+  await render("/huge.md", huge);
+  command("c Too much");
+  const beforeHuge = messages.length;
+  command("sendall");
+  assert.equal(messages.length, beforeHuge);
+  assert.match(element("toast").textContent, /Too large to send/);
+  command("sendall");
+  assert.match(element("toast").textContent, /Too large to send/); // Not "still sending".
+  element("comments").children[0].children[2].dispatch("click");
+  await render();
 
   key("g"); key("g"); key("c");
   await render("/other.md");
