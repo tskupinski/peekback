@@ -2,6 +2,7 @@ mod activity;
 mod assets;
 mod bookmarks;
 mod browse;
+mod capture;
 mod client;
 mod config;
 mod daemon;

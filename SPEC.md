@@ -18,7 +18,7 @@ present that evidence.
 | `crates/session-activity/` | Agent adapters, event schemas, path normalization, storage, scans, reconciliation, compaction and retention |
 | `src/setup.rs`, `src/hooks.rs` | Agent hook configuration and collection |
 | `src/registry.rs`, `src/lifecycle.rs` | Live sessions, terminal identity, lifecycle locks and end markers |
-| `src/activity.rs`, `src/discovery.rs` | Application scan roots, JSON queries, Markdown filtering |
+| `src/activity.rs`, `src/discovery.rs` | Turn capture roots, JSON queries, Markdown filtering |
 | `src/browse.rs` | Interactive terminal browser and plain listing |
 | `src/client.rs`, `src/protocol.rs`, `src/daemon/` | Viewer IPC, native window, file watchers, global hotkey |
 | `src/send.rs`, `src/theme.rs` | Terminal paste backends and terminal appearance |
@@ -48,12 +48,14 @@ and `SessionEnd`. Claude additionally registers `PostToolUseFailure`. The
 collector receives JSON on stdin and captures terminal identifiers from the
 hook environment. The library recognizes supported Claude file tools and
 Codex `apply_patch` operations; shell commands and Codex transcripts are not
-parsed for file effects.
+parsed for file effects. Files written through shell commands are found by
+the turn capture described under File evidence.
 
 Hooks maintain two different kinds of state:
 
 - The live registry holds session IDs, agent, cwd, optional transcript path,
-  timestamps, and terminal metadata used for preview selection and sending.
+  timestamps, the start of the open turn, and terminal metadata used for
+  preview selection and sending.
 - The activity store holds versioned file observations keyed by agent and
   session ID. It stores metadata and evidence, not prompts or document bodies.
 
@@ -80,9 +82,11 @@ files are written through unique temporary files, synced, and renamed. A
 legacy observations and removing the live entry. Existing retained activity
 survives session exit and pruning. A late tool hook can append observations
 without reopening a closed session; an explicit `SessionStart` reopens it.
+A resumed session keeps everything it captured before.
 
 `peekback status --prune` closes entries with no hook or transcript activity in
-24 hours. Pruning does not perform the transcript import done by `SessionEnd`.
+24 hours. Pruning does not run a capture, so files from a turn that was still
+open when the agent died are not recorded.
 The live registry still uses native session IDs and rejects registration of
 an ID already owned by another agent; the retained store uses both agent and
 session ID. Hooks provide no reliable process generation, so an old start/end
@@ -94,51 +98,99 @@ calling process, then the most recently active live session. Retained browsing
 can select an ended session by agent and ID, or all sessions without a live
 registry entry.
 
-## File evidence and discovery
+## File evidence and capture
 
 A file event records its session, path, operation, outcome, source, timestamp,
-cwd, optional tool call ID, and optional rename origin. Outcomes can be
-`succeeded`, `failed`, or `unknown`; observing a tool request alone does not
-prove a successful write.
+cwd, optional tool call ID, optional rename origin, and the sessions that were
+working concurrently when a scan observed it. Outcomes can be `succeeded`,
+`failed`, or `unknown`; observing a tool request alone does not prove a
+successful write.
 
 The library reconciles retries and known outcomes while preserving their
 sources. Conflicting known outcomes remain visible. Files are grouped by
 lexically normalized path; rename origins and destinations both appear.
-Symlink aliases are not unified. Scan observations remain candidates and are
-never promoted to attributed writes.
+Symlink aliases are not unified. Scan observations are never promoted to
+attributed writes.
 
-Current-session queries combine retained hooks with available Claude transcript
-and legacy registry observations. Optional candidate discovery scans:
+Ownership is decided once, when evidence is captured, and stored. Views only
+read the store: nothing is inferred from the filesystem at display time, so a
+session's files do not change when someone else edits them later, and a
+resumed session, the terminal browser and All sessions all show the same list.
 
-- The Claude scratchpad associated with its transcript's project directory.
-- The Claude project's memory directory, one level deep.
-- The session cwd, four levels deep, for files modified since session start.
+### Sources
 
-The roots share a 20,000-entry budget. Hidden/build directories and symlink
-directories are skipped; the app avoids project scans of `/` or the home
-directory. Depth limits, budget exhaustion, and read failures produce warnings.
-Scans are heuristic: files another process changed during the session may be
-included. Candidates are computed at query time and are not retained by these
-queries. Claude transcript parsing is best-effort and can be incomplete without
-a diagnostic report.
+- **Hooks**, live. `PostToolUse` and `PostToolUseFailure` for Claude file
+  tools and Codex `apply_patch` are appended as they happen, from the main
+  agent and from subagents when the agent version reports their tool calls.
+- **Claude transcripts**, backfill. The main transcript and every subagent
+  transcript under `<transcript stem>/subagents/` are parsed at each capture,
+  and events not already stored are appended. Hook coverage of subagent tool
+  calls varies between Claude Code versions and agent types, so transcripts
+  are what makes subagent writes reliable. Parsing is best-effort and can be
+  incomplete without a diagnostic report.
+- **Turn scans**, for effects no tool reports, such as shell redirection,
+  scripts, `cp` and `mv`. Stored as `observed` with a scan source.
+- **Legacy registry** paths from older registry versions.
+
+### Turns
+
+A turn opens at `UserPromptSubmit`, whose time the registry keeps, and closes
+at `Stop`. Claude sends no `Stop` for an interrupted turn, so a
+`UserPromptSubmit` or `SessionEnd` also closes the open turn. Each close runs a
+capture under the session's lifecycle lock, then the transcript backfill:
+
+| Root | Depth | Accepted modification time |
+| --- | --- | --- |
+| Session cwd | 4 | within the turn, with 2 seconds of slack |
+| Claude memory directory | 1 | within the turn, with 2 seconds of slack |
+| Claude scratchpad | unlimited | any; the path belongs to this session alone |
+
+The roots share a 20,000-entry budget. Hidden and build directories, symlinked
+directories, and nested checkouts (a directory containing a `.git` entry below
+the root) are skipped; the cwd scan is skipped for `/` and the home directory.
+Budget exhaustion and read failures are reported on the hook's stderr; depth
+limits are policy and are not reported. A capture must finish well inside the
+hook timeout; the measured cost in a large Rails worktree is about 0.15
+seconds including transcript parsing.
+
+A modification time only shows the last change, which is why the decision is
+made and stored at the end of the turn: a later edit outside any turn does not
+remove the file from the session.
+
+Hook-reported writes appear immediately. Shell-written files appear when the
+turn closes.
+
+### Concurrent sessions
+
+Two sessions working in the same directory at the same time cannot be told
+apart by the filesystem. A scan event lists the other registered sessions whose
+cwd or memory directory contains the path and whose open turn, or a turn closed
+within the last 24 hours, covers its modification time. Both sessions capture
+the file; views mark it as possibly written by another session in each session
+that recorded the overlap. A session that ended before the capture is no longer
+registered and is not listed. Separate
+git worktrees avoid the overlap, since each session scans only its own
+directory and nested checkouts are skipped.
+
+### Views
 
 The terminal browser includes all file types, reads, failed operations, missing
-paths, and rename origins. Scans are opt-in with `--candidates`. The viewer
-includes candidates for a live session but filters to existing `.md` or
-`.markdown` files, excluding reads and failed operations after reconciliation.
-Both views sort by latest observed activity.
+paths, and rename origins, and labels scan evidence. The viewer filters to
+existing `.md` or `.markdown` files, excluding reads and failed operations after
+reconciliation, and marks scan evidence. Both sort by latest observed activity
+and refresh from the store when the registry changes.
 
-All sessions mode reads retained history only. It neither parses all old
-transcripts nor scans old projects. It merges identical paths while keeping
-agent/session provenance. Consequently, a candidate visible in a live session
-may not appear in All sessions. An all-session Markdown preview never infers a
-send-back target from the file: it stays in the session the viewer or browser
-was opened from, and is standalone when there is none.
+All sessions mode reads the same stored history for every session, merging
+identical paths while keeping agent/session provenance. An all-session
+Markdown preview never infers a send-back target from the file: it stays in the
+session the viewer or browser was opened from, and is standalone when there is
+none.
 
 ## Storage and maintenance
 
 The store writes immutable JSON batches with validated session identity,
-absolute paths, and schema versions. Files are synced and atomically renamed;
+absolute paths, and schema versions. Schema 2 adds the concurrent sessions of
+scan events; schema 1 batches remain readable and have none. Files are synced and atomically renamed;
 Unix directory syncing strengthens crash durability within filesystem
 guarantees. Partial temporary files are ignored.
 
@@ -275,8 +327,10 @@ Codex desktop and IDE composers are outside the supported integration.
 
 ## Deliberate limits
 
-This is observed file activity, not a complete filesystem audit. Unsupported
-tools and arbitrary shell effects may be missed. Documents always show current
+This is observed file activity, not a complete filesystem audit. Shell effects
+outside the scanned roots, background jobs that finish after their turn, and
+turns open when an agent dies without `SessionEnd` are missed. Simultaneous
+shell writes by two sessions in one directory are attributed to both. Documents always show current
 contents, not what a session saw at the time. Historical content snapshots,
 viewer editing, persistent comments, MCP-based comment exchange, and automatic
 prompt submission are outside the current implementation.

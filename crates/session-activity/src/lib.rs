@@ -11,10 +11,13 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub use adapters::{hook_events, transcript_events};
+pub use adapters::{hook_events, subagent_transcripts, transcript_events};
 pub use maintenance::MaintenanceReport;
 pub use query::{FileActivity, ScanReport, ScanRoot, ScanWarning, files, reconcile, scan, scan_report};
 pub use store::{BatchWarning, ReadReport, SessionReport, Store};
+
+/// Schema 2 adds `FileEvent::concurrent`. Schema 1 batches remain readable.
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -105,6 +108,10 @@ pub struct FileEvent {
     pub source: Source,
     pub outcome: Outcome,
     pub tool_call_id: Option<String>,
+    /// Other sessions that were working where a scan observed this file, so
+    /// the filesystem cannot tell which of them changed it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub concurrent: Vec<SessionKey>,
 }
 
 impl FileEvent {
@@ -117,7 +124,7 @@ impl FileEvent {
         source: Source,
     ) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             session: session.clone(),
             timestamp,
             cwd: cwd.to_path_buf(),
@@ -127,6 +134,7 @@ impl FileEvent {
             source,
             outcome: Outcome::Unknown,
             tool_call_id: None,
+            concurrent: Vec::new(),
         }
     }
 }

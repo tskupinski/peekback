@@ -55,6 +55,20 @@ impl Fixture {
     }
 }
 
+/// Backdate a file, since captures compare modification times with turns.
+fn age(path: &std::path::Path, secs: u64) {
+    let at = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+    fs::File::options().write(true).open(path).unwrap().set_modified(at).unwrap();
+}
+
+fn store(f: &Fixture) -> session_activity::Store {
+    session_activity::Store::new(f.0.join("state/activity"))
+}
+
+fn documents(f: &Fixture) -> Vec<PathBuf> {
+    discovery::documents_in(&f.session(), &store(f)).into_iter().map(|d| d.path).collect()
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
@@ -130,10 +144,11 @@ fn codex_discovers_patch_paths_and_shell_written_project_files() {
     let hidden = f.project().join(".hidden/plan.md");
     let moved = f.project().join("renamed.MARKDOWN");
     let shell = f.project().join("shell.md");
+    f.hook(Some("codex"), "SessionStart", json!({}));
+    f.hook(Some("codex"), "UserPromptSubmit", json!({}));
     for path in [&external, &hidden, &moved, &shell] {
         fs::write(path, "# Plan\n").unwrap();
     }
-    f.hook(Some("codex"), "SessionStart", json!({}));
     let patch = format!(
         "*** Begin Patch\n*** Add File: {}\n+# External\n*** Add File: .hidden/plan.md\n+# Plan\n+*** Add File: fake.md\n*** Update File: old.md\n*** Move to: renamed.MARKDOWN\n@@\n-old\n+new\n*** Delete File: deleted.md\n*** Add File: main.rs\n+fn main() {{}}\n*** End Patch",
         external.display()
@@ -149,10 +164,12 @@ fn codex_discovers_patch_paths_and_shell_written_project_files() {
     }
     f.hook(Some("codex"), "Stop", json!({}));
     let s = f.session();
-    let store = session_activity::Store::new(f.0.join("state/activity"));
-    assert_eq!(store.events(&s.activity_key()).unwrap().len(), 10);
+    let store = store(&f);
+    let events = store.events(&s.activity_key()).unwrap();
+    assert_eq!(events.iter().filter(|e| e.source == session_activity::Source::Hook).count(), 10);
     let docs = discovery::documents_in(&s, &store);
     assert_eq!(docs.len(), 4);
+    assert!(docs.iter().all(|d| d.scanned == (d.path == shell)));
     for path in [&external, &hidden, &moved, &shell] {
         assert!(docs.iter().any(|d| &d.path == path), "missing {}", path.display());
     }
@@ -188,16 +205,16 @@ fn old_claude_records_and_default_hook_still_work() {
     .unwrap();
     f.hook(None, "SessionStart", json!({"transcript_path": transcript}));
     let mut legacy = serde_json::to_value(f.session()).unwrap();
-    legacy.as_object_mut().unwrap().remove("agent");
-    legacy.as_object_mut().unwrap().remove("written_files");
+    for field in ["agent", "written_files", "turn_started_at", "recent_turns"] {
+        legacy.as_object_mut().unwrap().remove(field);
+    }
     let s: Session = serde_json::from_value(legacy).unwrap();
     assert_eq!(s.agent, Agent::Claude);
     assert!(s.memory_dir().is_some());
     assert!(s.scratchpad_dir().is_some());
-    assert_eq!(
-        discovery::documents_in(&s, &session_activity::Store::new(f.0.join("state/activity")))[0].path,
-        document
-    );
+    assert!(discovery::documents_in(&s, &store(&f)).is_empty()); // Nothing is inferred at display time.
+    f.hook(None, "Stop", json!({}));
+    assert_eq!(documents(&f), [document]);
 }
 
 #[test]
@@ -253,12 +270,13 @@ fn viewer_filters_read_and_failed_events_but_keeps_legacy_markdown() {
             "tool_name":"Edit", "tool_input":{"file_path":external}, "tool_response":{"is_error":true}
         }),
     );
-    let store = session_activity::Store::new(f.0.join("state/activity"));
-    let mut session = f.session();
-    assert_eq!(store.events(&session.activity_key()).unwrap().len(), 2);
-    assert!(discovery::documents_in(&session, &store).is_empty());
-    session.written_files.push(external.clone());
-    assert_eq!(discovery::documents_in(&session, &store)[0].path, external);
+    assert_eq!(store(&f).events(&f.session().activity_key()).unwrap().len(), 2);
+    assert!(documents(&f).is_empty());
+    let mut record: Value = serde_json::from_str(&fs::read_to_string(f.record()).unwrap()).unwrap();
+    record["written_files"] = json!([external]);
+    fs::write(f.record(), record.to_string()).unwrap();
+    f.hook(None, "Stop", json!({}));
+    assert_eq!(documents(&f), [external]);
 }
 
 #[test]
@@ -369,4 +387,109 @@ fn delayed_hooks_do_not_move_activity_backwards_or_erase_transcript() {
     let session = f.session();
     assert_eq!(session.last_active_at, 200);
     assert_eq!(session.transcript_path, Some("/tmp/history.jsonl".into()));
+}
+
+#[test]
+fn turns_capture_shell_writes_once_and_keep_them_after_later_edits() {
+    let f = Fixture::new();
+    let before = f.project().join("before.md");
+    let during = f.project().join("during.md");
+    let nested = f.project().join("worktree/other.md");
+    fs::create_dir_all(f.project().join("worktree")).unwrap();
+    fs::write(f.project().join("worktree/.git"), "gitdir: elsewhere").unwrap();
+    fs::write(&before, "# Before").unwrap();
+    age(&before, 60);
+    f.hook(None, "SessionStart", json!({}));
+    f.hook(None, "UserPromptSubmit", json!({}));
+    assert!(f.session().turn_started_at.is_some());
+    fs::write(&during, "# During").unwrap();
+    fs::write(&nested, "# Another worktree").unwrap();
+    assert!(documents(&f).is_empty()); // Shell writes appear when the turn closes.
+    f.hook(None, "Stop", json!({}));
+    let session = f.session();
+    assert!(session.turn_started_at.is_none());
+    assert_eq!(session.recent_turns.len(), 1);
+    assert_eq!(documents(&f), [during.clone()]);
+    fs::write(&during, "# Edited by hand between turns").unwrap();
+    age(&during, 0);
+    f.hook(None, "Stop", json!({}));
+    assert_eq!(documents(&f), [during]);
+    let scans = store(&f).events(&session.activity_key()).unwrap();
+    assert_eq!(scans.iter().filter(|e| e.source == session_activity::Source::ProjectScan).count(), 1);
+}
+
+#[test]
+fn an_interrupted_turn_is_closed_by_the_next_prompt_and_compaction_keeps_it_open() {
+    let f = Fixture::new();
+    let interrupted = f.project().join("interrupted.md");
+    f.hook(None, "SessionStart", json!({}));
+    f.hook(None, "UserPromptSubmit", json!({}));
+    fs::write(&interrupted, "# No Stop followed").unwrap();
+    f.hook(None, "SessionStart", json!({"source": "compact"}));
+    assert!(f.session().turn_started_at.is_some());
+    f.hook(None, "UserPromptSubmit", json!({}));
+    assert_eq!(documents(&f), [interrupted]);
+    assert!(f.session().turn_started_at.is_some());
+    f.hook(None, "SessionStart", json!({"source": "resume"}));
+    assert!(f.session().turn_started_at.is_none()); // The process that owned it is gone.
+}
+
+#[test]
+fn session_end_captures_the_open_turn_and_resume_keeps_everything() {
+    let f = Fixture::new();
+    let written = f.project().join("written.md");
+    f.hook(None, "SessionStart", json!({}));
+    f.hook(None, "UserPromptSubmit", json!({}));
+    fs::write(&written, "# Written").unwrap();
+    f.hook(None, "SessionEnd", json!({}));
+    assert!(!f.record().exists());
+    f.hook(None, "SessionStart", json!({"source": "resume"}));
+    assert_eq!(documents(&f), [written]);
+}
+
+#[test]
+fn subagent_transcripts_are_captured_even_without_their_hooks() {
+    let f = Fixture::new();
+    let transcript = f.0.join("session.jsonl");
+    let document = f.project().join("from-subagent.md");
+    fs::write(&document, "# Subagent").unwrap();
+    age(&document, 600);
+    fs::write(&transcript, "").unwrap();
+    fs::create_dir_all(f.0.join("session/subagents")).unwrap();
+    fs::write(
+        f.0.join("session/subagents/agent-1.jsonl"),
+        json!({"type":"assistant", "timestamp":"2026-09-25T00:00:00Z", "message":{"content":[
+            {"type":"tool_use", "id":"sub-1", "name":"Write", "input":{"file_path":document}}
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    f.hook(None, "SessionStart", json!({"transcript_path": transcript}));
+    f.hook(None, "Stop", json!({}));
+    f.hook(None, "Stop", json!({}));
+    assert_eq!(documents(&f), [document]);
+    assert_eq!(store(&f).events(&f.session().activity_key()).unwrap().len(), 1);
+}
+
+#[test]
+fn files_scanned_while_another_session_works_in_the_same_place_are_shared() {
+    let f = Fixture::new();
+    let other = f.0.join("elsewhere");
+    fs::create_dir_all(&other).unwrap();
+    f.hook(None, "SessionStart", json!({"session_id": "same-place"}));
+    f.hook(None, "UserPromptSubmit", json!({"session_id": "same-place"}));
+    f.hook(None, "SessionStart", json!({"session_id": "other-place", "cwd": other}));
+    f.hook(None, "UserPromptSubmit", json!({"session_id": "other-place", "cwd": other}));
+    f.hook(None, "SessionStart", json!({}));
+    f.hook(None, "UserPromptSubmit", json!({}));
+    fs::write(f.project().join("ambiguous.md"), "# Either session").unwrap();
+    f.hook(None, "Stop", json!({}));
+    let docs = discovery::documents_in(&f.session(), &store(&f));
+    assert_eq!(docs.len(), 1);
+    assert!(docs[0].scanned && docs[0].shared);
+    let event = store(&f).events(&f.session().activity_key()).unwrap().remove(0);
+    assert_eq!(
+        event.concurrent,
+        [session_activity::SessionKey { agent: Agent::Claude, session_id: "same-place".into() }]
+    );
 }

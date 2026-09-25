@@ -7,6 +7,7 @@ use anyhow::Result;
 use serde_json::Value;
 use session_activity::{Agent, Store};
 
+use crate::capture::{self, Turn};
 use crate::registry::{Session, Terminal};
 
 static NEXT_WRITE: AtomicU64 = AtomicU64::new(0);
@@ -44,24 +45,20 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
         "session ID is already registered to a different agent"
     );
     let store = Store::new(root.join("activity"));
+    let open_turn = previous.as_ref().and_then(|s| s.turn_started_at);
+    let close = |started_at: i64| Turn { started_at, ended_at: now.max(started_at) };
     if event == "SessionEnd" {
-        // Closing the session must survive an interrupted transcript import.
+        // Closing the session must survive an interrupted capture.
         crate::lifecycle::mark_ended(root, &key)?;
-        if let Some(session) = &previous {
-            // Preserve known history before the live registry entry disappears.
-            let events = crate::activity::observations(session, &store, false)?;
-            let retained = crate::activity::read_events(&store, &session.activity_key())?;
-            let imported: Vec<_> = events.into_iter().filter(|e| !retained.contains(e)).collect();
-            store.append(&session.activity_key(), &imported)?;
-        }
+        let captured = previous.as_ref().map_or(Ok(()), |s| capture::capture(root, s, &store, open_turn.map(close)));
         crate::lifecycle::end(root, &key)?;
-        return Ok(());
+        return captured;
     }
     let Some(cwd) = input["cwd"].as_str().map(Path::new).filter(|p| p.is_absolute()) else { return Ok(()) };
     if !input["transcript_path"].is_null() && !input["transcript_path"].is_string() {
         return Ok(());
     }
-    let session = Session {
+    let mut session = Session {
         session_id: id.into(),
         agent,
         cwd: cwd.to_owned(),
@@ -73,14 +70,32 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
             .or_else(|| previous.as_ref().and_then(|s| s.transcript_path.clone())),
         started_at: previous.as_ref().map_or(now, |s| s.started_at),
         last_active_at: previous.as_ref().map_or(now, |s| now.max(s.last_active_at)),
-        written_files: previous.map_or_else(Vec::new, |s| s.written_files),
+        written_files: previous.as_ref().map_or_else(Vec::new, |s| s.written_files.clone()),
+        turn_started_at: match event {
+            "UserPromptSubmit" => Some(now),
+            "Stop" => None,
+            // Compaction can happen inside a turn; any other start means the
+            // process that owned the open turn is gone.
+            "SessionStart" if input["source"] != "compact" => None,
+            _ => open_turn,
+        },
+        recent_turns: previous.map_or_else(Vec::new, |s| s.recent_turns),
     };
+    // Claude sends no Stop for an interrupted turn, so a new prompt closes it.
+    let closed = matches!(event, "Stop" | "UserPromptSubmit").then_some(open_turn).flatten().map(close);
+    if let Some(turn) = closed {
+        capture::remember(&mut session.recent_turns, turn);
+    }
     store.append(&session.activity_key(), &session_activity::hook_events(agent, input, now)?)?;
     // Late tools may contribute useful history, but only SessionStart can
     // explicitly reopen a session after an end marker has been published.
     if event != "SessionStart" && crate::lifecycle::ended(root, &key) {
         return Ok(());
     }
+    // A failed capture must still record the new turn state, so its error is
+    // reported after the registry write.
+    let captured =
+        if event == "Stop" || closed.is_some() { capture::capture(root, &session, &store, closed) } else { Ok(()) };
     crate::lifecycle::ensure_dir(&dir)?;
     #[cfg(unix)]
     {
@@ -110,5 +125,5 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     if result.is_err() {
         let _ = fs::remove_file(tmp);
     }
-    result
+    result.and(captured)
 }

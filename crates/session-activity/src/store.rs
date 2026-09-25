@@ -131,9 +131,29 @@ impl Store {
     }
 
     pub fn append(&self, session: &SessionKey, events: &[FileEvent]) -> Result<()> {
+        let Some(dir) = self.prepare(session, events)? else { return Ok(()) };
+        let _lock = crate::lock::Lock::acquire(&dir, false)?;
+        self.append_unlocked(&dir, events)
+    }
+
+    /// Append the events not already retained, and return how many. Captures
+    /// repeat evidence, such as a transcript parsed at every turn; this keeps
+    /// one copy. `concurrent` is not part of an event's identity, and the read
+    /// and append happen under one exclusive lock.
+    pub fn append_new(&self, session: &SessionKey, events: &[FileEvent]) -> Result<usize> {
+        let Some(dir) = self.prepare(session, events)? else { return Ok(0) };
+        let _lock = crate::lock::Lock::acquire(&dir, true)?;
+        let report = self.read_unlocked(session)?;
+        let mut seen: std::collections::HashSet<_> = report.events.iter().map(identity).collect();
+        let fresh: Vec<_> = events.iter().filter(|e| seen.insert(identity(e))).cloned().collect();
+        self.append_unlocked(&dir, &fresh)?;
+        Ok(fresh.len())
+    }
+
+    fn prepare(&self, session: &SessionKey, events: &[FileEvent]) -> Result<Option<PathBuf>> {
         let dir = self.directory(session)?;
         if events.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         validate_batch(session, events)?;
         let missing: Vec<_> =
@@ -153,8 +173,11 @@ impl Store {
                 sync_directory(if parent.as_os_str().is_empty() { Path::new(".") } else { parent })?;
             }
         }
-        let _lock = crate::lock::Lock::acquire(&dir, false)?;
-        let cutoff = crate::maintenance::retained_from(&dir)?;
+        Ok(Some(dir))
+    }
+
+    fn append_unlocked(&self, dir: &Path, events: &[FileEvent]) -> Result<()> {
+        let cutoff = crate::maintenance::retained_from(dir)?;
         let retained: Vec<_> = events.iter().filter(|e| cutoff.is_none_or(|at| e.timestamp >= at)).collect();
         if retained.is_empty() {
             return Ok(());
@@ -167,7 +190,7 @@ impl Store {
         let destination = dir.join(format!("{name}.json"));
         let result = write_batch(&temporary, &bytes).and_then(|()| {
             fs::rename(&temporary, destination).context("publishing activity batch")?;
-            sync_directory(&dir)
+            sync_directory(dir)
         });
         if result.is_err() {
             let _ = fs::remove_file(&temporary);
@@ -220,6 +243,22 @@ impl Store {
     }
 }
 
+type Identity<'a> =
+    (i64, &'a Path, Option<&'a Path>, &'a Path, crate::Operation, crate::Source, crate::Outcome, Option<&'a str>);
+
+fn identity(event: &FileEvent) -> Identity<'_> {
+    (
+        event.timestamp,
+        &event.path,
+        event.previous_path.as_deref(),
+        &event.cwd,
+        event.operation,
+        event.source,
+        event.outcome,
+        event.tool_call_id.as_deref(),
+    )
+}
+
 pub(crate) fn write_batch(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -237,7 +276,7 @@ pub(crate) fn write_batch(path: &Path, bytes: &[u8]) -> Result<()> {
 fn validate_batch(session: &SessionKey, events: &[FileEvent]) -> Result<()> {
     for event in events {
         ensure!(&event.session == session, "event belongs to a different session");
-        ensure!(event.schema_version == 1, "unsupported activity schema");
+        ensure!((1..=crate::SCHEMA_VERSION).contains(&event.schema_version), "unsupported activity schema");
         ensure!(event.path.is_absolute() && event.cwd.is_absolute(), "event paths must be absolute");
         ensure!(event.previous_path.as_ref().is_none_or(|p| p.is_absolute()), "rename origin must be absolute");
         ensure!(

@@ -63,11 +63,6 @@ fn all_sessions_listing_works_without_live_sessions_and_exposes_provenance() {
     assert_eq!(text.matches("shared.rs").count(), 1);
     assert!(text.contains("Claude Code / same-id") && text.contains("Codex / same-id"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("broken.json"));
-    let conflict = Command::new(env!("CARGO_BIN_EXE_peekback"))
-        .args(["browse", "--all-sessions", "--candidates"])
-        .output()
-        .unwrap();
-    assert!(!conflict.status.success());
     assert!(!root.join("daemon.log").exists());
     fs::remove_dir_all(root).unwrap();
 }
@@ -181,11 +176,10 @@ fn terminal_listing_handles_live_and_retained_sessions_without_starting_viewer()
     input["hook_event_name"] = json!("SessionEnd");
     hook(&root, input);
     fs::write(root.join("activity/codex/integration/broken.json"), "{").unwrap();
-    let ended = run(&["browse", "--agent", "codex", "--session", "integration", "--candidates", "--list"]);
+    let ended = run(&["browse", "--agent", "codex", "--session", "integration", "--list"]);
     assert!(String::from_utf8_lossy(&ended.stdout).contains("notes.md"));
     let warnings = String::from_utf8_lossy(&ended.stderr);
     assert!(warnings.contains("broken.json"));
-    assert!(warnings.contains("require a live session"));
     assert!(!root.join("daemon.log").exists());
     let other = run(&["browse", "--agent", "claude", "--session", "integration"]);
     assert!(String::from_utf8_lossy(&other.stdout).contains("No observed files"));

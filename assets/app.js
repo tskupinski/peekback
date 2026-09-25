@@ -691,10 +691,16 @@
     if (!state.doc) return [];
     return state.doc.documents.map((d) => ({
       label: d.label,
-      meta: d.touched_at ? ago(d.touched_at) : "",
+      meta: [d.touched_at ? ago(d.touched_at) : "", evidenceNote(d)].filter(Boolean).join(" · "),
       current: d.path === state.doc.path,
       run: () => switchTo(state.doc.sessionId, d.path),
     }));
+  }
+
+  // No tool reported these writes; a scan at the end of a turn found them.
+  function evidenceNote(d) {
+    if (d.shared) return "found by scan, maybe another session's";
+    return d.scanned ? "found by scan" : "";
   }
 
   function sessionCandidates() {
@@ -1285,7 +1291,7 @@
         return item({
           name: slash >= 0 ? d.label.slice(slash + 1) : d.label,
           meta: slash >= 0 ? d.label.slice(0, slash) : "",
-          title: d.path,
+          title: [d.path, evidenceNote(d)].filter(Boolean).join("\n"),
           current: d.path === state.doc.path,
           onClick: () => switchTo(state.doc.sessionId, d.path),
         });

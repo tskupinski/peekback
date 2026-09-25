@@ -219,10 +219,18 @@ async function main() {
   assert.match(element("picker-list").children[0].textContent, /has not written any Markdown yet/);
   input.dispatch("keydown", { key: "Escape" });
   receive({ type: "render", path: "/first.md", source: "First.", session: { session_id: "fresh" },
-    documents: [{ path: "/first.md", label: "first.md", touched_at: 2 }] });
+    documents: [{ path: "/first.md", label: "first.md", touched_at: 2 },
+      { path: "/shell.md", label: "shell.md", touched_at: 1, scanned: true, shared: false },
+      { path: "/shared.md", label: "shared.md", touched_at: 1, scanned: true, shared: true }] });
   await new Promise(setImmediate);
   assert.equal(element("no-documents").hidden, true);
-  console.log("Empty session passed: placeholder, inert actions, picker hint, first document replaces it.");
+  window.dispatch("keydown", { key: "p", ctrlKey: true });
+  const metas = element("picker-list").children.map(li => li.children[1].textContent);
+  assert.doesNotMatch(metas[0], /scan/);
+  assert.match(metas[1], /· found by scan$/);
+  assert.match(metas[2], /maybe another session's$/);
+  input.dispatch("keydown", { key: "Escape" });
+  console.log("Empty session passed: placeholder, inert actions, picker hint, first document replaces it, scan notes.");
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

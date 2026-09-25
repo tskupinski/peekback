@@ -27,14 +27,18 @@ The library owns:
 
 - `SessionKey`: agent plus native session ID.
 - `FileEvent`: versioned file metadata, operation, outcome, timestamp, source,
-  working directory, optional tool call ID, and rename origin.
+  working directory, optional tool call ID, rename origin, and the sessions
+  that were working concurrently when a scan observed the file.
 - Adapters for supported `PostToolUse` payloads, Claude `PostToolUseFailure`,
-  and Claude transcripts, including tool-result correlation.
+  and Claude transcripts, including tool-result correlation, plus
+  `subagent_transcripts` to find the subagent transcripts beside a main one.
 - `Store`: retained event batches under a caller-supplied directory.
+  `Store::append_new` appends only events not already retained, for callers
+  that capture the same evidence repeatedly.
 - `Store::sessions` and `Store::read_all`: enumerate and read retained history
   across both agent namespaces, independently of a live-session registry.
-- `scan_report`: bounded filesystem candidates and completeness diagnostics
-  from caller-supplied roots (`scan` returns only the events).
+- `scan_report`: bounded filesystem scans and completeness diagnostics from
+  caller-supplied roots (`scan` returns only the events).
 - `Store::maintain`: preview or apply compaction and timestamp retention.
 - `files`: grouping observations by path without losing their evidence.
 
@@ -74,10 +78,11 @@ stderr. The example reads a store; it does not install hooks or start a viewer.
 
 ## API and data compatibility
 
-Versions `0.1.x` retain compatible public API and storage behavior. Breaking
-API changes require a new minor version while the crate is pre-1.0. Storage
-schema versions are independent of crate versions: events currently use schema
-1, and checkpoints use version 1. Unsupported schemas produce errors or batch
+Versions within one minor release retain compatible public API and storage
+behavior. Breaking API changes require a new minor version while the crate is
+pre-1.0. Storage schema versions are independent of crate versions: events are
+written with schema 2 (`SCHEMA_VERSION`), which adds `concurrent`, schema 1
+events remain readable, and checkpoints use version 1. Unsupported schemas produce errors or batch
 warnings rather than being silently interpreted as current data. Preserve old
 history until a documented migration exists.
 
@@ -123,7 +128,10 @@ returns healthy events plus warnings naming invalid, oversized, unreadable,
 or unsupported batches, leaving damaged data untouched. `Store::events`
 remains strict and returns an error if any batch is incomplete. Both reads
 and writes validate session identity, schema, absolute paths, and rename
-origins; batches are limited to 16 MiB. History is retained unless the owner
+origins; batches are limited to 16 MiB. `append_new` reads and appends under
+one exclusive lock and compares every field except the schema version and
+`concurrent`, so evidence captured again, such as a transcript parsed at every
+turn, is kept once. History is retained unless the owner
 explicitly applies retention; session exit does not delete event files. Retried hook
 calls can produce repeated observations, identifiable by tool call IDs when
 the agent supplies them. Reconciled file queries collapse those retries.
@@ -157,15 +165,15 @@ failures. `store.read_all()` returns all healthy retained events and warnings;
 a damaged checkpoint is reported for its session while other sessions remain
 available. Pass its events to `files` to group by path across sessions; each
 event retains its agent/session identity. These queries include compacted and
-ended sessions, honor retention cutoffs, and do not perform filesystem candidate
-scans. `read_all` loads all retained history into memory and locks each session
+ended sessions, honor retention cutoffs, and do not scan the filesystem. `read_all` loads all retained history into memory and locks each session
 separately, so it is not a globally atomic snapshot of concurrent activity.
 
 Paths are resolved lexically against the session cwd, including `.` and `..`;
 symlink aliases are not unified. The library stores metadata, not file content
 snapshots, and `exists` reflects the filesystem at query time. Scans skip hidden
-and build directories, do not follow symlink directories, and share a caller-
-supplied entry budget across roots. Callers should avoid scanning `/` or home.
+and build directories and nested checkouts (directories below a root that
+contain a `.git` entry, usually other worktrees), do not follow symlink
+directories, and share a caller-supplied entry budget across roots. Callers should avoid scanning `/` or home.
 `scan_report` reports visited entries, budget exhaustion, depth limits, and
 path-specific I/O warnings. Missing optional roots are ignored; other failures
 are reported. Completeness is relative to the caller's roots and exclusions,

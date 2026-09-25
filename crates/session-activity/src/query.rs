@@ -108,8 +108,9 @@ pub fn scan(session: &SessionKey, cwd: &std::path::Path, roots: &[ScanRoot], bud
     scan_report(session, cwd, roots, budget).events
 }
 
-/// Hidden/build directories are excluded by policy, symlink directories are
-/// not followed, and all roots share the entry budget. Missing optional roots
+/// Hidden/build directories and nested checkouts are excluded by policy,
+/// symlink directories are not followed, and all roots share the entry budget.
+/// A nested checkout is usually another worktree with its own sessions. Missing optional roots
 /// are normal; other read/metadata errors are reported with their paths.
 pub fn scan_report(session: &SessionKey, cwd: &std::path::Path, roots: &[ScanRoot], budget: usize) -> ScanReport {
     let mut report = ScanReport::default();
@@ -167,6 +168,9 @@ fn walk(
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if kind.is_dir() && !name.starts_with('.') && !["node_modules", "target"].contains(&name.as_ref()) {
+            if fs::symlink_metadata(path.join(".git")).is_ok() {
+                continue;
+            }
             walk(session, cwd, root, &path, depth - 1, budget, report);
             if report.budget_exhausted {
                 return;

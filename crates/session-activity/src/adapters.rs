@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, ensure};
 use serde_json::Value;
@@ -98,6 +98,21 @@ fn patch_events(session: &SessionKey, cwd: &Path, patch: &str, at: i64, source: 
         }
     }
     events
+}
+
+/// Claude keeps each subagent's transcript next to the main one, in
+/// `<transcript stem>/subagents/`. Sorted for stable results.
+pub fn subagent_transcripts(transcript: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(transcript.with_extension("").join("subagents")) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<_> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|e| e == "jsonl") && path.is_file())
+        .collect();
+    paths.sort();
+    paths
 }
 
 /// Match Claude tool requests to results by call ID. Requests without results

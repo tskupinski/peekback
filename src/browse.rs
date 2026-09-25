@@ -27,8 +27,8 @@ const PREVIEW_BYTES: u64 = 256 * 1024;
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Browse retained file activity from every stored session (no candidate scans)
-    #[arg(long, conflicts_with_all = ["session", "agent", "pane", "candidates"])]
+    /// Browse retained file activity from every stored session
+    #[arg(long, conflicts_with_all = ["session", "agent", "pane"])]
     all_sessions: bool,
     /// Session id (default: current session, else most recently active)
     #[arg(long, conflicts_with = "pane")]
@@ -39,9 +39,6 @@ pub struct Args {
     /// Select the session registered in a tmux pane
     #[arg(long)]
     pane: Option<String>,
-    /// Include filesystem candidates as well as recorded activity
-    #[arg(long)]
-    candidates: bool,
     /// Print a table instead of opening the interactive browser (also used when piped)
     #[arg(long)]
     list: bool,
@@ -56,7 +53,7 @@ struct Snapshot {
 }
 
 impl Snapshot {
-    fn load(key: Option<SessionKey>, candidates: bool) -> Result<Self> {
+    fn load(key: Option<SessionKey>) -> Result<Self> {
         let Some(key) = key else {
             let report = activity::store().read_all();
             return Ok(Self {
@@ -69,20 +66,9 @@ impl Snapshot {
         };
         key.validate()?;
         let active = registry::find(&key.session_id).filter(|s| s.agent == key.agent);
-        let store = activity::store();
-        let (events, mut warnings) = if let Some(session) = &active {
-            let report = activity::observations_report(session, &store, candidates)?;
-            (report.events, report.warnings)
-        } else {
-            let report = store.read(&key)?;
-            (
-                report.events,
-                report.warnings.into_iter().map(|w| format!("{}: {}", w.path.display(), w.message)).collect(),
-            )
-        };
-        if candidates && active.is_none() {
-            warnings.push("Filesystem candidates require a live session; showing retained history.".into());
-        }
+        let report = activity::store().read(&key)?;
+        let events = report.events;
+        let warnings = report.warnings.into_iter().map(|w| format!("{}: {}", w.path.display(), w.message)).collect();
         let cwd = active.as_ref().map(|s| s.cwd.clone());
         Ok(Self { key: Some(key), cwd, active: active.is_some(), files: session_activity::files(events), warnings })
     }
@@ -111,7 +97,7 @@ pub fn run(args: Args) -> Result<()> {
             _ => session::resolve(args.session.as_deref(), args.pane.as_deref())?.activity_key(),
         })
     };
-    let snapshot = Snapshot::load(key, args.candidates)?;
+    let snapshot = Snapshot::load(key)?;
     if args.list || !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return print_list(&snapshot);
     }
@@ -162,7 +148,7 @@ pub fn run(args: Args) -> Result<()> {
                     KeyCode::Char('t') => browser.set_mode(Mode::Text),
                     KeyCode::Char('w') => browser.set_mode(Mode::Warnings),
                     KeyCode::Char('p') => browser.open_preview(),
-                    KeyCode::Char('r') => browser.refresh(args.candidates),
+                    KeyCode::Char('r') => browser.refresh(),
                     _ => {}
                 }
             }
@@ -330,8 +316,8 @@ impl Browser {
         };
     }
 
-    fn refresh(&mut self, candidates: bool) {
-        match Snapshot::load(self.snapshot.key.clone(), candidates) {
+    fn refresh(&mut self) {
+        match Snapshot::load(self.snapshot.key.clone()) {
             Ok(snapshot) => {
                 let keep = self.current().map(|f| f.path.clone());
                 self.snapshot = snapshot;
@@ -385,7 +371,7 @@ impl Browser {
             let list_width = if split { (width / 3).clamp(26, 50) } else { width };
             let body = height - 7;
             if split || !self.focus_preview {
-                put(&mut out, 0, 3, list_width, "FILES  (tool / legacy / candidate)", !self.focus_preview)?;
+                put(&mut out, 0, 3, list_width, "FILES  (tool / legacy / scan / shared)", !self.focus_preview)?;
                 let start = self.selected.saturating_sub(body - 1);
                 for (row, &index) in self.visible.iter().skip(start).take(body).enumerate() {
                     let file = &self.snapshot.files[index];
@@ -442,7 +428,8 @@ impl Browser {
 
 fn evidence(file: &FileActivity) -> &'static str {
     if file.events.iter().all(|e| e.operation == Operation::Observed) {
-        "candidate"
+        // Scanned while another session worked there too, so either may own it.
+        if file.events.iter().any(|e| !e.concurrent.is_empty()) { "shared" } else { "scan" }
     } else if file.events.iter().all(|e| e.outcome == Outcome::Failed) {
         "failed"
     } else if file.events.iter().any(|e| matches!(e.source, Source::Hook | Source::Transcript)) {
@@ -594,7 +581,7 @@ mod tests {
         let mut browser = Browser::new(snapshot());
         assert_eq!(evidence(browser.current().unwrap()), "tool");
         browser.navigate(usize::MAX, true);
-        assert_eq!(evidence(browser.current().unwrap()), "candidate");
+        assert_eq!(evidence(browser.current().unwrap()), "scan");
         browser.query = "NOTES".into();
         browser.filter(None);
         assert_eq!(browser.current().unwrap().path, Path::new("/missing/notes.md"));

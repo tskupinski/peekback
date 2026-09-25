@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+Breaking: the event schema and public API change, so this needs a new minor
+version.
+
+- Write events with schema 2, which adds `FileEvent::concurrent`: the other
+  sessions that were working where a scan observed the file. Schema 1 events
+  remain readable.
+- Add `Store::append_new`, which appends only events not already retained,
+  under one exclusive lock.
+- Add `subagent_transcripts` to find Claude subagent transcripts beside a main
+  transcript.
+- Skip nested checkouts in scans, since they are usually other worktrees.
+
 ## 0.1.1 — 2026-09-24
 
 - Reject retention cutoffs in the future. A cutoff cannot be lowered, so one

@@ -86,7 +86,7 @@ impl Scan {
                 Err(_) => path.display().to_string(),
             },
         };
-        self.bookmarks.documents.push(Document { path, touched_at, label });
+        self.bookmarks.documents.push(Document { path, touched_at, label, scanned: false, shared: false });
     }
 }
 

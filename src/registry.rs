@@ -23,6 +23,12 @@ pub struct Session {
     pub last_active_at: i64,
     #[serde(default)]
     pub terminal: Terminal,
+    /// Start of the turn in progress. It closes at Stop, the next prompt, or
+    /// the end of the session.
+    #[serde(default)]
+    pub turn_started_at: Option<i64>,
+    #[serde(default)]
+    pub recent_turns: Vec<crate::capture::Turn>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -56,15 +62,10 @@ impl Session {
         self.project_dir().map(|d| d.join("memory"))
     }
 
-    /// The hook resets `started_at` on a resume after exit; the transcript's
-    /// creation time is the earlier bound and survives that.
-    pub fn started_at(&self) -> i64 {
-        self.transcript_path
-            .as_ref()
-            .and_then(|p| fs::metadata(p).and_then(|m| m.created()).ok())
-            .map(unix_secs)
-            .filter(|&t| t > 0)
-            .map_or(self.started_at, |t| t.min(self.started_at))
+    /// Recent closed turns, then the open one, which has no end yet.
+    pub fn turns(&self) -> impl Iterator<Item = crate::capture::Turn> + '_ {
+        let open = self.turn_started_at.map(|started_at| crate::capture::Turn { started_at, ended_at: i64::MAX });
+        self.recent_turns.iter().copied().chain(open)
     }
 
     pub fn scratchpad_dir(&self) -> Option<PathBuf> {
@@ -81,13 +82,17 @@ pub fn dir() -> PathBuf {
 /// All registered sessions, most recently active first. Unreadable entries
 /// are skipped rather than failing the whole listing.
 pub fn load_all() -> Vec<Session> {
-    let Ok(entries) = fs::read_dir(dir()) else { return Vec::new() };
+    load_all_in(&paths::state_dir())
+}
+
+pub fn load_all_in(root: &Path) -> Vec<Session> {
+    let Ok(entries) = fs::read_dir(root.join("sessions")) else { return Vec::new() };
     let mut sessions: Vec<Session> = entries
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| fs::read_to_string(e.path()).ok())
         .filter_map(|text| serde_json::from_str(&text).ok())
-        .filter(|s: &Session| !crate::lifecycle::ended(&paths::state_dir(), &s.activity_key()))
+        .filter(|s: &Session| !crate::lifecycle::ended(root, &s.activity_key()))
         .collect();
     sessions.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
     sessions

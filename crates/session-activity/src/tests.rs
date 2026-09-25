@@ -434,3 +434,56 @@ fn concurrent_appends_and_compaction_do_not_lose_history() {
     });
     assert_eq!(store.events(&session).unwrap().len(), 75);
 }
+
+#[test]
+fn scans_skip_nested_checkouts_but_not_the_root_checkout() {
+    let temp = Temp::new();
+    fs::create_dir_all(temp.0.join(".git")).unwrap();
+    fs::create_dir_all(temp.0.join("worktrees/pr-1")).unwrap();
+    fs::write(temp.0.join("worktrees/pr-1/.git"), "gitdir: elsewhere").unwrap();
+    fs::create_dir_all(temp.0.join("docs")).unwrap();
+    for path in ["plan.md", "docs/notes.md", "worktrees/pr-1/other.md"] {
+        fs::write(temp.0.join(path), "text").unwrap();
+    }
+    let roots = [ScanRoot { path: temp.0.clone(), since: 0, depth: 4, source: Source::ProjectScan }];
+    let mut found: Vec<_> = scan(&key(Agent::Claude), &temp.0, &roots, 100).into_iter().map(|e| e.path).collect();
+    found.sort();
+    assert_eq!(found, [temp.0.join("docs/notes.md"), temp.0.join("plan.md")]);
+}
+
+#[test]
+fn subagent_transcripts_sit_beside_the_main_transcript() {
+    let temp = Temp::new();
+    let main = temp.0.join("session.jsonl");
+    fs::write(&main, "").unwrap();
+    assert!(subagent_transcripts(&main).is_empty());
+    let dir = temp.0.join("session/subagents");
+    fs::create_dir_all(dir.join("nested.jsonl")).unwrap();
+    for name in ["agent-b.jsonl", "agent-a.jsonl", "agent-a.meta.json"] {
+        fs::write(dir.join(name), "").unwrap();
+    }
+    assert_eq!(subagent_transcripts(&main), [dir.join("agent-a.jsonl"), dir.join("agent-b.jsonl")]);
+}
+
+#[test]
+fn append_new_keeps_one_copy_across_schemas_and_concurrent_annotations() {
+    let temp = Temp::new();
+    let store = Store::new(&temp.0);
+    let session = key(Agent::Codex);
+    let mut old = patch_event(Path::new("/project"));
+    for event in &mut old {
+        event.schema_version = 1;
+    }
+    store.append(&session, &old).unwrap();
+    let mut again = patch_event(Path::new("/project"));
+    again[0].concurrent = vec![SessionKey { agent: Agent::Claude, session_id: "other".into() }];
+    let mut later = again[0].clone();
+    later.timestamp += 1;
+    again.push(later.clone());
+    assert_eq!(store.append_new(&session, &again).unwrap(), 1);
+    assert_eq!(store.append_new(&session, &again).unwrap(), 0);
+    let events = store.events(&session).unwrap();
+    assert_eq!(events.len(), old.len() + 1);
+    assert_eq!(events.last().unwrap().concurrent, later.concurrent);
+    assert!(events.iter().filter(|e| e.schema_version == 1).all(|e| e.concurrent.is_empty()));
+}

@@ -83,9 +83,14 @@ and [Claude hook reference](https://code.claude.com/docs/en/hooks).
 
 Hooks register sessions, retain observed file activity, and remove live entries
 when sessions end. `peekback status` shows registered sessions and their terminal
-backends. Project Markdown modified since session start is also discovered;
-Codex shell commands and transcripts are not parsed. Use
-`peekback show /absolute/path/to/file.md --session ID` for files outside the scan.
+backends. Files the agent writes with its file tools appear immediately. Files
+written through shell commands are found when the agent's turn ends: Peekback
+scans the project for files modified during that turn and stores them with the
+session, so they stay listed after later edits and when you resume. Separate
+git worktrees keep concurrent sessions apart; two sessions working in one
+directory at the same moment both list what either wrote. Use
+`peekback show /absolute/path/to/file.md --session ID` for files outside the
+project.
 Codex desktop/IDE composer integration is not supported.
 
 ### Upgrade
@@ -211,7 +216,7 @@ hook activity records the agent's identity.
 ```
 peekback setup [--agent claude|codex|all] [--dry-run]  configure hooks
 peekback show [FILE] [--session ID] [--pane %N] [--no-focus]  show a document
-peekback browse [--session ID] [--candidates]        browse session files
+peekback browse [--session ID]                       browse session files
 peekback browse --all-sessions [--list]              browse retained history
 peekback send [--session ID] [--pane %N] < text       paste text into a prompt
 peekback hide                                       hide the viewer
@@ -235,7 +240,7 @@ registry and daemon.
 
 ```sh
 peekback browse
-peekback browse --session SESSION_ID --candidates
+peekback browse --session SESSION_ID
 peekback browse --agent codex --session ENDED_SESSION_ID
 peekback browse --list
 peekback browse --all-sessions
@@ -257,10 +262,9 @@ It merges paths across Claude Code and Codex, preserves session provenance in
 the evidence view (`e`) and plain listing, and supports filtering by session ID.
 `r` reloads stored history. Previews keep the browser's originating live session
 as their send-back target when one is available. It cannot be combined with
-session/pane selectors or `--candidates`; it reads the tracker rather than
-scanning every old project.
-Files found only by a live filesystem scan may therefore be absent from All
-sessions. Installing hooks does not automatically import every past session.
+session/pane selectors. Every view reads the same stored history, so a file
+listed for a session is also listed in All sessions. Installing hooks does not
+automatically import every past session.
 
 | Key | Action |
 | --- | --- |
@@ -269,15 +273,15 @@ sessions. Installing hooks does not automatically import every past session.
 | `/` | Filter paths as you type; `Enter` or `Esc` finishes editing |
 | `c` | Clear the filter |
 | `p` | Open the selected `.md` or `.markdown` file in Peekback |
-| `t` / `e` / `w` | Show current text, event evidence, or scan/storage warnings |
+| `t` / `e` / `w` | Show current text, event evidence, or storage warnings |
 | `r` | Refresh the file list and current preview |
 | `PgUp` / `PgDn`, `g` / `G` | Page or jump to the beginning/end of the focused pane |
 | `q`, `Esc`, `Ctrl-C` | Exit (while editing a filter, `Esc` only finishes editing) |
 
 `tool` means a hook or transcript observed an operation, not necessarily a
-successful write; `e` shows the recorded operation and outcome. `candidate`
-means scan evidence only. Candidates are opt-in with `--candidates`; warnings
-are available through `w`. The preview reads current UTF-8 text, up to 256 KiB;
+successful write; `e` shows the recorded operation and outcome. `scan` means
+only a turn scan found the file, and `shared` that another session was working
+in the same place at the time. Warnings are available through `w`. The preview reads current UTF-8 text, up to 256 KiB;
 it is not a historical snapshot. Binary, missing, and special files show an
 explanation instead. Refresh is manual with `r`.
 
@@ -294,19 +298,17 @@ the evidence behind each file:
 ```sh
 peekback activity files --agent codex --session SESSION_ID
 peekback activity events --agent claude --session SESSION_ID
-peekback activity files --agent codex --session SESSION_ID --candidates
 ```
 
 `events` returns the retained event history. Damaged batches are skipped with
 an explicit warning on stderr (or in the daemon log), allowing healthy history
 to remain available. `files` groups events by path, collapses retries with the
-same tool call ID and evidence source, reconciles known outcomes, and
-also uses Claude transcripts and legacy records while a session is registered.
-`--candidates` adds the bounded filesystem scan for a registered session;
-its results are labelled as scan observations. Peekback's viewer includes
-candidates and filters the result to existing Markdown files. Budget exhaustion,
-depth limits, and filesystem read errors are reported on stderr or in the daemon
-log, so an incomplete scan is visible.
+same tool call ID and evidence source, and reconciles known outcomes. Both
+read only stored history: hook events as they happen, and at the end of every
+turn the Claude transcripts (including subagents'), legacy records, and the
+turn scan. Peekback's viewer filters the result to existing Markdown files.
+An exhausted scan budget and filesystem read errors are reported on the hook's
+stderr, which the agent shows in its hook output.
 
 Hook events are retained under `~/.local/state/peekback/activity/AGENT/SESSION_ID/`
 after the session exits or is pruned. No automatic retention limit is applied.

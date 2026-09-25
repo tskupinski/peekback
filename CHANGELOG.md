@@ -9,6 +9,22 @@
   first document when it appears.
 - Open the hotkey on the session in the tmux pane you last used, falling back
   to the most recently active session.
+- Decide which files belong to a session when each turn ends, and store it.
+  Previously every view scanned the project for files modified since the
+  session started, so a session listed files other sessions and your editor
+  changed in the same directory, a file you edited after the agent wrote it
+  could drop out, and resuming an old session widened the window to days.
+  Now the files a turn's scan finds are kept with the session, so they stay
+  listed after later edits and after resuming, and All sessions shows them too.
+- Capture files written by subagents from their transcripts, since some Claude
+  Code versions do not report subagent tool calls to hooks.
+- Mark files found only by a scan, and those found while another session was
+  working in the same directory, in the viewer and terminal browser.
+- Skip nested git checkouts when scanning, so a session in a repository does
+  not pick up files from worktrees inside it.
+- Remove `--candidates` from `browse` and `activity files`; every view now
+  reads stored history.
+
 - List the viewer in Cmd+Tab and the Dock while it is shown, so it is one
   keystroke away from the terminal. A hidden viewer stays out of both.
 
