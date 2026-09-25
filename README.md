@@ -364,7 +364,7 @@ dependency on Peekback's viewer, Markdown renderer, or terminal integration.
 cargo add session-activity@0.1
 ```
 
-See the [library guide](https://github.com/tskupinski/peekback/tree/master/crates/session-activity)
+See the [library guide](https://github.com/tskupinski/peekback/tree/main/crates/session-activity)
 for examples, evidence semantics, storage guarantees, and limitations, or the
 [API reference](https://docs.rs/session-activity). Using the library does not
 install Peekback or configure agent hooks.

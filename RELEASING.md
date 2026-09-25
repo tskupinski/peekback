@@ -191,7 +191,7 @@ out of the repository. See [Apple's Developer ID guidance](https://developer.app
 
 ## Workflows
 
-CI checks pull requests and master. The app release workflow accepts `v*` tags
+CI checks pull requests and main. The app release workflow accepts `v*` tags
 or manual dispatch, validates the tag against Cargo.toml, runs checks and
 installation tests, then uploads workflow artifacts. The library workflow
 accepts `session-activity-v*` tags or manual dispatch and verifies a standalone

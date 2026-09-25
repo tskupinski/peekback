@@ -8,7 +8,7 @@ it has no GUI, Markdown, terminal, or Peekback runtime dependency.
 
 [crates.io](https://crates.io/crates/session-activity) ·
 [API reference](https://docs.rs/session-activity) ·
-[Changelog](https://github.com/tskupinski/peekback/blob/master/crates/session-activity/CHANGELOG.md)
+[Changelog](https://github.com/tskupinski/peekback/blob/main/crates/session-activity/CHANGELOG.md)
 
 Add it to your Rust project with `cargo add session-activity@0.1`, or edit
 your manifest:

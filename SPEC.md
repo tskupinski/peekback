@@ -232,7 +232,7 @@ advisory locks and maintenance uses an exclusive lock.
 There is no automatic retention limit. Reads still load retained history into
 memory; compaction reduces file count, not memory use. All-session reads lock
 each session separately and do not provide a globally atomic snapshot. See the
-[library guide](https://github.com/tskupinski/peekback/tree/master/crates/session-activity)
+[library guide](https://github.com/tskupinski/peekback/tree/main/crates/session-activity)
 for detailed API and storage compatibility guarantees.
 
 ## Terminal browser
