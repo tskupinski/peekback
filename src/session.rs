@@ -107,17 +107,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn focus_is_dispatched_and_cached_by_adapter_and_server() {
-        let mut other = session("kitty", Some("/same"), Some("3"));
-        other.terminal.panes[0].mux = Mux::Kitty;
-        let sessions = [session("tmux", Some("/same"), Some("%1")), other];
+    fn focus_is_asked_once_per_server() {
+        let sessions = [
+            session("first-on-a", Some("/a"), Some("%1")),
+            session("second-on-a", Some("/a"), Some("%2")),
+            session("on-b", Some("/b"), Some("%3")),
+        ];
         let mut calls = Vec::new();
         let found = in_active_pane(&sessions, |mux, server| {
             calls.push((mux, server.unwrap().to_owned()));
-            (mux == Mux::Kitty).then(|| "3".into())
+            (server == Some("/b")).then(|| "%3".into())
         });
-        assert_eq!(found.unwrap().session_id, "kitty");
-        assert_eq!(calls, [(Mux::Tmux, "/same".into()), (Mux::Kitty, "/same".into())]);
+        assert_eq!(found.unwrap().session_id, "on-b");
+        assert_eq!(calls, [(Mux::Tmux, "/a".into()), (Mux::Tmux, "/b".into())]);
     }
 
     #[test]

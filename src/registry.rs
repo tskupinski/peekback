@@ -39,7 +39,7 @@ pub struct Terminal {
     pub term_program: Option<String>,
     pub iterm_profile: Option<String>,
     /// Environment addresses are candidates only. Sending verifies ownership.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mux::deserialize_known")]
     pub panes: Vec<crate::mux::Pane>,
     /// The agent process running in this terminal, when the hook could see it.
     pub agent: Option<crate::process::ProcessId>,

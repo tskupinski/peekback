@@ -392,8 +392,10 @@ servers. Pane and focus resolution excludes known TTY mismatches; unknown
 ownership remains a candidate for display, never verification for delivery. Each adapter owns capture, inspection, focus discovery, sending,
 and the environment variables its commands must clear. Inspection distinguishes
 an available pane (with optional TTY evidence), an absent pane, and an unknown
-result such as a timeout. Focus policy caches results by adapter and server;
-tmux implements it, while WezTerm and Kitty currently return no focus result.
+result such as a timeout. Focus policy caches results by adapter and server.
+tmux is the only adapter; outside it, sends use the clipboard and the hotkey
+opens the most recently active session. Panes of adapters an older version
+recorded, such as WezTerm and Kitty, are skipped when a session is read.
 Terminal application placement and explicit keystroke paste live separately in
 `terminal.rs`.
 
@@ -403,10 +405,7 @@ terminal's foreground process group. Suspended and background agents do not
 qualify. It returns that exact destination and its TTY evidence,
 then rechecks both immediately before sending. If none can be verified, it
 copies to the clipboard. A pinned multiplexer also requires verification and
-reports an error when it cannot establish ownership. A missing WezTerm socket
-never falls back to an arbitrary GUI for inspection. tmux supports ownership
-verification; WezTerm and Kitty query pane existence but do not yet establish
-ownership, so automatic delivery through them is disabled.
+reports an error when it cannot establish ownership.
 
 `backend = "keystroke"` is an explicit opt-in: it requires macOS Accessibility
 permission and pastes into the terminal application's currently focused split

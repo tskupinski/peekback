@@ -9,14 +9,17 @@
   server's most recently used client, and a server with no client attached
   has none.
 - Send to the pane the agent actually runs in when multiplexers are nested.
-  A WezTerm window opened from tmux inherits `TMUX_PANE`, so text went to the
+  A terminal window opened from tmux inherits `TMUX_PANE`, so text went to the
   tmux pane instead, and the hotkey and `--pane` could open it for the tmux
   pane's own session. A pane on another tty than the agent's is no longer
   recorded.
 - Look up `--pane` on the caller's tmux server. Pane ids repeat across tmux
   servers, so it could open a session from another server.
-- Send WezTerm text to the WezTerm instance the session runs in, not whichever
-  one `wezterm cli` finds first.
+- Remove the WezTerm and Kitty backends. They were never exercised on a real
+  install and could not verify that a pane belongs to the agent, so automatic
+  sends through them already used the clipboard. tmux is the supported
+  multiplexer; other terminals use the clipboard, or `backend = "keystroke"`.
+  A config naming `wezterm` or `kitty` reports that and uses `auto`.
 - Sessions recorded by an earlier version send through keystroke or the
   clipboard until their next prompt or tool call re-records the pane.
 

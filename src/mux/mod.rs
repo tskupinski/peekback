@@ -3,9 +3,7 @@
 //! pane still exists, and pastes into it.
 
 pub(crate) mod command;
-mod kitty;
 mod tmux;
-mod wezterm;
 
 use std::process::Command;
 
@@ -19,8 +17,6 @@ pub use tmux::server_from_env as tmux_server_from_env;
 #[serde(rename_all = "lowercase")]
 pub enum Mux {
     Tmux,
-    Wezterm,
-    Kitty,
 }
 
 /// A candidate destination observed in a hook environment. Ownership must be verified.
@@ -54,13 +50,11 @@ impl Inspection {
 }
 
 impl Mux {
-    pub const ALL: [Mux; 3] = [Mux::Tmux, Mux::Wezterm, Mux::Kitty];
+    pub const ALL: [Mux; 1] = [Mux::Tmux];
 
     pub fn name(self) -> &'static str {
         match self {
             Mux::Tmux => "tmux",
-            Mux::Wezterm => "wezterm",
-            Mux::Kitty => "kitty",
         }
     }
 
@@ -71,32 +65,24 @@ impl Mux {
     fn capture(self, env: &impl Fn(&str) -> Option<String>) -> Option<Pane> {
         match self {
             Mux::Tmux => tmux::capture(env),
-            Mux::Wezterm => wezterm::capture(env),
-            Mux::Kitty => kitty::capture(env),
         }
     }
 
     pub fn inspect(self, pane: &Pane) -> Inspection {
         match self {
             Mux::Tmux => tmux::inspect(pane),
-            Mux::Wezterm => wezterm::inspect(pane),
-            Mux::Kitty => kitty::inspect(pane),
         }
     }
 
     pub fn focused(self, server: Option<&str>) -> Option<String> {
         match self {
             Mux::Tmux => tmux::focused(server),
-            Mux::Wezterm => wezterm::focused(server),
-            Mux::Kitty => kitty::focused(server),
         }
     }
 
     pub fn send(self, pane: &Pane, text: &str) -> Result<()> {
         match self {
             Mux::Tmux => tmux::send(pane, text),
-            Mux::Wezterm => wezterm::send(pane, text),
-            Mux::Kitty => kitty::send(pane, text),
         }
     }
 
@@ -106,8 +92,6 @@ impl Mux {
     pub fn ambient_env(self) -> &'static [&'static str] {
         match self {
             Mux::Tmux => tmux::AMBIENT,
-            Mux::Wezterm => wezterm::AMBIENT,
-            Mux::Kitty => kitty::AMBIENT,
         }
     }
 }
@@ -116,6 +100,13 @@ impl Pane {
     pub fn label(&self) -> String {
         format!("{} {}", self.mux.name(), self.id)
     }
+}
+
+/// Panes of multiplexers this build does not know, such as WezTerm and Kitty
+/// from earlier versions, are skipped rather than failing the whole session.
+pub fn deserialize_known<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Pane>, D::Error> {
+    let entries = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(entries.into_iter().filter_map(|entry| serde_json::from_value(entry).ok()).collect())
 }
 
 /// Capture addresses without contacting terminal servers; sending verifies ownership.
@@ -159,70 +150,67 @@ fn assert_no_ambient(cmd: &Command) {
 mod tests {
     use super::*;
 
-    fn pane(mux: Mux, id: &str) -> Pane {
-        Pane { mux, server: Some("/s".into()), id: id.into() }
+    fn pane(server: &str, id: &str) -> Pane {
+        Pane { mux: Mux::Tmux, server: Some(server.into()), id: id.into() }
     }
 
     #[test]
-    fn captures_every_multiplexer_the_environment_names() {
+    fn captures_the_tmux_pane_and_ignores_other_terminals() {
         let env = |key: &str| {
             let value = match key {
                 "TMUX" => "/tmp/tmux-501/default,1170,0",
                 "TMUX_PANE" => "%7",
                 "WEZTERM_PANE" => "3",
-                "WEZTERM_UNIX_SOCKET" => "/wez.sock",
                 "KITTY_WINDOW_ID" => "5",
-                "KITTY_LISTEN_ON" => "unix:/kitty",
                 _ => return None,
             };
             Some(value.to_owned())
         };
-        assert_eq!(
-            capture(env),
-            [
-                Pane { mux: Mux::Tmux, server: Some("/tmp/tmux-501/default".into()), id: "%7".into() },
-                Pane { mux: Mux::Wezterm, server: Some("/wez.sock".into()), id: "3".into() },
-                Pane { mux: Mux::Kitty, server: Some("unix:/kitty".into()), id: "5".into() },
-            ]
-        );
+        assert_eq!(capture(env), [pane("/tmp/tmux-501/default", "%7")]);
     }
 
     #[test]
-    fn a_pane_without_its_server_is_not_captured_where_the_server_is_required() {
-        let env = |key: &str| matches!(key, "TMUX_PANE" | "KITTY_WINDOW_ID" | "WEZTERM_PANE").then(|| "1".to_owned());
-        assert_eq!(capture(env), [Pane { mux: Mux::Wezterm, server: None, id: "1".into() }]);
+    fn a_tmux_pane_without_its_server_is_not_captured() {
+        let env = |key: &str| (key == "TMUX_PANE").then(|| "%1".to_owned());
+        assert!(capture(env).is_empty());
     }
 
     #[test]
-    fn the_pane_on_the_agents_tty_comes_first_and_panes_on_other_ttys_are_dropped() {
-        let panes = vec![pane(Mux::Tmux, "%1"), pane(Mux::Wezterm, "2"), pane(Mux::Kitty, "3")];
-        let tty = |p: &Pane| match p.mux {
-            Mux::Tmux => Some(10),
-            Mux::Wezterm => None,
-            Mux::Kitty => Some(20),
+    fn panes_on_other_ttys_are_dropped_and_unknown_ones_follow_verified_ones() {
+        let panes = vec![pane("/a", "%1"), pane("/b", "%2"), pane("/c", "%3")];
+        let tty = |p: &Pane| match p.server.as_deref() {
+            Some("/a") => Some(10),
+            Some("/b") => None,
+            _ => Some(20),
         };
-        let order = |agent| on_agent_tty(panes.clone(), agent, tty).into_iter().map(|p| p.mux).collect::<Vec<_>>();
-        assert_eq!(order(Some(20)), [Mux::Kitty, Mux::Wezterm]);
-        assert_eq!(order(Some(10)), [Mux::Tmux, Mux::Wezterm]);
-        // TMUX_PANE inherited by a WezTerm window opened from tmux.
-        assert_eq!(order(Some(30)), [Mux::Wezterm]);
-        assert_eq!(order(None), [Mux::Tmux, Mux::Wezterm, Mux::Kitty]);
+        let order = |agent| on_agent_tty(panes.clone(), agent, tty).into_iter().map(|p| p.id).collect::<Vec<_>>();
+        assert_eq!(order(Some(20)), ["%3", "%2"]);
+        // TMUX_PANE inherited by a program started from another pane.
+        assert_eq!(order(Some(30)), ["%2"]);
+        assert_eq!(order(None), ["%1", "%2", "%3"]);
     }
 
     #[test]
     fn a_lone_pane_on_another_tty_is_dropped() {
         // herdr started inside tmux: tmux is the only multiplexer it names.
-        let tmux = vec![pane(Mux::Tmux, "%1")];
+        let tmux = vec![pane("/a", "%1")];
         assert!(on_agent_tty(tmux.clone(), Some(30), |_| Some(10)).is_empty());
         assert_eq!(on_agent_tty(tmux.clone(), Some(10), |_| Some(10)), tmux);
         assert_eq!(on_agent_tty(tmux.clone(), Some(30), |_| None), tmux);
     }
 
     #[test]
-    fn backend_names_stay_the_config_names() {
-        for name in ["tmux", "wezterm", "kitty"] {
-            assert_eq!(Mux::parse(name).map(Mux::name), Some(name));
+    fn panes_of_removed_multiplexers_are_skipped_when_reading() {
+        #[derive(Deserialize)]
+        struct Terminal {
+            #[serde(deserialize_with = "deserialize_known")]
+            panes: Vec<Pane>,
         }
-        assert_eq!(Mux::parse("herdr"), None);
+        let json = r#"{"panes": [
+            { "mux": "wezterm", "server": "/w", "id": "3" },
+            { "mux": "tmux", "server": "/a", "id": "%1" },
+            { "mux": "kitty", "server": "unix:/k", "id": "5" }
+        ]}"#;
+        assert_eq!(serde_json::from_str::<Terminal>(json).unwrap().panes, [pane("/a", "%1")]);
     }
 }

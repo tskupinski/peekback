@@ -27,6 +27,7 @@ impl Backend {
             "auto" => return Ok(None),
             "keystroke" => Backend::Keystroke,
             "clipboard" => Backend::Clipboard,
+            "wezterm" | "kitty" => bail!("the {name} backend was removed; use auto, keystroke or clipboard"),
             other => Backend::Mux(Mux::parse(other).ok_or_else(|| anyhow!("unknown backend {other:?}"))?),
         }))
     }
@@ -224,7 +225,7 @@ mod tests {
     fn selection_keeps_the_exact_verified_pane_and_never_guesses() {
         let session = session(serde_json::json!({
             "bundle_id": "terminal", "panes": [
-                { "mux": "wezterm", "server": "/outer", "id": "1" },
+                { "mux": "tmux", "server": "/outer", "id": "%9" },
                 { "mux": "tmux", "server": "/wrong", "id": "%1" },
                 { "mux": "tmux", "server": "/right", "id": "%2" }
             ]
@@ -257,10 +258,12 @@ mod tests {
 
     #[test]
     fn config_backend_names_parse_as_before() {
-        for name in ["tmux", "wezterm", "kitty", "keystroke", "clipboard"] {
+        for name in ["tmux", "keystroke", "clipboard"] {
             assert_eq!(Backend::parse(name).unwrap().map(Backend::name), Some(name));
         }
         assert_eq!(Backend::parse("auto").unwrap(), None);
         assert!(Backend::parse("screen").is_err());
+        let removed = Backend::parse("wezterm").unwrap_err().to_string();
+        assert_eq!(removed, "the wezterm backend was removed; use auto, keystroke or clipboard");
     }
 }

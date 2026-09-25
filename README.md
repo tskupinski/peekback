@@ -375,7 +375,7 @@ install Peekback or configure agent hooks.
 
 ```toml
 hotkey = "Cmd+Shift+M"   # empty string disables it
-backend = "auto"         # or tmux, wezterm, kitty, keystroke, clipboard
+backend = "auto"         # or tmux, keystroke, clipboard
 placement = "right"      # right, left, over, or free
 split = 0.5              # share of the terminal's width for right / left
 theme = "auto"           # or system: keep the page's own light / dark palettes
@@ -409,12 +409,9 @@ clipboard in automatic mode; a pinned multiplexer reports an error instead.
 Commands have a two-second timeout and failed sends are never retried through
 another backend, since some text may already have arrived.
 
-tmux supports ownership verification and refuses multi-line text when the pane
-has not enabled bracketed paste. WezTerm and Kitty query actual pane listings,
-but ownership verification and focus discovery are not yet implemented for
-those adapters. They therefore use the clipboard in automatic mode, or report
-an unverified target when pinned. Their remote interfaces have not been exercised
-on a real install yet.
+tmux is the supported multiplexer. It refuses multi-line text when the pane
+has not enabled bracketed paste. Outside tmux, automatic sends use the
+clipboard.
 
 `backend = "keystroke"` explicitly opts into macOS Cmd+V injection and requires
 Accessibility permission. It pastes into the application's focused window/tab,

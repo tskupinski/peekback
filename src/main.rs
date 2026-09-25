@@ -177,8 +177,7 @@ fn status(prune: bool) -> Result<()> {
             );
         }
     }
-    let tools: Vec<&str> = ["tmux", "wezterm", "kitten"].into_iter().filter(|t| send::on_path(t)).collect();
-    println!("backend tools on PATH: {}", if tools.is_empty() { "none".to_string() } else { tools.join(", ") });
+    println!("tmux on PATH: {}", if send::on_path("tmux") { "yes" } else { "no" });
     Ok(())
 }
 

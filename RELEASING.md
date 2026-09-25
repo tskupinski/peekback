@@ -41,8 +41,7 @@ substitute for the manual acceptance checks on each release.
 Local agent versions observed during 0.2.0 preparation were Claude Code 2.1.282
 and Codex CLI 0.156.1. These are an inventory, not claimed minimum versions or
 proof of end-to-end coverage. The deployment target is a compatibility baseline,
-not proof of testing on every macOS version. WezTerm and Kitty send backends
-remain unverified on real installations.
+not proof of testing on every macOS version.
 
 ## Prepare a release
 
@@ -237,8 +236,7 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
       leaves keyboard focus in the terminal. Add/remove/send comments and check
       their block markers, including across live reloads.
 - [ ] Copy a selection and send one through a tested terminal backend. Confirm
-      it lands in the intended prompt without submitting it. Record the backend;
-      keep WezTerm/Kitty marked unverified unless actually exercised.
+      it lands in the intended prompt without submitting it. Record the backend.
 - [ ] Kill an agent process without ending its session. Confirm the session
       drops out of `peekback status` and the pickers, sends from a viewer still
       showing it fall back to the clipboard, and `peekback status --prune`
