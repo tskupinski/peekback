@@ -177,14 +177,16 @@ impl App {
         if self.refresh_pending {
             return Ok(());
         }
-        let generation = self.generation;
         let context = self.current.as_ref().map(|c| c.context.clone());
         let proxy = self.proxy.clone();
         self.workers.submit(move || {
             let sessions = registry::load_all();
-            let documents =
-                context.and_then(|c| sessions.iter().find(|s| c.owns(s))).map(discovery::documents).unwrap_or_default();
-            let _ = proxy.send_event(UserEvent::Refreshed { generation, sessions, documents });
+            let documents = context
+                .as_ref()
+                .and_then(|c| sessions.iter().find(|s| c.owns(s)))
+                .map(discovery::documents)
+                .unwrap_or_default();
+            let _ = proxy.send_event(UserEvent::Refreshed { context, sessions, documents });
         })?;
         self.refresh_pending = true;
         Ok(())
@@ -447,11 +449,14 @@ impl App {
             UserEvent::RegistryChanged => {
                 self.refresh_at.get_or_insert(Instant::now() + Duration::from_millis(100));
             }
-            UserEvent::Refreshed { generation, sessions, documents } => {
+            UserEvent::Refreshed { context, sessions, documents } => {
                 self.refresh_pending = false;
                 self.sessions = sessions;
-                if generation == self.generation {
-                    if let Some(doc) = &mut self.current {
+                // The documents belong to the view they were computed for. A
+                // show in flight has already advanced the generation, and
+                // after it lands the view is another session's.
+                match (&mut self.current, &context) {
+                    (Some(doc), Some(context)) if doc.context.accepts(self.generation, context) => {
                         doc.documents = documents;
                         if let Some(session) = &doc.session {
                             if self.page_ready {
@@ -468,8 +473,8 @@ impl App {
                             }
                         }
                     }
-                } else {
-                    self.refresh_at = Some(Instant::now());
+                    (None, None) => {}
+                    _ => self.refresh_at = Some(Instant::now()),
                 }
                 self.push_sessions();
             }

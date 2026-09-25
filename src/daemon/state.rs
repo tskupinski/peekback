@@ -55,4 +55,20 @@ mod tests {
         let resumed = Session { incarnation: "second".into(), ..session };
         assert!(!context.owns(&resumed));
     }
+
+    #[test]
+    fn a_refresh_for_the_previous_view_is_rejected_while_and_after_a_show_lands() {
+        let session = |id: &str| -> Session {
+            serde_json::from_value(serde_json::json!({
+                "session_id": id, "incarnation": "i", "cwd": "/tmp", "started_at": 1, "last_active_at": 1
+            }))
+            .unwrap()
+        };
+        let a = ViewContext { generation: 4, session: Some((&session("a")).into()) };
+        // show() for b has advanced the generation but not replaced the view.
+        assert!(!a.accepts(5, &a));
+        let b = ViewContext { generation: 5, session: Some((&session("b")).into()) };
+        assert!(!b.accepts(5, &a));
+        assert!(b.accepts(5, &b));
+    }
 }

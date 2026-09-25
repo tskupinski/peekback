@@ -14,16 +14,45 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 pub enum UserEvent {
-    Request { request: Request, reply: Sender<Response>, deadline: Instant },
+    Request {
+        request: Request,
+        reply: Sender<Response>,
+        deadline: Instant,
+    },
     DocChanged,
     RegistryChanged,
     Hotkey,
     Page(PageMessage),
-    Opened { generation: u64, result: Result<Box<Loaded>>, reply: Option<(Sender<Response>, Instant)> },
-    Reloaded { generation: u64, revision: u64, result: Result<String>, missing: bool, file_identity: Option<PathBuf> },
-    Refreshed { generation: u64, sessions: Vec<Session>, documents: Vec<Document> },
-    Listed { context: ViewContext, request_id: u64, scratchpad: bool, listing: bookmarks::Listing, available: bool },
-    Sent { request_id: u64, purpose: Option<String>, result: Result<send::Outcome> },
+    Opened {
+        generation: u64,
+        result: Result<Box<Loaded>>,
+        reply: Option<(Sender<Response>, Instant)>,
+    },
+    Reloaded {
+        generation: u64,
+        revision: u64,
+        result: Result<String>,
+        missing: bool,
+        file_identity: Option<PathBuf>,
+    },
+    /// `context` is the view the documents were computed for.
+    Refreshed {
+        context: Option<ViewContext>,
+        sessions: Vec<Session>,
+        documents: Vec<Document>,
+    },
+    Listed {
+        context: ViewContext,
+        request_id: u64,
+        scratchpad: bool,
+        listing: bookmarks::Listing,
+        available: bool,
+    },
+    Sent {
+        request_id: u64,
+        purpose: Option<String>,
+        result: Result<send::Outcome>,
+    },
     Copied(Result<()>),
 }
 
