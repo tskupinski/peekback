@@ -37,6 +37,17 @@ struct FileListing {
     listing: bookmarks::Listing,
 }
 
+/// Which session a view opens for, decided on the worker since it reads
+/// the registry and may ask tmux.
+enum Target {
+    Session(Option<String>),
+    /// The session in the pane the user last worked in.
+    Focused,
+    /// Files listed for a session stay openable after its agent exits, as a
+    /// view without a send target.
+    SessionIfLive(Option<String>),
+}
+
 enum Presentation {
     Keep,
     BringForward,
@@ -115,23 +126,32 @@ impl App {
         })
     }
 
+    /// The page's view is the one on screen, even while a newer open is
+    /// still loading.
+    fn shows(&self, context: &ViewContext) -> bool {
+        self.current.as_ref().map_or(context.generation == 0 && context.session.is_none(), |c| c.context == *context)
+    }
+
     fn session_id(&self) -> Option<String> {
         self.current.as_ref()?.session.as_ref().map(|s| s.session_id.clone())
     }
 
     fn show(
         &mut self,
-        session_id: Option<String>,
+        target: Target,
         path: Option<PathBuf>,
         presentation: Presentation,
         reply: Option<(Sender<Response>, Instant)>,
-        focused: bool,
     ) -> Result<()> {
         let generation = self.generation + 1;
         let proxy = self.proxy.clone();
         self.workers.submit(move || {
             let result = (|| {
-                let session_id = if focused { session::focused().map(|s| s.session_id) } else { session_id };
+                let session_id = match target {
+                    Target::Session(id) => id,
+                    Target::Focused => session::focused().map(|s| s.session_id),
+                    Target::SessionIfLive(id) => id.filter(|id| registry::find(id).is_some()),
+                };
                 let current = open(generation, session_id, path)?;
                 let config = config::load();
                 let terminal = current.session.as_ref().map(|s| s.terminal.clone()).unwrap_or_default();
@@ -243,7 +263,7 @@ impl App {
                 && slot.listing.documents.iter().any(|d| d.path == path),
             "That file listing is no longer current"
         );
-        self.show(self.session_id(), Some(path), Presentation::Keep, None, false)
+        self.show(Target::SessionIfLive(self.session_id()), Some(path), Presentation::Keep, None)
     }
 
     fn send(&mut self, context: ViewContext, request_id: u64, text: String, purpose: Option<String>) -> Result<()> {
@@ -299,13 +319,15 @@ impl App {
                 self.open_listed(context, request_id, path, false)?
             }
             PageMessage::Switch { context, session_id, path } => {
-                ensure!(self.accepts(&context), "The viewer changed; select the document again");
+                // Stepping through documents faster than they open supersedes
+                // the open in flight rather than failing against it.
+                ensure!(self.shows(&context), "The viewer changed; select the document again");
                 ensure!(
                     path.as_ref().is_none_or(|p| session_id == self.session_id()
                         && self.current.as_ref().is_some_and(|c| c.documents.iter().any(|d| d.path == *p))),
                     "That file is not in this session's documents"
                 );
-                self.show(session_id, path, Presentation::Keep, None, false)?;
+                self.show(Target::Session(session_id), path, Presentation::Keep, None)?;
             }
             PageMessage::Send { context, request_id, text, purpose } => {
                 if let Err(error) = self.send(context, request_id, text, purpose.clone()) {
@@ -335,8 +357,15 @@ impl App {
         match event {
             UserEvent::Page(message) => self.page(message)?,
             UserEvent::Opened { generation, result, reply } => {
+                // A newer open replaced this one; that is routine, not an error
+                // to show, and only a waiting client needs to hear about it.
+                if generation != self.generation {
+                    if let Some((reply, _)) = reply {
+                        let _ = reply.send(Response::Error { message: "Open request was superseded".into() });
+                    }
+                    return Ok(());
+                }
                 let result = (|| -> Result<()> {
-                    ensure!(generation == self.generation, "Open request was superseded");
                     if let Some((_, deadline)) = &reply {
                         ensure!(Instant::now() < *deadline, "Open request timed out; nothing was changed");
                     }
@@ -362,11 +391,17 @@ impl App {
                     }
                     Ok(())
                 })();
-                if result.is_err() && generation == self.generation {
+                if result.is_err() {
                     if let Some(current) = &mut self.current {
                         current.context.generation = generation;
                     }
                     self.render();
+                    // The hotkey has no client to report to; show the previous
+                    // view so the error toast is seen instead of nothing.
+                    if reply.is_none() && matches!(self.presentation, Presentation::Focus) {
+                        self.place();
+                        self.view.focus();
+                    }
                 }
                 if let Some((reply, _)) = reply {
                     let _ = reply.send(match &result {
@@ -380,11 +415,10 @@ impl App {
                 let response = match request {
                     Request::Show { session_id, path, focus } => {
                         if let Err(error) = self.show(
-                            session_id,
+                            Target::Session(session_id),
                             path,
                             if focus { Presentation::Focus } else { Presentation::BringForward },
                             Some((reply.clone(), deadline)),
-                            false,
                         ) {
                             let _ = reply.send(Response::Error { message: error.to_string() });
                         }
@@ -414,7 +448,7 @@ impl App {
                     self.place();
                     self.view.focus();
                 } else {
-                    self.show(None, None, Presentation::Focus, None, true)?;
+                    self.show(Target::Focused, None, Presentation::Focus, None)?;
                 }
             }
             UserEvent::DocChanged => {
@@ -469,7 +503,8 @@ impl App {
                         }
                         if doc.path.is_none() {
                             if let Some(path) = doc.documents.first().map(|d| d.path.clone()) {
-                                self.show(self.session_id(), Some(path), Presentation::Keep, None, false)?;
+                                let target = Target::SessionIfLive(self.session_id());
+                                self.show(target, Some(path), Presentation::Keep, None)?;
                             }
                         }
                     }
