@@ -1,6 +1,5 @@
 mod lock;
 mod server;
-mod terminal;
 mod watcher;
 mod window;
 
@@ -21,7 +20,7 @@ use crate::paths;
 use crate::protocol::{Request, Response};
 use crate::registry::{self, Session};
 use crate::theme::{self, Theme};
-use crate::{bookmarks, config, send, session};
+use crate::{bookmarks, config, send, session, terminal};
 
 /// Everything that reaches the main thread from elsewhere: socket requests,
 /// file changes, hotkey presses, and messages from the page.

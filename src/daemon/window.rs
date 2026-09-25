@@ -9,8 +9,8 @@ use wry::{NewWindowResponse, WebView, WebViewBuilder};
 
 use crate::assets;
 use crate::config::Placement;
-use crate::daemon::terminal::Frame;
 use crate::daemon::{DaemonMessage, PageMessage, UserEvent};
+use crate::terminal::Frame;
 
 const SCHEME: &str = "peekback";
 const ORIGIN: &str = "peekback://app/";

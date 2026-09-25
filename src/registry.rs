@@ -36,8 +36,8 @@ pub struct Terminal {
     pub bundle_id: Option<String>,
     pub term_program: Option<String>,
     pub iterm_profile: Option<String>,
-    /// Innermost first. Entries written before panes were recorded have
-    /// none until the session's next hook.
+    /// Candidate panes, with known TTY matches first. Older entries have none
+    /// until the session's next hook. Sending revalidates ownership.
     #[serde(default)]
     pub panes: Vec<crate::mux::Pane>,
     /// The agent process running in this terminal, when the hook could see it.
@@ -96,7 +96,7 @@ pub fn load_all_in(root: &Path) -> Vec<Session> {
 }
 
 /// Entries without an end marker, including ones whose agent has exited.
-fn registered_in(root: &Path) -> Vec<Session> {
+pub(crate) fn registered_in(root: &Path) -> Vec<Session> {
     let Ok(entries) = fs::read_dir(root.join("sessions")) else { return Vec::new() };
     let mut sessions: Vec<Session> = entries
         .flatten()
@@ -161,6 +161,9 @@ pub(crate) fn prune_in(root: &Path, max_idle_secs: i64) -> Vec<Session> {
         // would have done.
         let turn = session.turn_started_at.map(|started_at| crate::capture::abandoned(&session, started_at));
         let store = session_activity::Store::new(root.join("activity"));
+        if let Err(error) = crate::turn_history::record(root, &session, turn) {
+            eprintln!("retain turns before pruning {}: {error:#}", session.session_id);
+        }
         if let Err(error) = crate::capture::capture(root, &session, &store, turn) {
             eprintln!("capture before pruning {}: {error:#}", session.session_id);
         }

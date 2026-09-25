@@ -293,6 +293,7 @@ fn failed_hook_is_not_resurrected_by_an_unknown_transcript_request() {
         "tool_use_id":"edit-1", "tool_input":{"file_path":external}}),
     );
     let store = session_activity::Store::new(f.0.join("state/activity"));
+    f.hook(None, "Stop", json!({}));
     assert!(discovery::documents_in(&f.session(), &store).is_empty());
 }
 
@@ -587,4 +588,123 @@ fn a_session_left_idle_after_an_interrupt_does_not_share_other_sessions_files() 
     f.hook(None, "Stop", json!({}));
     let event = store(&f).events(&f.session().activity_key()).unwrap().remove(0);
     assert_eq!(event.concurrent, [session_activity::SessionKey { agent: Agent::Claude, session_id: "busy".into() }]);
+}
+
+#[test]
+fn overlap_survives_session_end_in_either_capture_order() {
+    for ends_first in [false, true] {
+        let f = Fixture::new();
+        f.hook(None, "UserPromptSubmit", json!({"session_id":"other"}));
+        f.hook(None, "UserPromptSubmit", json!({}));
+        fs::write(f.project().join("ambiguous.md"), "# Shared").unwrap();
+        f.hook(None, "Stop", json!({"session_id":"other"}));
+        if ends_first {
+            f.hook(None, "SessionEnd", json!({"session_id":"other"}));
+        }
+        f.hook(None, "Stop", json!({}));
+        if !ends_first {
+            f.hook(None, "SessionEnd", json!({"session_id":"other"}));
+        }
+        let docs = discovery::documents_in(&f.session(), &store(&f));
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].shared);
+        let events = store(&f).events(&f.session().activity_key()).unwrap();
+        assert_eq!(
+            events[0].concurrent,
+            [session_activity::SessionKey { agent: Agent::Claude, session_id: "other".into() }]
+        );
+        assert_eq!(crate::registry::load_all_in(&f.0.join("state")).len(), 1);
+    }
+}
+
+#[test]
+fn ending_an_open_turn_preserves_overlap_and_its_original_roots() {
+    let f = Fixture::new();
+    f.hook(None, "UserPromptSubmit", json!({"session_id":"other"}));
+    f.hook(None, "UserPromptSubmit", json!({}));
+    fs::write(f.project().join("shared.md"), "# Shared").unwrap();
+    f.hook(None, "SessionEnd", json!({"session_id":"other"}));
+    let elsewhere = f.0.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    f.hook(None, "SessionStart", json!({"session_id":"other", "cwd":elsewhere}));
+    f.hook(None, "SessionEnd", json!({"session_id":"other", "cwd":elsewhere}));
+    f.hook(None, "Stop", json!({}));
+    let docs = discovery::documents_in(&f.session(), &store(&f));
+    assert_eq!(docs.len(), 1);
+    assert!(docs[0].shared);
+    let histories = crate::turn_history::load(&f.0.join("state")).unwrap();
+    let other = histories.iter().find(|h| h.session.session_id == "other").unwrap();
+    assert_eq!(other.turns.len(), 1);
+    assert_eq!(other.turns[0].roots[0], f.project());
+}
+
+#[test]
+fn pruning_preserves_overlap_evidence() {
+    let f = Fixture::new();
+    f.hook(None, "UserPromptSubmit", json!({"session_id":"other"}));
+    f.hook(None, "UserPromptSubmit", json!({}));
+    fs::write(f.project().join("shared.md"), "# Shared").unwrap();
+    let record = f.0.join("state/sessions/other.json");
+    let mut session: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+    session["terminal"]["agent"] = json!({"pid":u32::MAX, "started_at_us":0});
+    fs::write(record, session.to_string()).unwrap();
+    assert_eq!(crate::registry::prune_in(&f.0.join("state"), 86_400).len(), 1);
+    f.hook(None, "Stop", json!({}));
+    assert!(discovery::documents_in(&f.session(), &store(&f))[0].shared);
+}
+
+#[test]
+fn an_unwritable_turn_history_does_not_keep_an_ended_session_live() {
+    let f = Fixture::new();
+    f.hook(None, "UserPromptSubmit", json!({}));
+    let root = f.0.join("state");
+    fs::write(root.join("turns"), "not a directory").unwrap();
+    let input = json!({"session_id":"test-session", "hook_event_name":"SessionEnd", "cwd":f.project()});
+    assert!(
+        crate::hooks::register(&root, Agent::Claude, &input, crate::registry::now_unix(), Default::default()).is_err()
+    );
+    assert!(!f.record().exists());
+    assert!(crate::registry::load_all_in(&root).is_empty());
+}
+
+#[test]
+fn damaged_turn_history_does_not_block_captures_or_turn_transitions() {
+    for damaged in ["claude.other.json", "claude.test-session.json"] {
+        let f = Fixture::new();
+        f.hook(None, "UserPromptSubmit", json!({}));
+        let root = f.0.join("state");
+        fs::create_dir_all(root.join("turns")).unwrap();
+        fs::write(root.join("turns").join(damaged), "{").unwrap();
+        fs::write(f.project().join("new.md"), "# New").unwrap();
+        let input = json!({"session_id":"test-session", "hook_event_name":"Stop", "cwd":f.project()});
+        let result =
+            crate::hooks::register(&root, Agent::Claude, &input, crate::registry::now_unix(), Default::default());
+        if damaged == "claude.test-session.json" {
+            assert!(result.is_err());
+        } else {
+            result.unwrap();
+        }
+        assert!(f.session().turn_started_at.is_none());
+        assert_eq!(documents(&f), [f.project().join("new.md")]);
+        assert_eq!(fs::read_to_string(root.join("turns").join(damaged)).unwrap(), "{");
+    }
+}
+
+#[test]
+fn a_live_session_does_not_move_its_old_turns_to_a_new_directory() {
+    let f = Fixture::new();
+    let old_project = f.0.join("old-project");
+    fs::create_dir_all(&old_project).unwrap();
+    let now = crate::registry::now_unix();
+    hook_at(&f, "UserPromptSubmit", now - 20, json!({}));
+    hook_at(&f, "UserPromptSubmit", now - 18, json!({"session_id":"other", "cwd":old_project}));
+    hook_at(&f, "Stop", now - 5, json!({"session_id":"other", "cwd":old_project}));
+    hook_at(&f, "SessionStart", now - 1, json!({"session_id":"other"}));
+    let file = f.project().join("mine.md");
+    fs::write(&file, "# Mine").unwrap();
+    age(&file, 10);
+    f.hook(None, "Stop", json!({}));
+    let docs = discovery::documents_in(&f.session(), &store(&f));
+    assert_eq!(docs.len(), 1);
+    assert!(!docs[0].shared);
 }

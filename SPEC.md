@@ -21,7 +21,9 @@ present that evidence.
 | `src/activity.rs`, `src/discovery.rs` | Turn capture roots, JSON queries, Markdown filtering |
 | `src/browse.rs` | Interactive terminal browser and plain listing |
 | `src/client.rs`, `src/protocol.rs`, `src/daemon/` | Viewer IPC, native window, file watchers, global hotkey |
-| `src/send.rs`, `src/theme.rs` | Terminal paste backends and terminal appearance |
+| `src/mux/`, `src/send.rs` | Multiplexer adapters and verified delivery selection |
+| `src/terminal.rs`, `src/theme.rs` | Terminal application operations and appearance |
+| `src/turn_history.rs` | Durable turn intervals and original roots for overlap detection |
 | `assets/` | Embedded Markdown rendering and viewer interactions |
 
 Both packages are published on crates.io with independent versions. Peekback
@@ -185,17 +187,21 @@ turn closes.
 ### Concurrent sessions
 
 Two sessions working in the same directory at the same time cannot be told
-apart by the filesystem. A scan event lists the other live sessions whose cwd
-or memory directory contains the path and whose turn covers its modification
-time: a turn closed within the last 24 hours, or the open one. An open turn
-reaches the present while the agent was active in the last 10 minutes, since
-a long command can be quiet that long; after a longer silence it most likely
-was interrupted and left idle, and ends at the agent's last activity. Both sessions capture
-the file; views mark it as possibly written by another session in each session
-that recorded the overlap. A session that ended before the capture is no longer
-registered and is not listed. Separate
-git worktrees avoid the overlap, since each session scans only its own
-directory and other checkouts are skipped.
+apart by the filesystem. A scan event lists sessions whose project or memory
+root contains the path and whose turn covers its modification time.
+Completed turns and their original roots are stored atomically in
+`turns/<agent>.<session>.json`, independently of the live registry. They are
+published before an ended session disappears, survive pruning and resuming,
+and are retained without automatic expiry so long-running turns can still
+find overlap. Activity-event retention does not remove this turn metadata.
+Damaged histories are left intact and reported as incomplete overlap evidence;
+file capture and session lifecycle updates continue.
+
+Open turns come from registered sessions. They reach the present while the
+agent is alive and was active in the last 10 minutes; otherwise they end at
+its last activity. Views mark scan-only files with overlap as possibly written
+by another session. Separate worktrees avoid overlap because each session scans
+its own directory and nested checkouts are skipped.
 
 ### Views
 
@@ -340,31 +346,39 @@ fonts style code and chrome while body text keeps the system font.
 
 ## Sending to the terminal
 
-Hooks record every multiplexer pane the agent's environment names (tmux,
-WezTerm, Kitty), innermost first. Variables leak through nesting, so a pane
-known to be on another tty than the agent's controlling tty is not recorded,
-and the one on the agent's tty comes first; panes whose tty cannot be read
-follow in the order tmux, WezTerm, Kitty. The
-automatic backend is the first reachable recorded pane, then macOS keystroke
-injection, then clipboard. A configured backend can be pinned and uses that
-multiplexer's pane wherever it is recorded. tmux uses the recorded socket and
-pane; WezTerm the recorded pane and `WEZTERM_UNIX_SOCKET`; Kitty its listen
-address and window. Commands never inherit the pane variables of the process
-that runs them. The
-keystroke backend needs Accessibility permission and pastes into the terminal
-app's focused split/tab. Clipboard fallback asks the user to paste manually.
+Hooks record candidate panes from the environment. A known TTY mismatch is
+excluded; unknown ownership is retained as a candidate, never treated as
+verification. Each adapter owns capture, inspection, focus discovery, sending,
+and the environment variables its commands must clear. Inspection distinguishes
+an available pane (with optional TTY evidence), an absent pane, and an unknown
+result such as a timeout. Focus policy caches results by adapter and server;
+tmux implements it, while WezTerm and Kitty currently return no focus result.
+Terminal application placement and explicit keystroke paste live separately in
+`terminal.rs`.
 
-The viewer re-reads the live session before sending so it can reject an ended
-target. Hooks record the agent process (the nearest non-shell ancestor, with
-its start time against PID reuse); when it has exited, the automatic backend
-becomes the clipboard and a pinned one refuses. Sent text loses control
-characters except tab and newline. tmux sends multi-line text only to panes
-with bracketed paste enabled, and Kitty always brackets. The send target is the
-session the viewer was opened for, including while it shows a file from another
-session. A standalone document has no send target. Sends report their backend
-or error and never press Enter. Terminal remote-control availability and focus
-can still affect delivery; WezTerm and Kitty remain unverified on real installs.
-Codex desktop and IDE composers are outside the supported integration.
+Automatic selection requires a matching TTY from both the live agent process
+and the addressed pane. It returns that exact destination and its TTY evidence,
+then rechecks both immediately before sending. If none can be verified, it
+copies to the clipboard. A pinned multiplexer also requires verification and
+reports an error when it cannot establish ownership. A missing WezTerm socket
+never falls back to an arbitrary GUI for inspection. tmux supports ownership
+verification; WezTerm and Kitty query pane existence but do not yet establish
+ownership, so automatic delivery through them is disabled.
+
+`backend = "keystroke"` is an explicit opt-in: it requires macOS Accessibility
+permission and pastes into the terminal application's currently focused split
+or tab, without verifying it belongs to the session. Automatic selection never
+uses this backend. Clipboard can also be selected explicitly.
+
+The viewer re-reads the live session before sending. Sent text loses control
+characters except tab and newline. tmux sends multi-line text only when the
+pane has bracketed paste enabled. Adapter commands drain input/output with a
+two-second deadline and bounded output; errors after delivery starts are
+reported without retrying through another backend. The send target remains
+the viewer's session even when it displays another session's file. Standalone
+documents have no send target. Codex desktop and IDE composers remain outside
+the supported integration. Verification and delivery are separate operations;
+terminal APIs do not provide an atomic ownership-check-and-paste transaction.
 
 ## Deliberate limits
 

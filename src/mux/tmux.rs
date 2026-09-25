@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Result, anyhow, bail};
 
-use super::{Pane, clear_ambient, output, run, run_with_stdin};
+use super::{Inspection, Pane, clear_ambient, output, run, run_with_stdin};
 
 pub const AMBIENT: &[&str] = &["TMUX", "TMUX_PANE"];
 
@@ -44,14 +44,15 @@ fn query(pane: &Pane, format: &str) -> Result<String> {
     output(tmux(socket).args(["display-message", "-p", "-t", id, format]))
 }
 
-pub fn tty(pane: &Pane) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-    let path = query(pane, "#{pane_tty}").ok()?;
-    std::fs::metadata(path).ok().map(|m| m.rdev())
-}
-
-pub fn reachable(pane: &Pane) -> bool {
-    query(pane, "#{pane_id}").is_ok()
+pub fn inspect(pane: &Pane) -> Inspection {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let Ok(reply) = query(pane, "#{pane_id} #{pane_tty}") else { return Inspection::Unknown };
+    let Some((id, path)) = reply.split_once(' ') else { return Inspection::Unknown };
+    if id != pane.id {
+        return Inspection::Unavailable;
+    }
+    let tty = std::fs::metadata(path).ok().filter(|m| m.file_type().is_char_device()).map(|m| m.rdev());
+    Inspection::Available { tty }
 }
 
 pub fn send(pane: &Pane, text: &str) -> Result<()> {
@@ -63,13 +64,14 @@ pub fn send(pane: &Pane, text: &str) -> Result<()> {
     }
     let buffer = format!("peekback-{}-{}", std::process::id(), NEXT_BUFFER.fetch_add(1, Ordering::Relaxed));
     run_with_stdin(tmux(socket).args(["load-buffer", "-b", &buffer, "-"]), text)?;
-    run(tmux(socket).args(["paste-buffer", "-p", "-b", &buffer, "-t", id, "-d"]))
+    run(tmux(socket).args(["paste-buffer", "-p", "-r", "-b", &buffer, "-t", id, "-d"]))
 }
 
 /// The pane the most recently used client of this tmux server is on. Asked
 /// per client rather than left to tmux's choice of current client, which
 /// falls back to a session even when no client is attached.
-pub fn active_pane(socket: &str) -> Option<String> {
+pub fn focused(server: Option<&str>) -> Option<String> {
+    let socket = server?;
     let clients = output(tmux(socket).args(["list-clients", "-F", "#{client_activity} #{pane_id}"])).ok()?;
     most_recent_client_pane(&clients)
 }

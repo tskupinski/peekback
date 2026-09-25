@@ -214,8 +214,8 @@ sending. If the tracked agent process is no longer running, automatic sending
 falls back to the clipboard; a pinned paste backend refuses the send. Such a
 session also counts as ended everywhere else, so it drops out of
 `peekback status`, the session picker and the hotkey. Entries created before
-process tracking retain their previous behavior until fresh hook activity
-records the agent's identity.
+process tracking remain browsable, but automatic sending uses the clipboard
+until fresh hook activity records an identity that can be verified.
 
 ### Commands
 
@@ -402,15 +402,24 @@ the picker.
 
 ### How text reaches the prompt
 
-peekback probes, in order: the multiplexer panes recorded by the hook (tmux,
-WezTerm or Kitty, innermost first, each with its server socket), macOS keystroke injection
-(clipboard plus Cmd+V into the terminal app, needs the Accessibility
-permission), and finally the clipboard with a toast asking you to paste.
-tmux refuses multi-line text when the program in the pane has not enabled
-bracketed paste, because tmux would type each newline as Enter.
-`peekback status` shows the result of the probe per session. WezTerm and
-Kitty are implemented to their documented interfaces but have not been
-exercised on a real install yet.
+peekback inspects the exact server and pane recorded by the hook and compares
+its terminal device with the live agent's. It rechecks the selected destination
+before sending. Missing, unavailable, or unverified destinations use the
+clipboard in automatic mode; a pinned multiplexer reports an error instead.
+Commands have a two-second timeout and failed sends are never retried through
+another backend, since some text may already have arrived.
+
+tmux supports ownership verification and refuses multi-line text when the pane
+has not enabled bracketed paste. WezTerm and Kitty query actual pane listings,
+but ownership verification and focus discovery are not yet implemented for
+those adapters. They therefore use the clipboard in automatic mode, or report
+an unverified target when pinned. Their remote interfaces have not been exercised
+on a real install yet.
+
+`backend = "keystroke"` explicitly opts into macOS Cmd+V injection and requires
+Accessibility permission. It pastes into the application's focused window/tab,
+which may differ from the selected session. Automatic mode never uses it.
+`peekback status` reports the selected backend or an unverified pinned target.
 
 ### Theme
 

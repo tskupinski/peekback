@@ -2,19 +2,20 @@
 //! interface. Each one records where a session's agent runs, tells whether that
 //! pane still exists, and pastes into it.
 
+mod command;
 mod kitty;
 mod tmux;
 mod wezterm;
 
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-pub use tmux::{active_pane as tmux_active_pane, server_from_env as tmux_server_from_env};
+use command::{output, run, run_with_stdin};
+pub use tmux::server_from_env as tmux_server_from_env;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mux {
     Tmux,
@@ -22,15 +23,34 @@ pub enum Mux {
     Kitty,
 }
 
-/// Where a session's agent runs, in one multiplexer.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// A candidate destination observed in a hook environment. Ownership must be verified.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Pane {
     pub mux: Mux,
     /// The socket or address of the server the pane belongs to; pane ids are
-    /// only unique within one server. WezTerm may not name one, and then
-    /// finds its running GUI.
+    /// only unique within one server. A missing server cannot be verified.
     pub server: Option<String>,
     pub id: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Inspection {
+    Available { tty: Option<u64> },
+    Unavailable,
+    Unknown,
+}
+
+impl Inspection {
+    fn tty(self) -> Option<u64> {
+        match self {
+            Self::Available { tty } => tty,
+            _ => None,
+        }
+    }
+
+    pub fn verifies(self, agent_tty: Option<u64>) -> bool {
+        matches!((self.tty(), agent_tty), (Some(pane), Some(agent)) if pane == agent)
+    }
 }
 
 impl Mux {
@@ -56,19 +76,19 @@ impl Mux {
         }
     }
 
-    /// The terminal device the pane runs on, when the server can tell.
-    fn tty(self, pane: &Pane) -> Option<u64> {
+    pub fn inspect(self, pane: &Pane) -> Inspection {
         match self {
-            Mux::Tmux => tmux::tty(pane),
-            Mux::Wezterm | Mux::Kitty => None,
+            Mux::Tmux => tmux::inspect(pane),
+            Mux::Wezterm => wezterm::inspect(pane),
+            Mux::Kitty => kitty::inspect(pane),
         }
     }
 
-    pub fn reachable(self, pane: &Pane) -> bool {
+    pub fn focused(self, server: Option<&str>) -> Option<String> {
         match self {
-            Mux::Tmux => tmux::reachable(pane),
-            Mux::Wezterm => wezterm::reachable(pane),
-            Mux::Kitty => kitty::reachable(pane),
+            Mux::Tmux => tmux::focused(server),
+            Mux::Wezterm => wezterm::focused(server),
+            Mux::Kitty => kitty::focused(server),
         }
     }
 
@@ -98,10 +118,10 @@ impl Pane {
     }
 }
 
-/// Every pane the environment places the agent in, innermost first.
+/// Capture candidates, preferring matching TTYs and dropping known mismatches.
 pub fn capture(env: impl Fn(&str) -> Option<String>, agent_tty: Option<u64>) -> Vec<Pane> {
     let panes = Mux::ALL.into_iter().filter_map(|mux| mux.capture(&env)).collect();
-    on_agent_tty(panes, agent_tty, |pane| pane.mux.tty(pane))
+    on_agent_tty(panes, agent_tty, |pane| pane.mux.inspect(pane).tty())
 }
 
 /// Variables leak through nesting, so they cannot tell which pane the agent
@@ -128,33 +148,6 @@ fn clear_ambient(cmd: &mut Command) -> &mut Command {
         cmd.env_remove(key);
     }
     cmd
-}
-
-fn output(cmd: &mut Command) -> Result<String> {
-    let output = cmd.output().with_context(|| format!("run {:?}", cmd.get_program()))?;
-    if !output.status.success() {
-        bail!("{:?} failed: {}", cmd.get_program(), String::from_utf8_lossy(&output.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
-fn run(cmd: &mut Command) -> Result<()> {
-    output(cmd).map(drop)
-}
-
-fn run_with_stdin(cmd: &mut Command, input: &str) -> Result<()> {
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("run {:?}", cmd.get_program()))?;
-    child.stdin.take().expect("piped stdin").write_all(input.as_bytes())?;
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        bail!("{:?} failed: {}", cmd.get_program(), String::from_utf8_lossy(&output.stderr).trim());
-    }
-    Ok(())
 }
 
 pub fn on_path(program: &str) -> bool {

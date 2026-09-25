@@ -2,7 +2,7 @@ use std::process::Command;
 
 use anyhow::Result;
 
-use super::{Mux, Pane, clear_ambient, on_path, run_with_stdin};
+use super::{Inspection, Mux, Pane, clear_ambient, output, run_with_stdin};
 
 pub const AMBIENT: &[&str] = &["WEZTERM_PANE", "WEZTERM_UNIX_SOCKET"];
 
@@ -22,8 +22,32 @@ fn wezterm(pane: &Pane) -> Command {
     cmd
 }
 
-pub fn reachable(_: &Pane) -> bool {
-    on_path("wezterm")
+pub fn inspect(pane: &Pane) -> Inspection {
+    if pane.server.is_none() {
+        return Inspection::Unknown;
+    }
+    let Ok(reply) = output(wezterm(pane).args(["cli", "list", "--format", "json"])) else {
+        return Inspection::Unknown;
+    };
+    inspect_listing(&reply, &pane.id)
+}
+
+fn inspect_listing(reply: &str, id: &str) -> Inspection {
+    #[derive(serde::Deserialize)]
+    struct ListedPane {
+        pane_id: u64,
+    }
+    let Ok(panes) = serde_json::from_str::<Vec<ListedPane>>(reply) else { return Inspection::Unknown };
+    if panes.iter().any(|pane| pane.pane_id.to_string() == id) {
+        // The CLI listing exposes identity, but no controlling terminal.
+        Inspection::Available { tty: None }
+    } else {
+        Inspection::Unavailable
+    }
+}
+
+pub fn focused(_server: Option<&str>) -> Option<String> {
+    None
 }
 
 pub fn send(pane: &Pane, text: &str) -> Result<()> {
@@ -36,6 +60,17 @@ mod tests {
 
     fn env_of(cmd: &Command, key: &str) -> Option<Option<String>> {
         cmd.get_envs().find(|(k, _)| *k == key).map(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()))
+    }
+
+    #[test]
+    fn listing_distinguishes_absent_panes_from_unknown_ownership() {
+        use super::{Inspection, inspect_listing};
+        let reply = r#"[{"pane_id":3}]"#;
+        assert_eq!(inspect_listing(reply, "3"), Inspection::Available { tty: None });
+        assert_eq!(inspect_listing(reply, "4"), Inspection::Unavailable);
+        assert_eq!(inspect_listing("[]", "3"), Inspection::Unavailable);
+        assert_eq!(inspect_listing("not json", "3"), Inspection::Unknown);
+        assert_eq!(inspect_listing("[{}]", "3"), Inspection::Unknown);
     }
 
     #[test]

@@ -54,12 +54,17 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
         }
         _ => None,
     };
+    let retained = if closed.is_some() || event == "SessionEnd" {
+        previous.as_ref().map_or(Ok(()), |s| crate::turn_history::record(root, s, closed))
+    } else {
+        Ok(())
+    };
     if event == "SessionEnd" {
         // Closing the session must survive an interrupted capture.
         crate::lifecycle::mark_ended(root, &key)?;
         let captured = previous.as_ref().map_or(Ok(()), |s| capture::capture(root, s, &store, closed));
         crate::lifecycle::end(root, &key)?;
-        return captured;
+        return retained.and(captured);
     }
     let Some(cwd) = input["cwd"].as_str().map(Path::new).filter(|p| p.is_absolute()) else { return Ok(()) };
     if !input["transcript_path"].is_null() && !input["transcript_path"].is_string() {
@@ -128,5 +133,5 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     if result.is_err() {
         let _ = fs::remove_file(tmp);
     }
-    result.and(captured)
+    result.and(retained).and(captured)
 }

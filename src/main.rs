@@ -17,9 +17,11 @@ mod registry;
 mod send;
 mod session;
 mod setup;
+mod terminal;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod turn_history;
 
 use std::path::PathBuf;
 
@@ -169,7 +171,7 @@ fn status(prune: bool) -> Result<()> {
                 s.cwd.display(),
                 ago(now - s.last_active_at),
                 terminal,
-                send::probe(&s, pinned).name()
+                send::probe(&s, pinned).map(|backend| backend.name()).unwrap_or("unverified")
             );
         }
     }

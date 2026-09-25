@@ -58,23 +58,29 @@ fn tmux_pane(session: &Session) -> Option<&Pane> {
 }
 
 /// For callers outside any session, such as the hotkey: the session in the
-/// tmux pane the user last worked in, else the most recently active one.
+/// focused pane reported by an adapter, else the most recently active one.
 pub fn focused() -> Option<Session> {
     let sessions = registry::load_all();
-    in_active_pane(&sessions, mux::tmux_active_pane).or_else(|| sessions.into_iter().next())
+    in_active_pane(&sessions, |mux, server| mux.focused(server)).or_else(|| sessions.into_iter().next())
 }
 
 /// Sessions come newest first, so a pane still registered to a session that
 /// died without ending loses to the one running there now.
-fn in_active_pane(sessions: &[Session], mut active_pane: impl FnMut(&str) -> Option<String>) -> Option<Session> {
+fn in_active_pane(
+    sessions: &[Session],
+    mut focused: impl FnMut(Mux, Option<&str>) -> Option<String>,
+) -> Option<Session> {
     let mut active = HashMap::new();
     sessions
         .iter()
-        .find(|s| match tmux_pane(s) {
-            Some(Pane { server: Some(socket), id, .. }) => {
-                active.entry(socket.clone()).or_insert_with(|| active_pane(socket)).as_ref() == Some(id)
-            }
-            _ => false,
+        .find(|session| {
+            session.terminal.panes.iter().any(|pane| {
+                active
+                    .entry((pane.mux, pane.server.clone()))
+                    .or_insert_with(|| focused(pane.mux, pane.server.as_deref()))
+                    .as_ref()
+                    == Some(&pane.id)
+            })
         })
         .cloned()
 }
@@ -88,6 +94,20 @@ fn current_id(mut get: impl FnMut(&str) -> Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_is_dispatched_and_cached_by_adapter_and_server() {
+        let mut other = session("kitty", Some("/same"), Some("3"));
+        other.terminal.panes[0].mux = Mux::Kitty;
+        let sessions = [session("tmux", Some("/same"), Some("%1")), other];
+        let mut calls = Vec::new();
+        let found = in_active_pane(&sessions, |mux, server| {
+            calls.push((mux, server.unwrap().to_owned()));
+            (mux == Mux::Kitty).then(|| "3".into())
+        });
+        assert_eq!(found.unwrap().session_id, "kitty");
+        assert_eq!(calls, [(Mux::Tmux, "/same".into()), (Mux::Kitty, "/same".into())]);
+    }
 
     #[test]
     fn resolves_codex_thread_and_legacy_session_variables() {
@@ -122,7 +142,8 @@ mod tests {
             session("stale-in-active", Some("/b"), Some("%7")),
         ];
         let mut asked = Vec::new();
-        let found = in_active_pane(&sessions, |socket| {
+        let found = in_active_pane(&sessions, |_, socket| {
+            let socket = socket.unwrap();
             asked.push(socket.to_owned());
             Some(if socket == "/a" { "%2" } else { "%7" }.into())
         });
@@ -161,7 +182,7 @@ mod tests {
         let sessions = [session("a", Some("/gone"), Some("%1")), session("b", Some("/gone"), Some("%2"))];
         let mut asked = 0;
         assert!(
-            in_active_pane(&sessions, |_| {
+            in_active_pane(&sessions, |_, _| {
                 asked += 1;
                 None
             })
