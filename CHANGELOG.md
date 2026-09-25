@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-09-25
+
+Session files are now decided when each turn ends and stored, instead of
+being guessed from the filesystem whenever a view opens. Requires
+session-activity 0.2.0. Breaking: `--candidates` is removed, and history this
+version writes cannot be read by Peekback 0.1.x, which skips it with warnings.
 
 - Switch the viewer to a session even before it writes Markdown. It showed an
   error and kept the previous session's document, file list and send target, so

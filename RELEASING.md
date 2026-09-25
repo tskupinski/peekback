@@ -208,9 +208,24 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
       generated hook commands. Confirm both appear in `peekback status`.
 - [ ] Create/edit a Markdown file in each session. Confirm it appears in
       `peekback browse`; use `p` to render it in the native viewer.
-- [ ] Browse `--all-sessions` and the viewer's All sessions picker (`Ctrl-P`,
-      then `Tab`). Check provenance and filtering. Previews should preserve the
-      originating live session, or open standalone when there is none.
+- [ ] Have each agent write a Markdown file through a shell command. Confirm it
+      appears as `scan` after the turn ends, not before; stays listed after you
+      edit it by hand; and is still listed after ending and resuming the session.
+- [ ] Interrupt a turn with Esc, write a Markdown file yourself, then send the
+      next prompt. Confirm the session does not list that file. With two
+      sessions working in one directory, confirm a shell-written file is marked
+      `shared` in the browser and viewer.
+- [ ] Open a fresh session that has written no Markdown. Confirm `show` and the
+      hotkey switch the viewer to it with an empty state, and that its first
+      document opens as soon as it is written. With several tmux panes, confirm
+      the hotkey picks the session in the pane you last used.
+- [ ] Browse `--all-sessions`. Check provenance and filtering. Previews should
+      preserve the originating live session, or open standalone when there is
+      none.
+- [ ] Check the viewer's Scratchpad picker (`Ctrl-P`, then `Tab`) in a Claude
+      Code session: it lists the scratchpad's Markdown newest first, including
+      files written mid-turn, and opening one keeps the session. In a Codex
+      session it says there is no scratchpad.
 - [ ] Configure bookmarked files, folders, and globs. Check the Bookmarks picker
       and refresh after editing the config; opening a bookmark keeps the session.
 - [ ] Check Mermaid, math, syntax highlighting, live reload, normal window
@@ -221,9 +236,13 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
 - [ ] Copy a selection and send one through a tested terminal backend. Confirm
       it lands in the intended prompt without submitting it. Record the backend;
       keep WezTerm/Kitty marked unverified unless actually exercised.
-- [ ] Confirm clipboard fallback after a tracked agent process exits. Fresh
-      hook activity records process identity; older entries without it retain
-      the previous behavior until refreshed.
+- [ ] Kill an agent process without ending its session. Confirm the session
+      drops out of `peekback status` and the pickers, sends from a viewer still
+      showing it fall back to the clipboard, and `peekback status --prune`
+      captures its open turn and removes it. Fresh hook activity records process
+      identity; older entries without it retain the previous behavior until
+      refreshed. Check this for Codex too: its hook process ancestry is not yet
+      verified.
 - [ ] End the sessions; verify their retained files remain queryable and live
       registry entries disappear.
 - [ ] Upgrade over an earlier installation, restart the daemon, and verify the

@@ -1,6 +1,6 @@
 [package]
 name = "peekback"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.87"
 description = "Browse Claude Code and Codex session files in the terminal, with a native Markdown preview"
@@ -39,7 +39,7 @@ notify = "8.2.0"
 plist = "1.8.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-session-activity = { version = "0.1.1", path = "crates/session-activity" }
+session-activity = { version = "0.2.0", path = "crates/session-activity" }
 tao = "0.37.0"
 toml = "1.1.6"
 unicode-width = "0.2.0"

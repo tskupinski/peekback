@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-09-25
 
-Breaking: the event schema and public API change, so this needs a new minor
-version.
+Breaking: the event schema and public API change. Events are written with
+schema 2, which 0.1.x rejects; schema 1 history remains readable.
 
 - Write events with schema 2, which adds `FileEvent::concurrent`: the other
   sessions that were working where a scan observed the file. Schema 1 events

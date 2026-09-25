@@ -108,6 +108,12 @@ The next `peekback show` or `p` in the terminal browser starts the new daemon
 and restores the global hotkey. Review changed Codex hooks through `/hooks`
 if prompted. Rerun setup if you move the executable.
 
+Upgrading from 0.1.x to 0.2 changes how session files are recorded. Each
+session starts capturing turns at its next prompt; Markdown it wrote through
+shell commands before the upgrade is not backfilled, while files from its
+file tools stay listed. The new history format cannot be read by 0.1.x, which
+skips it with warnings, so downgrading loses what 0.2 recorded.
+
 If an upgrade seems to have no effect, run `type -a peekback` and
 `peekback --version`. An older copy in `~/bin` or `~/.local/bin` may come before
 Cargo's binary on PATH. Put your Cargo bin directory first, rerun setup with
