@@ -20,22 +20,25 @@ create tags, or create GitHub releases.
 
 ## Validation evidence
 
-The [CI run for commit d9e4ecd](https://github.com/tskupinski/peekback/actions/runs/35974796395)
-passed the app job and both standalone library jobs. This is automated evidence,
-not a substitute for the manual acceptance checks on each release.
+For 0.2.0, the [CI run for commit b3f92bd](https://github.com/tskupinski/peekback/actions/runs/36156342344)
+passed the app job and both standalone library jobs, and the tag workflows
+verified the [release archive](https://github.com/tskupinski/peekback/actions/runs/36156347569)
+and the [standalone library](https://github.com/tskupinski/peekback/actions/runs/36156347363).
+Both crates were published from that commit. This is automated evidence, not a
+substitute for the manual acceptance checks on each release.
 
 | Component | Scope / evidence |
 | --- | --- |
 | App CI | macOS 15 ARM runner: checks, source Cargo install, setup, archive installation |
 | Library CI | Standalone package tests, Clippy, rustdoc, and consumer example on Ubuntu 24.04 and macOS 15 |
 | Release archive | `aarch64-apple-darwin`, deployment target macOS 14.0 |
-| Local build/test host at 0.1.0 | Apple Silicon, macOS 26.3, Rust 1.87.0 |
+| Local build/test host at 0.2.0 | Apple Silicon, macOS 26.5.2, Rust 1.87.0 |
 | Agent payload coverage | Synthetic hook/transcript fixtures, both installed hook lifecycles, retained history |
 | Terminal UI | Automated pseudo-terminal test; preview IPC uses a fake viewer |
 | Manual integration coverage | Record actual agent versions and terminal backends in release notes |
 | Other platforms | No Intel/Linux/Windows app builds or desktop/IDE composer integration |
 
-Local agent versions observed during 0.1.0 preparation were Claude Code 2.1.280
+Local agent versions observed during 0.2.0 preparation were Claude Code 2.1.282
 and Codex CLI 0.156.1. These are an inventory, not claimed minimum versions or
 proof of end-to-end coverage. The deployment target is a compatibility baseline,
 not proof of testing on every macOS version. WezTerm and Kitty send backends
