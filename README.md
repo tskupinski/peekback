@@ -235,7 +235,7 @@ peekback quit                                       stop the daemon
 and unregisters the global hotkey.
 
 Session resolution for `show`, `send`, and `browse`: `--session`, else the session in
-the given tmux pane, else the session this shell runs inside, else the most
+the given tmux pane on the current tmux server, else the session this shell runs inside, else the most
 recently active one.
 
 `PEEKBACK_STATE_DIR` optionally overrides `~/.local/state/peekback`. Set it
@@ -402,8 +402,8 @@ the picker.
 
 ### How text reaches the prompt
 
-peekback probes, in order: tmux (using the pane and server socket recorded
-by the hook), WezTerm and Kitty remote control, macOS keystroke injection
+peekback probes, in order: the multiplexer panes recorded by the hook (tmux,
+WezTerm or Kitty, innermost first, each with its server socket), macOS keystroke injection
 (clipboard plus Cmd+V into the terminal app, needs the Accessibility
 permission), and finally the clipboard with a toast asking you to paste.
 tmux refuses multi-line text when the program in the pane has not enabled

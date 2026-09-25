@@ -9,6 +9,7 @@ mod daemon;
 mod discovery;
 mod hooks;
 mod lifecycle;
+mod mux;
 mod paths;
 mod process;
 mod protocol;
@@ -156,8 +157,8 @@ fn status(prune: bool) -> Result<()> {
         let now = registry::now_unix();
         let pinned = config::load().pinned_backend();
         for s in sessions {
-            let terminal = match (&s.terminal.tmux_pane, &s.terminal.term_program) {
-                (Some(pane), _) => format!("tmux {pane}"),
+            let terminal = match (s.terminal.panes.first(), &s.terminal.term_program) {
+                (Some(pane), _) => pane.label(),
                 (None, Some(program)) => program.clone(),
                 (None, None) => "unknown terminal".into(),
             };

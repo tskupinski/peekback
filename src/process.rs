@@ -12,6 +12,11 @@ impl ProcessId {
     pub fn is_running(self) -> bool {
         info(self.pid).is_some_and(|p| p.id == self)
     }
+
+    /// The device of the process's controlling terminal.
+    pub fn tty(self) -> Option<u64> {
+        info(self.pid).filter(|p| p.id == self).and_then(|p| p.tty)
+    }
 }
 
 /// The agent that ran this hook: the nearest ancestor that is not a shell.
@@ -37,6 +42,7 @@ struct Info {
     id: ProcessId,
     parent: u32,
     name: String,
+    tty: Option<u64>,
 }
 
 #[cfg(target_os = "macos")]
@@ -59,6 +65,8 @@ fn info(pid: u32) -> Option<Info> {
         id: ProcessId { pid, started_at_us: bsd.pbi_start_tvsec * 1_000_000 + bsd.pbi_start_tvusec },
         parent: bsd.pbi_ppid,
         name,
+        // NODEV (all ones) when the process has no controlling terminal.
+        tty: (bsd.e_tdev != u32::MAX).then_some(u64::from(bsd.e_tdev)),
     })
 }
 

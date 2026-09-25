@@ -6,6 +6,17 @@
   the pane of whichever terminal started it, and tmux answered every "which
   pane is active" query for that pane's window, so the hotkey kept opening a
   session from that window.
+- Send to the pane the agent actually runs in when multiplexers are nested.
+  A WezTerm window opened from tmux inherits `TMUX_PANE`, so text went to the
+  tmux pane instead, and the hotkey and `--pane` could open it for the tmux
+  pane's own session. A pane on another tty than the agent's is no longer
+  recorded.
+- Look up `--pane` on the caller's tmux server. Pane ids repeat across tmux
+  servers, so it could open a session from another server.
+- Send WezTerm text to the WezTerm instance the session runs in, not whichever
+  one `wezterm cli` finds first.
+- Sessions recorded by an earlier version send through keystroke or the
+  clipboard until their next prompt or tool call re-records the pane.
 
 ## 0.2.0 - 2026-09-25
 

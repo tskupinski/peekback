@@ -36,11 +36,10 @@ pub struct Terminal {
     pub bundle_id: Option<String>,
     pub term_program: Option<String>,
     pub iterm_profile: Option<String>,
-    pub tmux_pane: Option<String>,
-    pub tmux_socket: Option<String>,
-    pub kitty_window: Option<String>,
-    pub kitty_listen_on: Option<String>,
-    pub wezterm_pane: Option<String>,
+    /// Innermost first. Entries written before panes were recorded have
+    /// none until the session's next hook.
+    #[serde(default)]
+    pub panes: Vec<crate::mux::Pane>,
     /// The agent process running in this terminal, when the hook could see it.
     pub agent: Option<crate::process::ProcessId>,
 }
@@ -131,10 +130,6 @@ fn registered_at(root: &Path, session_id: &str) -> Option<Session> {
     let text = fs::read_to_string(root.join("sessions").join(format!("{session_id}.json"))).ok()?;
     let session: Session = serde_json::from_str(&text).ok()?;
     (!crate::lifecycle::ended(root, &session.activity_key())).then_some(session)
-}
-
-pub fn find_by_pane(pane: &str) -> Option<Session> {
-    load_all().into_iter().find(|s| s.terminal.tmux_pane.as_deref() == Some(pane))
 }
 
 pub fn newest() -> Option<Session> {

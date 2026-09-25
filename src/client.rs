@@ -89,16 +89,15 @@ fn spawn_daemon() -> Result<()> {
     DirBuilder::new().recursive(true).mode(0o700).create(paths::state_dir())?;
     let log = OpenOptions::new().create(true).append(true).mode(0o600).open(paths::log_path())?;
     let mut command = Command::new(std::env::current_exe()?);
-    command
-        .arg("daemon")
-        // The daemon serves every session; it must not inherit the one this
-        // shell happens to run inside.
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .env_remove("CODEX_THREAD_ID")
-        .env_remove("CODEX_SESSION_ID")
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log.try_clone()?))
-        .stderr(Stdio::from(log));
+    // The daemon serves every session and pane; it must not inherit the ones
+    // this shell happens to run inside.
+    for key in ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID"]
+        .into_iter()
+        .chain(crate::mux::Mux::ALL.into_iter().flat_map(|mux| mux.ambient_env().iter().copied()))
+    {
+        command.env_remove(key);
+    }
+    command.arg("daemon").stdin(Stdio::null()).stdout(Stdio::from(log.try_clone()?)).stderr(Stdio::from(log));
     unsafe {
         command.pre_exec(|| {
             libc::setsid();

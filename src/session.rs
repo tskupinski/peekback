@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 
+use crate::mux::{self, Mux, Pane};
 use crate::registry::{self, Session};
 
 pub const HOOK_HINT: &str = "no registered sessions; run peekback setup, then start or resume your agent";
@@ -14,8 +15,7 @@ pub fn resolve(explicit: Option<&str>, pane: Option<&str>) -> Result<Session> {
         return registry::find(id).ok_or_else(|| anyhow::anyhow!("session {id} is not registered or has ended"));
     }
     if let Some(pane) = pane {
-        return registry::find_by_pane(pane)
-            .ok_or_else(|| anyhow::anyhow!("no registered session in tmux pane {pane}"));
+        return in_tmux_pane(registry::load_all(), pane, mux::tmux_server_from_env().as_deref());
     }
     if let Some(id) = current_id(|key| std::env::var(key).ok()) {
         return registry::find(&id).ok_or_else(|| {
@@ -33,11 +33,35 @@ pub fn inside() -> Option<Session> {
     current_id(|key| std::env::var(key).ok()).and_then(|id| registry::find(&id))
 }
 
+/// Pane ids repeat across tmux servers, so the pane is looked up on the
+/// server the caller runs under, as a tmux binding's `run-shell` does. Without
+/// one, the id must name a pane on a single server. Sessions come newest
+/// first, so a pane still registered to a session that died without ending
+/// loses to the one running there now.
+fn in_tmux_pane(sessions: Vec<Session>, pane: &str, server: Option<&str>) -> Result<Session> {
+    let mut matching = sessions.into_iter().filter_map(|s| {
+        let found = tmux_pane(&s).filter(|p| p.id == pane && (server.is_none() || p.server.as_deref() == server));
+        let found_on = found.map(|p| p.server.clone());
+        found_on.map(|on| (on, s))
+    });
+    let Some((first_server, session)) = matching.next() else {
+        bail!("no registered session in tmux pane {pane}");
+    };
+    if matching.any(|(other, _)| other != first_server) {
+        return Err(anyhow!("tmux pane {pane} exists on several tmux servers; run this from inside tmux"));
+    }
+    Ok(session)
+}
+
+fn tmux_pane(session: &Session) -> Option<&Pane> {
+    session.terminal.panes.iter().find(|p| p.mux == Mux::Tmux)
+}
+
 /// For callers outside any session, such as the hotkey: the session in the
 /// tmux pane the user last worked in, else the most recently active one.
 pub fn focused() -> Option<Session> {
     let sessions = registry::load_all();
-    in_active_pane(&sessions, crate::send::tmux_active_pane).or_else(|| sessions.into_iter().next())
+    in_active_pane(&sessions, mux::tmux_active_pane).or_else(|| sessions.into_iter().next())
 }
 
 /// Sessions come newest first, so a pane still registered to a session that
@@ -46,9 +70,9 @@ fn in_active_pane(sessions: &[Session], mut active_pane: impl FnMut(&str) -> Opt
     let mut active = HashMap::new();
     sessions
         .iter()
-        .find(|s| match (&s.terminal.tmux_socket, &s.terminal.tmux_pane) {
-            (Some(socket), Some(pane)) => {
-                active.entry(socket.clone()).or_insert_with(|| active_pane(socket)).as_ref() == Some(pane)
+        .find(|s| match tmux_pane(s) {
+            Some(Pane { server: Some(socket), id, .. }) => {
+                active.entry(socket.clone()).or_insert_with(|| active_pane(socket)).as_ref() == Some(id)
             }
             _ => false,
         })
@@ -81,7 +105,10 @@ mod tests {
             "transcript_path": null,
             "started_at": 0,
             "last_active_at": 0,
-            "terminal": { "tmux_socket": socket, "tmux_pane": pane },
+            "terminal": { "panes": match (socket, pane) {
+                (Some(socket), Some(pane)) => serde_json::json!([{ "mux": "tmux", "server": socket, "id": pane }]),
+                _ => serde_json::json!([]),
+            } },
         }))
         .unwrap()
     }
@@ -101,6 +128,32 @@ mod tests {
         });
         assert_eq!(found.map(|s| s.session_id), Some("active".into()));
         assert_eq!(asked, ["/a", "/b"]);
+    }
+
+    fn ids(found: Result<Session>) -> String {
+        found.map_or_else(|e| e.to_string(), |s| s.session_id)
+    }
+
+    #[test]
+    fn a_pane_is_looked_up_on_the_callers_tmux_server() {
+        let sessions = || {
+            vec![
+                session("newest-on-a", Some("/a"), Some("%7")),
+                session("on-b", Some("/b"), Some("%7")),
+                session("stale-on-a", Some("/a"), Some("%7")),
+                session("other", Some("/a"), Some("%1")),
+            ]
+        };
+        // A tmux binding's run-shell job sets TMUX to its server while
+        // TMUX_PANE is whatever the server inherited; only the server is used.
+        assert_eq!(ids(in_tmux_pane(sessions(), "%7", Some("/b"))), "on-b");
+        assert_eq!(ids(in_tmux_pane(sessions(), "%7", Some("/a"))), "newest-on-a");
+        assert_eq!(ids(in_tmux_pane(sessions(), "%9", Some("/a"))), "no registered session in tmux pane %9");
+        assert_eq!(
+            ids(in_tmux_pane(sessions(), "%7", None)),
+            "tmux pane %7 exists on several tmux servers; run this from inside tmux"
+        );
+        assert_eq!(ids(in_tmux_pane(sessions(), "%1", None)), "other");
     }
 
     #[test]

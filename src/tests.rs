@@ -47,8 +47,11 @@ impl Fixture {
         let Ok(input) = serde_json::from_str(input) else { return };
         let agent = if agent == Some("codex") { Agent::Codex } else { Agent::Claude };
         let terminal = crate::registry::Terminal {
-            tmux_pane: Some("%7".into()),
-            tmux_socket: Some("/tmp/peekback-test.sock".into()),
+            panes: vec![crate::mux::Pane {
+                mux: crate::mux::Mux::Tmux,
+                server: Some("/tmp/peekback-test.sock".into()),
+                id: "%7".into(),
+            }],
             ..Default::default()
         };
         crate::hooks::register(&self.0.join("state"), agent, &input, crate::registry::now_unix(), terminal).unwrap();
@@ -114,8 +117,8 @@ fn codex_hook_lifecycle_without_transcript() {
     assert!(s.transcript_path.is_none());
     assert!(s.memory_dir().is_none());
     assert!(s.scratchpad_dir().is_none());
-    assert_eq!(s.terminal.tmux_pane.as_deref(), Some("%7"));
-    assert_eq!(s.terminal.tmux_socket.as_deref(), Some("/tmp/peekback-test.sock"));
+    assert_eq!(s.terminal.panes[0].id, "%7");
+    assert_eq!(s.terminal.panes[0].server.as_deref(), Some("/tmp/peekback-test.sock"));
     let mut record: Value = serde_json::from_str(&fs::read_to_string(f.record()).unwrap()).unwrap();
     record["started_at"] = json!(123);
     fs::write(f.record(), record.to_string()).unwrap();

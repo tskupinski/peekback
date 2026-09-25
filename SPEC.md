@@ -100,7 +100,9 @@ an ID already owned by another agent; the retained store uses both agent and
 session ID. Hooks provide no reliable process generation, so an old start/end
 hook cannot always be distinguished from one for a resumed session.
 
-Session resolution prefers an explicit ID, then an explicit tmux pane, then
+Session resolution prefers an explicit ID, then an explicit tmux pane (looked
+up on the tmux server in the caller's `TMUX`, else on any server when the id
+is unique), then
 `CODEX_THREAD_ID`, `CODEX_SESSION_ID`, or `CLAUDE_CODE_SESSION_ID` from the
 calling process, then the most recently active live session. Retained browsing
 can select an ended session by agent and ID, or all sessions without a live
@@ -337,9 +339,17 @@ fonts style code and chrome while body text keeps the system font.
 
 ## Sending to the terminal
 
-The automatic backend order is tmux, WezTerm, Kitty, macOS keystroke injection,
-then clipboard. A configured backend can be pinned. tmux uses the recorded
-socket and pane; WezTerm and Kitty use their remote-control interfaces. The
+Hooks record every multiplexer pane the agent's environment names (tmux,
+WezTerm, Kitty), innermost first. Variables leak through nesting, so a pane
+known to be on another tty than the agent's controlling tty is not recorded,
+and the one on the agent's tty comes first; panes whose tty cannot be read
+follow in the order tmux, WezTerm, Kitty. The
+automatic backend is the first reachable recorded pane, then macOS keystroke
+injection, then clipboard. A configured backend can be pinned and uses that
+multiplexer's pane wherever it is recorded. tmux uses the recorded socket and
+pane; WezTerm the recorded pane and `WEZTERM_UNIX_SOCKET`; Kitty its listen
+address and window. Commands never inherit the pane variables of the process
+that runs them. The
 keystroke backend needs Accessibility permission and pastes into the terminal
 app's focused split/tab. Clipboard fallback asks the user to paste manually.
 

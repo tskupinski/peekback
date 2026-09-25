@@ -13,17 +13,14 @@ use crate::registry::{Session, Terminal};
 static NEXT_WRITE: AtomicU64 = AtomicU64::new(0);
 
 pub fn terminal() -> Terminal {
-    let get = |key| std::env::var(key).ok().filter(|v| !v.is_empty());
+    let get = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
+    let agent = crate::process::hook_agent();
     Terminal {
         bundle_id: get("__CFBundleIdentifier"),
         term_program: get("TERM_PROGRAM"),
         iterm_profile: get("ITERM_PROFILE"),
-        tmux_pane: get("TMUX_PANE"),
-        tmux_socket: get("TMUX").map(|v| v.split(',').next().unwrap_or_default().to_owned()),
-        kitty_window: get("KITTY_WINDOW_ID"),
-        kitty_listen_on: get("KITTY_LISTEN_ON"),
-        wezterm_pane: get("WEZTERM_PANE"),
-        agent: crate::process::hook_agent(),
+        panes: crate::mux::capture(get, agent.and_then(crate::process::ProcessId::tty)),
+        agent,
     }
 }
 

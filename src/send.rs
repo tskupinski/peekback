@@ -1,31 +1,25 @@
-use std::io::Write;
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 
+pub use crate::mux::on_path;
+use crate::mux::{Mux, Pane};
 use crate::registry::Session;
 
-/// How text reaches the session's prompt, in probe order.
+/// How text reaches the session's prompt. Multiplexers are probed in the
+/// order the session's panes were recorded, innermost first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
-    Tmux,
-    Wezterm,
-    Kitty,
+    Mux(Mux),
     Keystroke,
     Clipboard,
 }
 
-const PROBE_ORDER: [Backend; 4] = [Backend::Tmux, Backend::Wezterm, Backend::Kitty, Backend::Keystroke];
-
 impl Backend {
     pub fn name(self) -> &'static str {
         match self {
-            Backend::Tmux => "tmux",
-            Backend::Wezterm => "wezterm",
-            Backend::Kitty => "kitty",
+            Backend::Mux(mux) => mux.name(),
             Backend::Keystroke => "keystroke",
             Backend::Clipboard => "clipboard",
         }
@@ -35,12 +29,9 @@ impl Backend {
     pub fn parse(name: &str) -> Result<Option<Backend>> {
         Ok(Some(match name {
             "auto" => return Ok(None),
-            "tmux" => Backend::Tmux,
-            "wezterm" => Backend::Wezterm,
-            "kitty" => Backend::Kitty,
             "keystroke" => Backend::Keystroke,
             "clipboard" => Backend::Clipboard,
-            other => bail!("unknown backend {other:?}"),
+            other => Backend::Mux(Mux::parse(other).ok_or_else(|| anyhow!("unknown backend {other:?}"))?),
         }))
     }
 }
@@ -51,8 +42,6 @@ pub struct Outcome {
     pub note: String,
 }
 
-static NEXT_BUFFER: AtomicU64 = AtomicU64::new(0);
-
 /// The backend `send` would use for this session.
 pub fn probe(session: &Session, pinned: Option<Backend>) -> Backend {
     // The viewer can hold a session whose agent exited since it was shown. Its
@@ -61,7 +50,15 @@ pub fn probe(session: &Session, pinned: Option<Backend>) -> Backend {
     if pinned.is_none() && !session.agent_alive() {
         return Backend::Clipboard;
     }
-    pinned.unwrap_or_else(|| PROBE_ORDER.into_iter().find(|b| available(*b, session)).unwrap_or(Backend::Clipboard))
+    if let Some(pinned) = pinned {
+        return pinned;
+    }
+    let reachable = session.terminal.panes.iter().find(|pane| pane.mux.reachable(pane));
+    match reachable {
+        Some(pane) => Backend::Mux(pane.mux),
+        None if keystroke_available(session) => Backend::Keystroke,
+        None => Backend::Clipboard,
+    }
 }
 
 pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Outcome> {
@@ -72,17 +69,9 @@ pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Ou
         bail!("the session's agent is no longer running, so its terminal may now hold something else");
     }
     let note = match backend {
-        Backend::Tmux => {
-            send_tmux(session, text)?;
-            "Sent to the prompt through tmux".to_string()
-        }
-        Backend::Wezterm => {
-            send_wezterm(session, text)?;
-            "Sent to the prompt through wezterm".to_string()
-        }
-        Backend::Kitty => {
-            send_kitty(session, text)?;
-            "Sent to the prompt through kitty".to_string()
+        Backend::Mux(mux) => {
+            mux.send(pane_of(session, mux)?, text)?;
+            format!("Sent to the prompt through {}", mux.name())
         }
         Backend::Keystroke => {
             send_keystroke(session, text)?;
@@ -102,6 +91,17 @@ pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Ou
     Ok(Outcome { backend, note })
 }
 
+/// A pinned multiplexer is used wherever it sits among the session's panes,
+/// so pinning tmux under another multiplexer still reaches the tmux pane.
+fn pane_of(session: &Session, mux: Mux) -> Result<&Pane> {
+    session
+        .terminal
+        .panes
+        .iter()
+        .find(|pane| pane.mux == mux)
+        .ok_or_else(|| anyhow!("no {} pane recorded for this session", mux.name()))
+}
+
 /// Pasted text must stay text. Escape sequences can end a bracketed paste
 /// early, after which a newline submits the prompt, and a carriage return
 /// submits even inside one.
@@ -118,82 +118,8 @@ pub fn copy(text: &str) -> Result<()> {
     arboard::Clipboard::new()?.set_text(text).context("clipboard")
 }
 
-fn available(backend: Backend, session: &Session) -> bool {
-    let t = &session.terminal;
-    match backend {
-        Backend::Tmux => match (&t.tmux_socket, &t.tmux_pane) {
-            (Some(socket), Some(pane)) => tmux(socket)
-                .args(["display-message", "-p", "-t", pane, "#{pane_id}"])
-                .output()
-                .is_ok_and(|o| o.status.success()),
-            _ => false,
-        },
-        Backend::Wezterm => t.wezterm_pane.is_some() && on_path("wezterm"),
-        Backend::Kitty => t.kitty_window.is_some() && t.kitty_listen_on.is_some() && on_path("kitten"),
-        Backend::Keystroke => t.bundle_id.is_some() && keystroke::trusted(),
-        Backend::Clipboard => true,
-    }
-}
-
-fn tmux(socket: &str) -> Command {
-    let mut cmd = Command::new("tmux");
-    // The daemon inherits the pane of whichever agent hook spawned it, and
-    // tmux resolves untargeted commands against TMUX_PANE, which would pin
-    // "the active pane" to that pane's window forever.
-    cmd.arg("-S").arg(socket).env_remove("TMUX").env_remove("TMUX_PANE");
-    cmd
-}
-
-fn send_tmux(session: &Session, text: &str) -> Result<()> {
-    let socket = session.terminal.tmux_socket.as_deref().ok_or_else(|| anyhow!("no tmux socket"))?;
-    let pane = session.terminal.tmux_pane.as_deref().ok_or_else(|| anyhow!("no tmux pane"))?;
-    // tmux brackets the paste only when the program asked for it. Without
-    // that, it turns every newline into Enter.
-    if text.contains('\n')
-        && tmux_output(socket, &["display-message", "-p", "-t", pane, "#{bracket_paste_flag}"])? != "1"
-    {
-        bail!("the tmux pane does not accept pasted text, so its newlines would be typed as Enter");
-    }
-    let buffer = format!("peekback-{}-{}", std::process::id(), NEXT_BUFFER.fetch_add(1, Ordering::Relaxed));
-    run_with_stdin(tmux(socket).args(["load-buffer", "-b", &buffer, "-"]), text)?;
-    run(tmux(socket).args(["paste-buffer", "-p", "-b", &buffer, "-t", pane, "-d"]))
-}
-
-/// The pane the most recently used client of this tmux server is on.
-pub fn tmux_active_pane(socket: &str) -> Option<String> {
-    tmux_output(socket, &["display-message", "-p", "#{pane_id}"]).ok().filter(|pane| !pane.is_empty())
-}
-
-fn tmux_output(socket: &str, args: &[&str]) -> Result<String> {
-    let output = tmux(socket).args(args).output().context("run tmux")?;
-    if !output.status.success() {
-        bail!("tmux failed: {}", String::from_utf8_lossy(&output.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
-fn send_wezterm(session: &Session, text: &str) -> Result<()> {
-    let pane = session.terminal.wezterm_pane.as_deref().ok_or_else(|| anyhow!("no wezterm pane"))?;
-    run_with_stdin(Command::new("wezterm").args(["cli", "send-text", "--pane-id", pane]), text)
-}
-
-fn send_kitty(session: &Session, text: &str) -> Result<()> {
-    let window = session.terminal.kitty_window.as_deref().ok_or_else(|| anyhow!("no kitty window"))?;
-    let to = session.terminal.kitty_listen_on.as_deref().ok_or_else(|| anyhow!("no kitty socket"))?;
-    run_with_stdin(
-        Command::new("kitten").args([
-            "@",
-            "--to",
-            to,
-            "send-text",
-            // Always bracket, so a newline can never be typed as Enter.
-            "--bracketed-paste=enable",
-            "--match",
-            &format!("id:{window}"),
-            "--stdin",
-        ]),
-        text,
-    )
+fn keystroke_available(session: &Session) -> bool {
+    session.terminal.bundle_id.is_some() && keystroke::trusted()
 }
 
 /// Puts the text on the clipboard, brings the terminal app forward, and
@@ -211,33 +137,6 @@ fn send_keystroke(session: &Session, text: &str) -> Result<()> {
         let _ = clipboard.set_text(previous);
     }
     Ok(())
-}
-
-fn run(cmd: &mut Command) -> Result<()> {
-    let output = cmd.output().with_context(|| format!("run {:?}", cmd.get_program()))?;
-    if !output.status.success() {
-        bail!("{:?} failed: {}", cmd.get_program(), String::from_utf8_lossy(&output.stderr).trim());
-    }
-    Ok(())
-}
-
-fn run_with_stdin(cmd: &mut Command, input: &str) -> Result<()> {
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("run {:?}", cmd.get_program()))?;
-    child.stdin.take().expect("piped stdin").write_all(input.as_bytes())?;
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        bail!("{:?} failed: {}", cmd.get_program(), String::from_utf8_lossy(&output.stderr).trim());
-    }
-    Ok(())
-}
-
-pub fn on_path(program: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
 #[cfg(target_os = "macos")]
@@ -297,12 +196,11 @@ mod tests {
     use super::*;
     use crate::process::ProcessId;
 
-    #[test]
-    fn tmux_commands_ignore_the_pane_they_were_started_from() {
-        let cmd = tmux("/socket");
-        let removed: Vec<_> = cmd.get_envs().filter(|(_, value)| value.is_none()).map(|(key, _)| key).collect();
-        assert!(removed.contains(&std::ffi::OsStr::new("TMUX")));
-        assert!(removed.contains(&std::ffi::OsStr::new("TMUX_PANE")));
+    fn session(terminal: serde_json::Value) -> Session {
+        serde_json::from_value(serde_json::json!({
+            "session_id": "s", "cwd": "/tmp", "started_at": 0, "last_active_at": 0, "terminal": terminal,
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -313,14 +211,41 @@ mod tests {
 
     #[test]
     fn a_session_whose_agent_exited_falls_back_to_the_clipboard() {
-        let mut session: Session = serde_json::from_value(serde_json::json!({
-            "session_id": "s", "cwd": "/tmp", "started_at": 0, "last_active_at": 0,
-            "terminal": { "tmux_pane": "%1", "tmux_socket": "/nonexistent" },
-        }))
-        .unwrap();
+        let mut session = session(serde_json::json!({
+            "panes": [{ "mux": "tmux", "server": "/nonexistent", "id": "%1" }],
+        }));
         assert!(session.agent_alive()); // Entries from before agent tracking.
         session.terminal.agent = Some(ProcessId { pid: u32::MAX, started_at_us: 0 });
         assert_eq!(probe(&session, None), Backend::Clipboard);
-        assert!(send(&session, "text", Some(Backend::Tmux)).is_err());
+        assert!(send(&session, "text", Some(Backend::Mux(Mux::Tmux))).is_err());
+    }
+
+    #[test]
+    fn a_pinned_multiplexer_is_found_below_the_innermost_pane() {
+        let session = session(serde_json::json!({
+            "panes": [
+                { "mux": "kitty", "server": "unix:/k", "id": "5" },
+                { "mux": "tmux", "server": "/t", "id": "%1" },
+            ],
+        }));
+        assert_eq!(pane_of(&session, Mux::Tmux).unwrap().id, "%1");
+        let missing = pane_of(&session, Mux::Wezterm).unwrap_err().to_string();
+        assert_eq!(missing, "no wezterm pane recorded for this session");
+    }
+
+    #[test]
+    fn sessions_recorded_before_panes_still_load() {
+        let old = session(serde_json::json!({ "tmux_pane": "%1", "tmux_socket": "/t", "bundle_id": "b" }));
+        assert!(old.terminal.panes.is_empty());
+        assert_eq!(old.terminal.bundle_id.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn config_backend_names_parse_as_before() {
+        for name in ["tmux", "wezterm", "kitty", "keystroke", "clipboard"] {
+            assert_eq!(Backend::parse(name).unwrap().map(Backend::name), Some(name));
+        }
+        assert_eq!(Backend::parse("auto").unwrap(), None);
+        assert!(Backend::parse("screen").is_err());
     }
 }
