@@ -93,9 +93,8 @@ live. This is verified for Claude Code, where hooks run through a shell child
 of the `claude` process; Codex is not yet verified.
 
 `peekback status --prune` closes entries whose agent has exited and entries
-with no hook or transcript activity in 24 hours. Pruning does not run a
-capture, so files from a turn that was still open when the agent died are not
-recorded.
+with no hook or transcript activity in 24 hours. It first captures a turn the
+agent left open, as `SessionEnd` would have.
 The live registry still uses native session IDs and rejects registration of
 an ID already owned by another agent; the retained store uses both agent and
 session ID. Hooks provide no reliable process generation, so an old start/end
@@ -146,9 +145,16 @@ because only its own session writes there.
 ### Turns
 
 A turn opens at `UserPromptSubmit`, whose time the registry keeps, and closes
-at `Stop`. Claude sends no `Stop` for an interrupted turn, so a
-`UserPromptSubmit` or `SessionEnd` also closes the open turn. Each close runs a
-capture under the session's lifecycle lock, then the transcript backfill:
+at `Stop`, ending then. A turn no `Stop` closed is abandoned: interrupted with
+Esc, since Claude sends no `Stop` for that, quit mid-turn, or left open by an
+agent that died. The next `UserPromptSubmit`, `SessionEnd`, a `SessionStart`
+other than compaction, or pruning closes it, and it ends at the agent's last
+activity rather than at that hook, which can come hours later: the newest
+assistant message or tool result in the last 512 KiB of the Claude transcript,
+or the session's last hook without one. A new prompt is neither kind of
+record, so it cannot stretch the turn. Compaction can happen inside a turn and
+keeps it open. Each close runs a capture under the session's lifecycle lock,
+then the transcript backfill:
 
 | Root | Depth | Accepted modification time |
 | --- | --- | --- |
@@ -157,8 +163,11 @@ capture under the session's lifecycle lock, then the transcript backfill:
 | Claude scratchpad | unlimited | any; the path belongs to this session alone |
 
 The roots share a 20,000-entry budget. Hidden and build directories, symlinked
-directories, and nested checkouts (a directory containing a `.git` entry below
-the root) are skipped; the cwd scan is skipped for `/` and the home directory.
+directories, and other checkouts below the root are skipped: a directory with
+its own `.git` directory, or with a `.git` file pointing into `worktrees/` (a
+linked worktree). A submodule's `.git` file points into `modules/`, so
+submodules stay part of the project. The cwd scan is skipped for `/` and the
+home directory.
 Budget exhaustion and read failures are reported on the hook's stderr; depth
 limits are policy and are not reported. A capture must finish well inside the
 hook timeout; the measured cost in a large Rails worktree is about 0.15
@@ -174,14 +183,17 @@ turn closes.
 ### Concurrent sessions
 
 Two sessions working in the same directory at the same time cannot be told
-apart by the filesystem. A scan event lists the other registered sessions whose
-cwd or memory directory contains the path and whose open turn, or a turn closed
-within the last 24 hours, covers its modification time. Both sessions capture
+apart by the filesystem. A scan event lists the other live sessions whose cwd
+or memory directory contains the path and whose turn covers its modification
+time: a turn closed within the last 24 hours, or the open one. An open turn
+reaches the present while the agent was active in the last 10 minutes, since
+a long command can be quiet that long; after a longer silence it most likely
+was interrupted and left idle, and ends at the agent's last activity. Both sessions capture
 the file; views mark it as possibly written by another session in each session
 that recorded the overlap. A session that ended before the capture is no longer
 registered and is not listed. Separate
 git worktrees avoid the overlap, since each session scans only its own
-directory and nested checkouts are skipped.
+directory and other checkouts are skipped.
 
 ### Views
 
@@ -347,7 +359,9 @@ Codex desktop and IDE composers are outside the supported integration.
 
 This is observed file activity, not a complete filesystem audit. Shell effects
 outside the scanned roots, background jobs that finish after their turn, and
-turns open when an agent dies without `SessionEnd` are missed. Simultaneous
+shell writes after an agent's last recorded activity in an abandoned turn are
+missed. Without a Claude transcript, as for Codex, an abandoned turn ends at
+the session's last hook, so its shell writes can be missed. Simultaneous
 shell writes by two sessions in one directory are attributed to both. Documents always show current
 contents, not what a session saw at the time. Historical content snapshots,
 viewer editing, persistent comments, MCP-based comment exchange, and automatic

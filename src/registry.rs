@@ -68,10 +68,11 @@ impl Session {
         self.terminal.agent.is_none_or(|agent| agent.is_running())
     }
 
-    /// Recent closed turns, then the open one, which has no end yet.
-    pub fn turns(&self) -> impl Iterator<Item = crate::capture::Turn> + '_ {
-        let open = self.turn_started_at.map(|started_at| crate::capture::Turn { started_at, ended_at: i64::MAX });
-        self.recent_turns.iter().copied().chain(open)
+    /// When the agent last did something: its newest transcript record, else
+    /// its last hook.
+    pub fn last_agent_activity(&self) -> i64 {
+        let transcript = self.transcript_path.as_deref().and_then(session_activity::transcript_last_activity);
+        transcript.map_or(self.last_active_at, |at| at.max(self.last_active_at))
     }
 
     pub fn scratchpad_dir(&self) -> Option<PathBuf> {
@@ -120,12 +121,16 @@ pub fn find(session_id: &str) -> Option<Session> {
 }
 
 fn registered(session_id: &str) -> Option<Session> {
+    registered_at(&paths::state_dir(), session_id)
+}
+
+fn registered_at(root: &Path, session_id: &str) -> Option<Session> {
     if !valid_id(session_id) {
         return None;
     }
-    let text = fs::read_to_string(dir().join(format!("{session_id}.json"))).ok()?;
+    let text = fs::read_to_string(root.join("sessions").join(format!("{session_id}.json"))).ok()?;
     let session: Session = serde_json::from_str(&text).ok()?;
-    (!crate::lifecycle::ended(&paths::state_dir(), &session.activity_key())).then_some(session)
+    (!crate::lifecycle::ended(root, &session.activity_key())).then_some(session)
 }
 
 pub fn find_by_pane(pane: &str) -> Option<Session> {
@@ -140,25 +145,31 @@ pub fn newest() -> Option<Session> {
 /// activity for `max_idle_secs`. A session that died without SessionEnd
 /// leaves one behind.
 pub fn prune(max_idle_secs: i64) -> Vec<Session> {
+    prune_in(&paths::state_dir(), max_idle_secs)
+}
+
+pub(crate) fn prune_in(root: &Path, max_idle_secs: i64) -> Vec<Session> {
     let now = now_unix();
-    let root = paths::state_dir();
     let mut removed = Vec::new();
-    for session in registered_in(&root) {
-        let Ok(_lock) = crate::lifecycle::lock(&root, &session.session_id) else { continue };
+    for session in registered_in(root) {
+        let Ok(_lock) = crate::lifecycle::lock(root, &session.session_id) else { continue };
         // Re-read under the lock: a hook could have refreshed this session,
         // or resumed it in a new process, after the listing was taken.
-        let Some(session) = registered(&session.session_id) else { continue };
-        let last_write = session
-            .transcript_path
-            .as_ref()
-            .and_then(|p| fs::metadata(p).and_then(|m| m.modified()).ok())
-            .map(unix_secs)
-            .unwrap_or(0)
-            .max(session.last_active_at);
-        if (now - last_write > max_idle_secs || !session.agent_alive())
-            && valid_id(&session.session_id)
-            && crate::lifecycle::end(&root, &session.activity_key()).is_ok()
-        {
+        let Some(session) = registered_at(root, &session.session_id) else { continue };
+        let last_write =
+            session.transcript_path.as_deref().and_then(modified_at).unwrap_or(0).max(session.last_active_at);
+        let gone = now - last_write > max_idle_secs || !session.agent_alive();
+        if !gone || !valid_id(&session.session_id) {
+            continue;
+        }
+        // A session that died mid-turn gets that turn captured, as SessionEnd
+        // would have done.
+        let turn = session.turn_started_at.map(|started_at| crate::capture::abandoned(&session, started_at));
+        let store = session_activity::Store::new(root.join("activity"));
+        if let Err(error) = crate::capture::capture(root, &session, &store, turn) {
+            eprintln!("capture before pruning {}: {error:#}", session.session_id);
+        }
+        if crate::lifecycle::end(root, &session.activity_key()).is_ok() {
             removed.push(session);
         }
     }
@@ -167,6 +178,10 @@ pub fn prune(max_idle_secs: i64) -> Vec<Session> {
 
 pub fn now_unix() -> i64 {
     unix_secs(SystemTime::now())
+}
+
+pub fn modified_at(path: &Path) -> Option<i64> {
+    fs::metadata(path).and_then(|m| m.modified()).ok().map(unix_secs)
 }
 
 pub fn unix_secs(time: SystemTime) -> i64 {

@@ -158,7 +158,7 @@ fn scans_are_separate_evidence_and_respect_depth_and_budget() {
     for path in ["main.rs", ".hidden/secret.md", "target/output.md", "nested/deep.md"] {
         fs::write(temp.0.join(path), "text").unwrap();
     }
-    let roots = [ScanRoot { path: temp.0.clone(), since: 0, depth: 1, source: Source::ProjectScan }];
+    let roots = [ScanRoot { path: temp.0.clone(), since: 0, until: i64::MAX, depth: 1, source: Source::ProjectScan }];
     let events = scan(&key(Agent::Claude), &temp.0, &roots, 100);
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].operation, Operation::Observed);
@@ -266,7 +266,7 @@ fn explicit_failure_hook_and_conflicting_response_flags_report_failure() {
 fn scan_reports_budget_depth_and_io_limits_without_false_empty_results() {
     let temp = Temp::new();
     fs::write(temp.0.join("first.md"), "text").unwrap();
-    let roots = [ScanRoot { path: temp.0.clone(), since: 0, depth: 1, source: Source::ProjectScan }];
+    let roots = [ScanRoot { path: temp.0.clone(), since: 0, until: i64::MAX, depth: 1, source: Source::ProjectScan }];
     let complete = scan_report(&key(Agent::Codex), &temp.0, &roots, 1);
     assert_eq!(complete.entries_visited, 1);
     assert!(!complete.budget_exhausted); // Exactly meeting the budget is not truncation.
@@ -276,10 +276,11 @@ fn scan_reports_budget_depth_and_io_limits_without_false_empty_results() {
     assert_eq!(budget.entries_visited, 1);
     let depth = scan_report(&key(Agent::Codex), &temp.0, &roots, 10);
     assert!(depth.depth_limited);
-    let bad = [ScanRoot { path: temp.0.join("first.md"), since: 0, depth: 1, source: Source::ProjectScan }];
+    let bad =
+        [ScanRoot { path: temp.0.join("first.md"), since: 0, until: i64::MAX, depth: 1, source: Source::ProjectScan }];
     assert_eq!(scan_report(&key(Agent::Codex), &temp.0, &bad, 10).warnings.len(), 1);
     let empty = Temp::new();
-    let roots = [ScanRoot { path: empty.0.clone(), since: 0, depth: 1, source: Source::ProjectScan }];
+    let roots = [ScanRoot { path: empty.0.clone(), since: 0, until: i64::MAX, depth: 1, source: Source::ProjectScan }];
     assert!(!scan_report(&key(Agent::Codex), &empty.0, &roots, 0).budget_exhausted);
 }
 
@@ -436,19 +437,79 @@ fn concurrent_appends_and_compaction_do_not_lose_history() {
 }
 
 #[test]
-fn scans_skip_nested_checkouts_but_not_the_root_checkout() {
+fn scans_skip_other_checkouts_but_keep_submodules_and_the_root_checkout() {
     let temp = Temp::new();
     fs::create_dir_all(temp.0.join(".git")).unwrap();
-    fs::create_dir_all(temp.0.join("worktrees/pr-1")).unwrap();
-    fs::write(temp.0.join("worktrees/pr-1/.git"), "gitdir: elsewhere").unwrap();
-    fs::create_dir_all(temp.0.join("docs")).unwrap();
-    for path in ["plan.md", "docs/notes.md", "worktrees/pr-1/other.md"] {
+    for dir in ["worktrees/pr-1", "vendor/clone/.git", "docs"] {
+        fs::create_dir_all(temp.0.join(dir)).unwrap();
+    }
+    fs::write(temp.0.join("worktrees/pr-1/.git"), "gitdir: /repo/.git/worktrees/pr-1\n").unwrap();
+    fs::write(temp.0.join("docs/.git"), "gitdir: ../.git/modules/docs\n").unwrap();
+    for path in ["plan.md", "docs/design.md", "worktrees/pr-1/other.md", "vendor/clone/readme.md"] {
         fs::write(temp.0.join(path), "text").unwrap();
     }
-    let roots = [ScanRoot { path: temp.0.clone(), since: 0, depth: 4, source: Source::ProjectScan }];
-    let mut found: Vec<_> = scan(&key(Agent::Claude), &temp.0, &roots, 100).into_iter().map(|e| e.path).collect();
+    let roots = [ScanRoot { path: temp.0.clone(), since: 0, until: i64::MAX, depth: 4, source: Source::ProjectScan }];
+    let mut found: Vec<_> = scan(&key(Agent::Claude), &temp.0, &roots, 100)
+        .into_iter()
+        .map(|e| e.path)
+        .filter(|p| p.extension().is_some_and(|e| e == "md"))
+        .collect();
     found.sort();
-    assert_eq!(found, [temp.0.join("docs/notes.md"), temp.0.join("plan.md")]);
+    assert_eq!(found, [temp.0.join("docs/design.md"), temp.0.join("plan.md")]);
+}
+
+#[test]
+fn scans_accept_only_modification_times_inside_the_window() {
+    let temp = Temp::new();
+    for (name, secs) in [("before.md", 99), ("first.md", 100), ("last.md", 200), ("after.md", 201)] {
+        let path = temp.0.join(name);
+        fs::write(&path, "text").unwrap();
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        fs::File::options().write(true).open(&path).unwrap().set_modified(at).unwrap();
+    }
+    let roots = [ScanRoot { path: temp.0.clone(), since: 100, until: 200, depth: 1, source: Source::ProjectScan }];
+    let mut found: Vec<_> = scan(&key(Agent::Claude), &temp.0, &roots, 100).into_iter().map(|e| e.timestamp).collect();
+    found.sort();
+    assert_eq!(found, [100, 200]);
+}
+
+#[test]
+fn last_activity_is_the_newest_agent_record_and_ignores_prompts() {
+    let temp = Temp::new();
+    let path = temp.0.join("transcript.jsonl");
+    let record = |kind: &str, at: &str, content: serde_json::Value| {
+        json!({"type": kind, "timestamp": at, "message": {"content": content}}).to_string()
+    };
+    let lines = [
+        record("assistant", "2026-09-25T10:00:00Z", json!([{"type":"text", "text":"working"}])),
+        record("user", "2026-09-25T10:05:00Z", json!([{"type":"tool_result", "tool_use_id":"t1"}])),
+        record("user", "2026-09-25T12:00:00Z", json!("the next prompt, hours later")),
+        json!({"type":"attachment", "timestamp":"2026-09-25T12:00:01Z"}).to_string(),
+    ];
+    fs::write(&path, lines.join("\n")).unwrap();
+    let expected = time::OffsetDateTime::parse("2026-09-25T10:05:00Z", &time::format_description::well_known::Rfc3339)
+        .unwrap()
+        .unix_timestamp();
+    assert_eq!(transcript_last_activity(&path), Some(expected));
+    let padded = format!("{}\n{}", "x".repeat(600 * 1024), lines.join("\n"));
+    fs::write(&path, padded).unwrap();
+    assert_eq!(transcript_last_activity(&path), Some(expected)); // Only the tail is read.
+    assert_eq!(transcript_last_activity(&temp.0.join("missing.jsonl")), None);
+}
+
+#[test]
+fn file_activity_tells_scan_only_and_shared_files_apart() {
+    let session = key(Agent::Claude);
+    let observed =
+        FileEvent::new(&session, Path::new("/p"), Path::new("a.md"), 1, Operation::Observed, Source::ProjectScan);
+    let mut shared = observed.clone();
+    shared.concurrent = vec![SessionKey { agent: Agent::Codex, session_id: "other".into() }];
+    let written = FileEvent::new(&session, Path::new("/p"), Path::new("a.md"), 2, Operation::Write, Source::Hook);
+    let file = |events: Vec<FileEvent>| files(events).remove(0);
+    assert!(file(vec![observed.clone()]).scan_only());
+    assert!(!file(vec![observed.clone()]).possibly_shared());
+    assert!(file(vec![observed.clone(), shared.clone()]).possibly_shared());
+    assert!(!file(vec![shared, written]).possibly_shared()); // A tool reported writing it.
 }
 
 #[test]

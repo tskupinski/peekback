@@ -38,7 +38,13 @@ The library owns:
 - `Store::sessions` and `Store::read_all`: enumerate and read retained history
   across both agent namespaces, independently of a live-session registry.
 - `scan_report`: bounded filesystem scans and completeness diagnostics from
-  caller-supplied roots (`scan` returns only the events).
+  caller-supplied roots, each with an inclusive modification-time window
+  (`scan` returns only the events).
+- `transcript_last_activity`: when the agent last acted, from the newest
+  assistant message or tool result near the end of a Claude transcript.
+- `FileActivity::scan_only` and `FileActivity::possibly_shared`: whether only
+  scans saw a file, and whether one did while another session was working in
+  the same place.
 - `Store::maintain`: preview or apply compaction and timestamp retention.
 - `files`: grouping observations by path without losing their evidence.
 
@@ -171,8 +177,9 @@ separately, so it is not a globally atomic snapshot of concurrent activity.
 Paths are resolved lexically against the session cwd, including `.` and `..`;
 symlink aliases are not unified. The library stores metadata, not file content
 snapshots, and `exists` reflects the filesystem at query time. Scans skip hidden
-and build directories and nested checkouts (directories below a root that
-contain a `.git` entry, usually other worktrees), do not follow symlink
+and build directories and other checkouts (a directory below a root with its
+own `.git` directory, or a `.git` file pointing into `worktrees/`), while
+submodules stay included, do not follow symlink
 directories, and share a caller-supplied entry budget across roots. Callers should avoid scanning `/` or home.
 `scan_report` reports visited entries, budget exhaustion, depth limits, and
 path-specific I/O warnings. Missing optional roots are ignored; other failures

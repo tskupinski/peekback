@@ -6,6 +6,7 @@ use globset::{Glob, GlobBuilder, GlobMatcher};
 use serde::Serialize;
 
 use crate::discovery::{self, Document};
+use crate::registry::modified_at;
 
 /// More would stop being a list of favourites, or of one session's notes, and
 /// make the picker slow.
@@ -50,7 +51,8 @@ pub fn list(entries: &[String], cwd: Option<&Path>, home: &Path) -> Listing {
         }
         found.sort();
         for file in found {
-            scan.add(file, &base, home);
+            let touched_at = modified_at(&file).unwrap_or(0);
+            scan.add(file, touched_at, &base, home);
         }
         if scan.budget == 0 {
             scan.listing.warnings.push(format!("{entry}: stopped after scanning {SCAN_BUDGET} entries"));
@@ -65,23 +67,15 @@ pub fn list(entries: &[String], cwd: Option<&Path>, home: &Path) -> Listing {
 pub fn folder(dir: &Path) -> Listing {
     let mut scan = Scan { budget: SCAN_BUDGET, seen: HashSet::new(), listing: Listing::default() };
     let mut found = Vec::new();
-    walk(dir, &mut scan.budget, &mut |file| found.push((modified(file), file.to_owned())));
+    walk(dir, &mut scan.budget, &mut |file| found.push((modified_at(file).unwrap_or(0), file.to_owned())));
     found.sort_by(|a, b| b.cmp(a));
-    for (_, file) in found {
-        scan.add(file, &Base::Project(dir.to_owned()), dir);
+    for (touched_at, file) in found {
+        scan.add(file, touched_at, &Base::Project(dir.to_owned()), dir);
     }
     if scan.budget == 0 {
         scan.listing.warnings.push(format!("stopped after scanning {SCAN_BUDGET} entries"));
     }
     scan.listing
-}
-
-fn modified(path: &Path) -> i64 {
-    fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_secs() as i64)
 }
 
 struct Scan {
@@ -91,7 +85,7 @@ struct Scan {
 }
 
 impl Scan {
-    fn add(&mut self, path: PathBuf, base: &Base, home: &Path) {
+    fn add(&mut self, path: PathBuf, touched_at: i64, base: &Base, home: &Path) {
         if !self.seen.insert(path.clone()) {
             return;
         }
@@ -99,7 +93,6 @@ impl Scan {
         if self.listing.documents.len() == MAX_DOCUMENTS {
             return;
         }
-        let touched_at = modified(&path);
         let label = match base {
             Base::Project(cwd) => path.strip_prefix(cwd).unwrap_or(&path).display().to_string(),
             Base::Absolute => match path.strip_prefix(home) {

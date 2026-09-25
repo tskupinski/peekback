@@ -46,11 +46,21 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     );
     let store = Store::new(root.join("activity"));
     let open_turn = previous.as_ref().and_then(|s| s.turn_started_at);
-    let close = |started_at: i64| Turn { started_at, ended_at: now.max(started_at) };
+    // Compaction can happen inside a turn; any other start means the process
+    // that owned the open turn is gone.
+    let compacting = event == "SessionStart" && input["source"] == "compact";
+    let closed = match (event, open_turn, previous.as_ref()) {
+        ("Stop", Some(started_at), _) => Some(Turn { started_at, ended_at: now.max(started_at) }),
+        // No Stop came: interrupted with Esc, quit mid-turn, or the agent died.
+        ("UserPromptSubmit" | "SessionStart" | "SessionEnd", Some(started_at), Some(previous)) if !compacting => {
+            Some(capture::abandoned(previous, started_at))
+        }
+        _ => None,
+    };
     if event == "SessionEnd" {
         // Closing the session must survive an interrupted capture.
         crate::lifecycle::mark_ended(root, &key)?;
-        let captured = previous.as_ref().map_or(Ok(()), |s| capture::capture(root, s, &store, open_turn.map(close)));
+        let captured = previous.as_ref().map_or(Ok(()), |s| capture::capture(root, s, &store, closed));
         crate::lifecycle::end(root, &key)?;
         return captured;
     }
@@ -74,15 +84,11 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
         turn_started_at: match event {
             "UserPromptSubmit" => Some(now),
             "Stop" => None,
-            // Compaction can happen inside a turn; any other start means the
-            // process that owned the open turn is gone.
-            "SessionStart" if input["source"] != "compact" => None,
+            "SessionStart" if !compacting => None,
             _ => open_turn,
         },
         recent_turns: previous.map_or_else(Vec::new, |s| s.recent_turns),
     };
-    // Claude sends no Stop for an interrupted turn, so a new prompt closes it.
-    let closed = matches!(event, "Stop" | "UserPromptSubmit").then_some(open_turn).flatten().map(close);
     if let Some(turn) = closed {
         capture::remember(&mut session.recent_turns, turn);
     }

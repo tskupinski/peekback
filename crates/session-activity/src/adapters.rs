@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, ensure};
@@ -113,6 +113,41 @@ pub fn subagent_transcripts(transcript: &Path) -> Vec<PathBuf> {
         .collect();
     paths.sort();
     paths
+}
+
+/// Transcript tail read for the last agent activity; enough for many records
+/// while keeping the read cheap on transcripts of any size.
+const ACTIVITY_TAIL_BYTES: u64 = 512 * 1024;
+
+/// When the agent last did something, in Unix seconds: the newest assistant
+/// message or tool result near the end of a Claude transcript. A new prompt is
+/// neither, so this still dates an interrupted turn once the next prompt has
+/// been written. `None` when the tail holds no such record.
+pub fn transcript_last_activity(transcript: &Path) -> Option<i64> {
+    let mut file = fs::File::open(transcript).ok()?;
+    let length = file.metadata().ok()?.len();
+    let start = length.saturating_sub(ACTIVITY_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail).ok()?;
+    let text = String::from_utf8_lossy(&tail);
+    // A tail that starts mid-file starts mid-record.
+    let lines = text.lines().skip(usize::from(start > 0));
+    lines
+        .filter(|line| line.contains("\"assistant\"") || line.contains("\"tool_result\""))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| {
+            record["type"] == "assistant"
+                || (record["type"] == "user"
+                    && record["message"]["content"]
+                        .as_array()
+                        .is_some_and(|items| items.iter().any(|item| item["type"] == "tool_result")))
+        })
+        .filter_map(|record| {
+            let at = OffsetDateTime::parse(record["timestamp"].as_str()?, &Rfc3339).ok()?;
+            Some(at.unix_timestamp())
+        })
+        .max()
 }
 
 /// Match Claude tool requests to results by call ID. Requests without results

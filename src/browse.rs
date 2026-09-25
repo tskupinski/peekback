@@ -14,7 +14,7 @@ use crossterm::{
     style::{Attribute, Print, SetAttribute},
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use session_activity::{Agent, FileActivity, Operation, Outcome, SessionKey, Source};
+use session_activity::{Agent, FileActivity, Outcome, SessionKey, Source};
 use unicode_width::UnicodeWidthChar;
 
 use crate::{
@@ -427,9 +427,10 @@ impl Browser {
 }
 
 fn evidence(file: &FileActivity) -> &'static str {
-    if file.events.iter().all(|e| e.operation == Operation::Observed) {
-        // Scanned while another session worked there too, so either may own it.
-        if file.events.iter().any(|e| !e.concurrent.is_empty()) { "shared" } else { "scan" }
+    if file.possibly_shared() {
+        "shared"
+    } else if file.scan_only() {
+        "scan"
     } else if file.events.iter().all(|e| e.outcome == Outcome::Failed) {
         "failed"
     } else if file.events.iter().any(|e| matches!(e.source, Source::Hook | Source::Transcript)) {
@@ -552,7 +553,7 @@ impl Drop for Terminal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use session_activity::FileEvent;
+    use session_activity::{FileEvent, Operation};
 
     fn snapshot() -> Snapshot {
         let key = SessionKey { agent: Agent::Codex, session_id: "browser-unit".into() };

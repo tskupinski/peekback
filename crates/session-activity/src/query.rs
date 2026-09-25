@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
@@ -44,6 +45,22 @@ pub fn reconcile(events: impl IntoIterator<Item = FileEvent>) -> Vec<FileEvent> 
     result
 }
 
+/// A separate repository or a linked worktree, which usually has sessions of
+/// its own. A submodule's `.git` file points into the parent's `modules/`, so
+/// submodules stay part of the project.
+fn other_checkout(dir: &std::path::Path) -> bool {
+    let git = dir.join(".git");
+    match fs::symlink_metadata(&git) {
+        Ok(meta) if meta.is_dir() => true,
+        Ok(meta) if meta.is_file() => {
+            let mut head = String::new();
+            fs::File::open(&git).and_then(|file| file.take(4096).read_to_string(&mut head)).is_ok()
+                && head.contains("/worktrees/")
+        }
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct FileActivity {
     pub path: PathBuf,
@@ -52,6 +69,19 @@ pub struct FileActivity {
     /// Keep evidence and outcomes attached to the summary, rather than turning
     /// filesystem candidates into attributed writes.
     pub events: Vec<FileEvent>,
+}
+
+impl FileActivity {
+    /// Only scans saw the file: no tool reported touching it.
+    pub fn scan_only(&self) -> bool {
+        self.events.iter().all(|e| e.operation == Operation::Observed)
+    }
+
+    /// Only scans saw it, and one did while another session was working in
+    /// the same place, so either may have changed it.
+    pub fn possibly_shared(&self) -> bool {
+        self.scan_only() && self.events.iter().any(|e| !e.concurrent.is_empty())
+    }
 }
 
 /// Group observations by path; retain deleted paths and both sides of renames.
@@ -82,7 +112,9 @@ pub fn files(events: impl IntoIterator<Item = FileEvent>) -> Vec<FileActivity> {
 
 pub struct ScanRoot {
     pub path: PathBuf,
+    /// Accepted modification times, inclusive, in Unix seconds.
     pub since: i64,
+    pub until: i64,
     pub depth: usize,
     pub source: Source,
 }
@@ -168,7 +200,7 @@ fn walk(
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if kind.is_dir() && !name.starts_with('.') && !["node_modules", "target"].contains(&name.as_ref()) {
-            if fs::symlink_metadata(path.join(".git")).is_ok() {
+            if other_checkout(&path) {
                 continue;
             }
             walk(session, cwd, root, &path, depth - 1, budget, report);
@@ -183,7 +215,7 @@ fn walk(
                     continue;
                 }
             };
-            if at >= root.since {
+            if (root.since..=root.until).contains(&at) {
                 report.events.push(FileEvent::new(session, cwd, &path, at, Operation::Observed, root.source));
             }
         }

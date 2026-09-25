@@ -12,7 +12,12 @@ version.
   under one exclusive lock.
 - Add `subagent_transcripts` to find Claude subagent transcripts beside a main
   transcript.
-- Skip nested checkouts in scans, since they are usually other worktrees.
+- Skip other checkouts in scans: directories with their own `.git` directory
+  or a `.git` file pointing into `worktrees/`, which usually have sessions of
+  their own. Submodules stay included.
+- Give `ScanRoot` an inclusive `until` bound next to `since`.
+- Add `transcript_last_activity`, and `FileActivity::scan_only` and
+  `FileActivity::possibly_shared`.
 
 ## 0.1.1 — 2026-09-24
 

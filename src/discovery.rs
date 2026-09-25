@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use session_activity::{FileActivity, Operation, Outcome, Store};
+use session_activity::{Operation, Outcome, Store};
 
 use crate::registry::Session;
 
@@ -36,16 +36,12 @@ pub(crate) fn documents_in(session: &Session, store: &Store) -> Vec<Document> {
     .filter(|file| file.exists && is_markdown(&file.path))
     .map(|file| Document {
         label: label_for(&file.path, session),
-        scanned: scanned(&file),
-        shared: scanned(&file) && file.events.iter().any(|e| !e.concurrent.is_empty()),
+        scanned: file.scan_only(),
+        shared: file.possibly_shared(),
         path: file.path,
         touched_at: file.last_touched_at,
     })
     .collect()
-}
-
-fn scanned(file: &FileActivity) -> bool {
-    file.events.iter().all(|e| e.operation == Operation::Observed)
 }
 
 pub(crate) fn is_markdown(path: &Path) -> bool {

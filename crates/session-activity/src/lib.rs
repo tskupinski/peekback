@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub use adapters::{hook_events, subagent_transcripts, transcript_events};
+pub use adapters::{hook_events, subagent_transcripts, transcript_events, transcript_last_activity};
 pub use maintenance::MaintenanceReport;
 pub use query::{FileActivity, ScanReport, ScanRoot, ScanWarning, files, reconcile, scan, scan_report};
 pub use store::{BatchWarning, ReadReport, SessionReport, Store};

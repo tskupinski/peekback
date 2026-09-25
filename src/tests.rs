@@ -61,6 +61,36 @@ fn age(path: &std::path::Path, secs: u64) {
     fs::File::options().write(true).open(path).unwrap().set_modified(at).unwrap();
 }
 
+/// RFC 3339 in UTC, as Claude writes transcript timestamps.
+fn rfc3339(unix: i64) -> String {
+    let (days, secs) = (unix.div_euclid(86_400), unix.rem_euclid(86_400));
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", secs / 3_600, secs % 3_600 / 60, secs % 60)
+}
+
+/// A transcript whose agent last did something at `at`.
+fn transcript_active_at(path: &std::path::Path, at: i64) {
+    let record =
+        json!({"type":"assistant", "timestamp": rfc3339(at), "message":{"content":[{"type":"text","text":"ok"}]}});
+    fs::write(path, format!("{record}\n")).unwrap();
+}
+
+fn hook_at(f: &Fixture, event: &str, now: i64, extra: Value) {
+    let mut input =
+        json!({"session_id":"test-session", "hook_event_name":event, "cwd":f.project(), "transcript_path":null});
+    input.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    crate::hooks::register(&f.0.join("state"), Agent::Claude, &input, now, Default::default()).unwrap();
+}
+
 fn store(f: &Fixture) -> session_activity::Store {
     session_activity::Store::new(f.0.join("state/activity"))
 }
@@ -356,7 +386,7 @@ fn turns_capture_shell_writes_once_and_keep_them_after_later_edits() {
     let during = f.project().join("during.md");
     let nested = f.project().join("worktree/other.md");
     fs::create_dir_all(f.project().join("worktree")).unwrap();
-    fs::write(f.project().join("worktree/.git"), "gitdir: elsewhere").unwrap();
+    fs::write(f.project().join("worktree/.git"), "gitdir: /repo/.git/worktrees/other\n").unwrap();
     fs::write(&before, "# Before").unwrap();
     age(&before, 60);
     f.hook(None, "SessionStart", json!({}));
@@ -466,4 +496,92 @@ fn a_session_whose_agent_exited_is_no_longer_live() {
     assert!(crate::registry::load_all_in(&root).is_empty()); // Same PID, different process.
     f.hook(None, "UserPromptSubmit", json!({})); // The fixture's hook records no agent, like a resume.
     assert_eq!(crate::registry::load_all_in(&root).len(), 1);
+}
+
+#[test]
+fn rfc3339_matches_known_dates() {
+    assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+    assert_eq!(rfc3339(1_790_324_694), "2026-09-25T08:24:54Z");
+    assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
+}
+
+#[test]
+fn an_interrupted_turn_ends_at_the_agents_last_activity_not_at_the_next_prompt() {
+    let f = Fixture::new();
+    let now = crate::registry::now_unix();
+    let transcript = f.0.join("session.jsonl");
+    let during = f.project().join("during.md");
+    let idle = f.project().join("idle.md");
+    hook_at(&f, "SessionStart", now - 1_000, json!({"transcript_path": transcript}));
+    hook_at(&f, "UserPromptSubmit", now - 1_000, json!({}));
+    for (path, ago) in [(&during, 900), (&idle, 300)] {
+        fs::write(path, "# Markdown").unwrap();
+        age(path, ago);
+    }
+    transcript_active_at(&transcript, now - 800); // Then Esc, and hours of nothing.
+    hook_at(&f, "UserPromptSubmit", now, json!({}));
+    assert_eq!(documents(&f), [during]);
+    assert_eq!(f.session().recent_turns[0].ended_at, now - 800);
+}
+
+#[test]
+fn resuming_after_a_crash_captures_the_turn_the_dead_process_left_open() {
+    let f = Fixture::new();
+    let now = crate::registry::now_unix();
+    let transcript = f.0.join("session.jsonl");
+    let written = f.project().join("written-before-the-crash.md");
+    hook_at(&f, "SessionStart", now - 600, json!({"transcript_path": transcript}));
+    hook_at(&f, "UserPromptSubmit", now - 600, json!({}));
+    fs::write(&written, "# Plan").unwrap();
+    age(&written, 500);
+    transcript_active_at(&transcript, now - 450);
+    hook_at(&f, "SessionStart", now, json!({"source": "resume"}));
+    assert_eq!(documents(&f), [written]);
+    assert!(f.session().turn_started_at.is_none());
+}
+
+#[test]
+fn pruning_a_dead_session_captures_its_open_turn_first() {
+    let f = Fixture::new();
+    let now = crate::registry::now_unix();
+    let transcript = f.0.join("session.jsonl");
+    let written = f.project().join("written.md");
+    hook_at(&f, "SessionStart", now - 600, json!({"transcript_path": transcript}));
+    hook_at(&f, "UserPromptSubmit", now - 600, json!({}));
+    fs::write(&written, "# Plan").unwrap();
+    age(&written, 500);
+    transcript_active_at(&transcript, now - 450);
+    let mut record: Value = serde_json::from_str(&fs::read_to_string(f.record()).unwrap()).unwrap();
+    record["terminal"]["agent"] = json!({"pid": std::process::id(), "started_at_us": 0});
+    fs::write(f.record(), record.to_string()).unwrap();
+    let key = session_activity::SessionKey { agent: Agent::Claude, session_id: "test-session".into() };
+    assert_eq!(crate::registry::prune_in(&f.0.join("state"), 24 * 60 * 60).len(), 1);
+    assert!(!f.record().exists());
+    let events = store(&f).events(&key).unwrap();
+    assert!(events.iter().any(|e| e.path == written && e.source == session_activity::Source::ProjectScan));
+}
+
+#[test]
+fn a_session_left_idle_after_an_interrupt_does_not_share_other_sessions_files() {
+    let f = Fixture::new();
+    let now = crate::registry::now_unix();
+    let root = f.0.join("state");
+    let register = |id: &str, event: &str, at: i64, transcript: &std::path::Path| {
+        let input =
+            json!({"session_id": id, "hook_event_name": event, "cwd": f.project(), "transcript_path": transcript});
+        crate::hooks::register(&root, Agent::Claude, &input, at, Default::default()).unwrap();
+    };
+    let (idle, busy) = (f.0.join("idle.jsonl"), f.0.join("busy.jsonl"));
+    register("idle", "SessionStart", now - 7_200, &idle);
+    register("idle", "UserPromptSubmit", now - 7_200, &idle);
+    transcript_active_at(&idle, now - 7_000);
+    register("busy", "SessionStart", now - 120, &busy);
+    register("busy", "UserPromptSubmit", now - 120, &busy);
+    transcript_active_at(&busy, now - 5); // Quiet for a moment inside a long command.
+    f.hook(None, "SessionStart", json!({}));
+    f.hook(None, "UserPromptSubmit", json!({}));
+    fs::write(f.project().join("mine.md"), "# Mine").unwrap();
+    f.hook(None, "Stop", json!({}));
+    let event = store(&f).events(&f.session().activity_key()).unwrap().remove(0);
+    assert_eq!(event.concurrent, [session_activity::SessionKey { agent: Agent::Claude, session_id: "busy".into() }]);
 }

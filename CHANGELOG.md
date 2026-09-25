@@ -21,8 +21,13 @@
   Code versions do not report subagent tool calls to hooks.
 - Mark files found only by a scan, and those found while another session was
   working in the same directory, in the viewer and terminal browser.
-- Skip nested git checkouts when scanning, so a session in a repository does
-  not pick up files from worktrees inside it.
+- Skip other git checkouts when scanning, so a session in a repository does
+  not pick up files from worktrees or separate clones inside it. Submodules
+  stay part of the project.
+- End an interrupted or abandoned turn at the agent's last activity instead of
+  at the next prompt, so a session left idle after Esc neither claims files
+  written meanwhile nor marks other sessions' files as shared. Resuming after a
+  crash and `status --prune` now capture the turn the dead agent left open.
 - Remove `--candidates` from `browse` and `activity files`; every view now
   reads stored history.
 - Replace the picker's All sessions scope with Scratchpad, which lists the
