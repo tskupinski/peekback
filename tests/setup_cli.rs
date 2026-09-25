@@ -3,16 +3,22 @@ use std::io::Write;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
+
+static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
 
 struct Fixture(PathBuf);
 
 impl Fixture {
     fn new() -> Self {
+        // The clock alone is not unique: macOS reports whole microseconds, and
+        // tests start in parallel threads of one process.
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("peekback-setup-{}-{nonce}", std::process::id()));
+        let fixture = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("peekback-setup-{}-{fixture}-{nonce}", std::process::id()));
         fs::create_dir(&path).unwrap();
         Self(path)
     }

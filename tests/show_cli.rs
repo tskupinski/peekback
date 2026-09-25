@@ -2,13 +2,20 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
+
+static NEXT_ROOT: AtomicUsize = AtomicUsize::new(0);
 
 /// Runs `peekback show` against a fake daemon and returns the request it sent.
 fn show_request(args: &[&str]) -> Value {
     // Short path: macOS limits Unix socket paths to about 104 bytes.
-    let root = std::path::PathBuf::from(format!("/tmp/pb-show-{}-{}", std::process::id(), args.len()));
+    let root = std::path::PathBuf::from(format!(
+        "/tmp/pb-show-{}-{}",
+        std::process::id(),
+        NEXT_ROOT.fetch_add(1, Ordering::Relaxed)
+    ));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     let file = root.join("note.md");
