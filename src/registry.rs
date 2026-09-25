@@ -13,6 +13,8 @@ pub use session_activity::{Agent, SessionKey};
 pub struct Session {
     pub session_id: String,
     #[serde(default)]
+    pub incarnation: String,
+    #[serde(default)]
     pub agent: Agent,
     pub transcript_path: Option<PathBuf>,
     /// Paths from older registry versions; new observations live in the activity store.
@@ -36,8 +38,7 @@ pub struct Terminal {
     pub bundle_id: Option<String>,
     pub term_program: Option<String>,
     pub iterm_profile: Option<String>,
-    /// Candidate panes, with known TTY matches first. Older entries have none
-    /// until the session's next hook. Sending revalidates ownership.
+    /// Environment addresses are candidates only. Sending verifies ownership.
     #[serde(default)]
     pub panes: Vec<crate::mux::Pane>,
     /// The agent process running in this terminal, when the hook could see it.
@@ -160,11 +161,14 @@ pub(crate) fn prune_in(root: &Path, max_idle_secs: i64) -> Vec<Session> {
         // A session that died mid-turn gets that turn captured, as SessionEnd
         // would have done.
         let turn = session.turn_started_at.map(|started_at| crate::capture::abandoned(&session, started_at));
-        let store = session_activity::Store::new(root.join("activity"));
+        if let Err(error) = crate::capture_jobs::enqueue(root, &session, turn) {
+            eprintln!("retain capture before pruning {}: {error:#}", session.session_id);
+            continue;
+        }
         if let Err(error) = crate::turn_history::record(root, &session, turn) {
             eprintln!("retain turns before pruning {}: {error:#}", session.session_id);
         }
-        if let Err(error) = crate::capture::capture(root, &session, &store, turn) {
+        if let Err(error) = crate::capture_jobs::retry(root, &session.activity_key()) {
             eprintln!("capture before pruning {}: {error:#}", session.session_id);
         }
         if crate::lifecycle::end(root, &session.activity_key()).is_ok() {

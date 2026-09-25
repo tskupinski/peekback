@@ -6,6 +6,13 @@ use crate::{paths, registry};
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Retry captures retained after a failed hook or session exit
+    Retry {
+        #[arg(long, value_parser = ["claude", "codex"])]
+        agent: String,
+        #[arg(long)]
+        session: String,
+    },
     /// Preview packing raw history into fewer files without dropping events
     Compact {
         #[arg(long, value_parser = ["claude", "codex"])]
@@ -55,6 +62,12 @@ pub fn store() -> Store {
 
 pub fn run(command: Command) -> Result<()> {
     match command {
+        Command::Retry { agent, session } => {
+            let key = SessionKey { agent: parse_agent(&agent), session_id: session };
+            let root = paths::state_dir();
+            let _lock = crate::lifecycle::lock(&root, &key.session_id)?;
+            crate::capture_jobs::retry(&root, &key)
+        }
         Command::Compact { agent, session, apply } => {
             let key = SessionKey { agent: parse_agent(&agent), session_id: session };
             println!("{}", serde_json::to_string_pretty(&store().maintain(&key, None, apply)?)?);

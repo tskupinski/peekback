@@ -72,7 +72,20 @@ async function main() {
     localStorage: { getItem() { return null; }, setItem() {} },
     setInterval() {}, setTimeout() {}, clearTimeout() {},
   });
-  const receive = window.peekback.receive;
+  let context = { generation: 0, session: null };
+  const receive = message => {
+    if (message.type === "render") {
+      context = message.context ?? { generation: context.generation + 1,
+        session: message.session ? { key: { agent: "claude", session_id: message.session.session_id }, incarnation: "test", process: null, started_at: 0 } : null };
+    }
+    const requestType = { scratchpad: "list-scratchpad", bookmarks: "list-bookmarks", "send-result": "send" }[message.type];
+    const request_id = messages.findLast(m => m.type === requestType)?.request_id;
+    window.peekback.receive({ context, request_id, outcome: "pasted", ...message });
+  };
+  const expectRequest = expected => {
+    assert.equal(typeof messages.at(-1).request_id, "number");
+    assert.deepEqual(messages.at(-1), { context, request_id: messages.at(-1).request_id, ...expected });
+  };
   receive({ type: "render", path: "/current.md", source: "", session: { session_id: "live" },
     documents: [{ path: "/current.md", label: "current.md", touched_at: 1 }] });
   await new Promise(setImmediate);
@@ -81,7 +94,7 @@ async function main() {
   assert.equal(element("picker-list").children[0].children[0].textContent, "current.md");
   const input = element("picker-input");
   input.dispatch("keydown", { key: "Tab" });
-  assert.deepEqual(messages.at(-1), { type: "list-scratchpad" });
+  expectRequest({ type: "list-scratchpad" });
   assert.equal(element("picker-scratchpad").attributes["aria-pressed"], "true");
   assert.match(element("picker-note").textContent, /Loading scratchpad/);
   input.value = "note-4";
@@ -99,11 +112,11 @@ async function main() {
   const active = element("picker-list").querySelector(".active");
   assert.equal(active.children[0].textContent, "note-35.md");
   input.dispatch("keydown", { key: "Enter" });
-  assert.deepEqual(messages.at(-1), { type: "open-scratchpad", path: "/scratch/note-35.md" });
+  expectRequest({ type: "open-scratchpad", path: "/scratch/note-35.md" });
   assert.equal(element("picker").hidden, true);
 
   window.dispatch("keydown", { key: "p", ctrlKey: true });
-  assert.deepEqual(messages.at(-1), { type: "list-scratchpad" }); // Refresh on reopen.
+  expectRequest({ type: "list-scratchpad" }); // Refresh on reopen.
   assert.equal(element("picker-list").children[0].textContent, "loading…"); // Never the previous session's list.
   input.dispatch("keydown", { key: "Tab", shiftKey: true }); // Shift-Tab cycles backwards.
   receive({ type: "scratchpad", available: true, documents: notes, found: 45, warnings: [] }); // Late reply keeps scope.
@@ -120,7 +133,7 @@ async function main() {
   console.log("Picker passed: scopes, scratchpad listing, filtering, caps, >30 results, opening, refresh, no scratchpad.");
 
   element("picker-bookmarks").dispatch("click");
-  assert.deepEqual(messages.at(-1), { type: "list-bookmarks" });
+  expectRequest({ type: "list-bookmarks" });
   assert.equal(element("picker-bookmarks").attributes["aria-pressed"], "true");
   assert.match(element("picker-note").textContent, /Loading bookmarks/);
   receive({ type: "bookmarks", documents: [], found: 0, warnings: [] });
@@ -130,19 +143,20 @@ async function main() {
     { path: "/project/CLAUDE.md", label: "CLAUDE.md", touched_at: 2 },
   ];
   input.dispatch("keydown", { key: "r", ctrlKey: true });
-  assert.deepEqual(messages.at(-1), { type: "list-bookmarks" }); // Ctrl-R rereads the config.
+  expectRequest({ type: "list-bookmarks" }); // Ctrl-R rereads the config.
   receive({ type: "bookmarks", documents: marks, found: 250, warnings: ["docs/[.md: unclosed character class"] });
   assert.deepEqual(element("picker-list").children.map(li => li.children[0].textContent), ["~/.claude/CLAUDE.md", "CLAUDE.md"]);
   assert.match(element("picker-note").textContent, /Showing 2 of 250 bookmarked files\. Some bookmarks could not be listed:\ndocs\/\[\.md/);
   input.dispatch("keydown", { key: "Tab" });
   assert.equal(element("picker-current").attributes["aria-pressed"], "true"); // Tab wraps around.
   input.dispatch("keydown", { key: "Tab", shiftKey: true });
+  receive({ type: "bookmarks", documents: marks, found: 250, warnings: [] });
   input.value = "project";
   input.dispatch("input");
   input.dispatch("keydown", { key: "Enter" });
-  assert.deepEqual(messages.at(-1), { type: "open-bookmark", path: "/project/CLAUDE.md" });
+  expectRequest({ type: "open-bookmark", path: "/project/CLAUDE.md" });
   window.dispatch("keydown", { key: "p", ctrlKey: true });
-  assert.deepEqual(messages.at(-1), { type: "list-bookmarks" }); // Reopening keeps the scope and refreshes.
+  expectRequest({ type: "list-bookmarks" }); // Reopening keeps the scope and refreshes.
   input.dispatch("keydown", { key: "Escape" });
   console.log("Bookmarks passed: scope cycling, config hint, cap and warnings, refresh, opening.");
 
@@ -237,6 +251,52 @@ async function main() {
   assert.match(metas[2], /maybe another session's$/);
   input.dispatch("keydown", { key: "Escape" });
   console.log("Empty session passed: placeholder, inert actions, picker hint, first document replaces it, scan notes.");
+
+  const project = async (id, text, file = "README.md") => {
+    receive({ type: "sessions", sessions: [{ session_id: "a", cwd: "/a" }, { session_id: "b", cwd: "/b" }], current: id });
+    receive({ type: "render", path: `/${id}/${file}`, file_identity: `/${id}/${file}`, source: text,
+      session: { session_id: id }, documents: [] });
+    await new Promise(setImmediate);
+  };
+  await project("a", "Project A"); command("c Fix A");
+  const aContext = context;
+  await project("b", "Project B"); command("c Fix B"); command("sendall");
+  const bSend = messages.at(-1);
+  assert.equal(bSend.type, "send");
+  assert.equal(bSend.context.session.key.session_id, "b");
+  assert.match(bSend.text, /Fix B/);
+  assert.doesNotMatch(bSend.text, /Fix A/);
+  assert.equal(element("comments").children.length, 1);
+  receive({ type: "send-result", purpose: "comments", ok: true, request_id: bSend.request_id - 1, text: "stale" });
+  assert.equal(element("comments").children.length, 1);
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
+  assert.equal(element("comments").children.length, 1); // Clipboard fallback preserves the draft.
+  command("sendall");
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
+  assert.equal(element("comments").children.length, 0);
+  await project("a", "Project A"); command("sendall");
+  assert.match(messages.at(-1).text, /Fix A/);
+  assert.doesNotMatch(messages.at(-1).text, /Fix B/);
+  receive({ type: "send-result", purpose: "comments", ok: false, text: "failed" });
+
+  window.dispatch("keydown", { key: "p", ctrlKey: true });
+  element("picker-bookmarks").dispatch("click");
+  const oldList = messages.at(-1);
+  input.dispatch("keydown", { key: "r", ctrlKey: true });
+  const newList = messages.at(-1);
+  receive({ type: "bookmarks", request_id: oldList.request_id, documents: marks, found: 2, warnings: [] });
+  assert.match(element("picker-list").children[0].textContent, /loading/);
+  receive({ type: "bookmarks", request_id: newList.request_id, context: aContext, documents: marks, found: 2, warnings: [] });
+  assert.match(element("picker-list").children[0].textContent, /loading/);
+  receive({ type: "bookmarks", request_id: newList.request_id, documents: marks, found: 2, warnings: [] });
+  assert.equal(element("picker-list").children.length, 2);
+  input.dispatch("keydown", { key: "Escape" });
+  const beforeRender = messages.length;
+  receive({ type: "render", path: "/b/README.md", source: "New source", session: { session_id: "b" }, documents: [] });
+  key("s"); key("c");
+  assert.equal(messages.length, beforeRender); // No action may use the previous render's block ranges.
+  await new Promise(setImmediate);
+  console.log("Session isolation passed: drafts, delivery identity, acknowledgments, copied drafts, stale listings, rendering actions.");
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

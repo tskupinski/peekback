@@ -15,7 +15,7 @@ pub fn resolve(explicit: Option<&str>, pane: Option<&str>) -> Result<Session> {
         return registry::find(id).ok_or_else(|| anyhow::anyhow!("session {id} is not registered or has ended"));
     }
     if let Some(pane) = pane {
-        return in_tmux_pane(registry::load_all(), pane, mux::tmux_server_from_env().as_deref());
+        return in_tmux_pane(matching_panes(registry::load_all()), pane, mux::tmux_server_from_env().as_deref());
     }
     if let Some(id) = current_id(|key| std::env::var(key).ok()) {
         return registry::find(&id).ok_or_else(|| {
@@ -60,8 +60,19 @@ fn tmux_pane(session: &Session) -> Option<&Pane> {
 /// For callers outside any session, such as the hotkey: the session in the
 /// focused pane reported by an adapter, else the most recently active one.
 pub fn focused() -> Option<Session> {
-    let sessions = registry::load_all();
+    let sessions = matching_panes(registry::load_all());
     in_active_pane(&sessions, |mux, server| mux.focused(server)).or_else(|| sessions.into_iter().next())
+}
+
+fn matching_panes(mut sessions: Vec<Session>) -> Vec<Session> {
+    let mut terminals = HashMap::new();
+    for session in &mut sessions {
+        let tty = session.terminal.agent.and_then(|agent| agent.tty());
+        session.terminal.panes = mux::on_agent_tty(std::mem::take(&mut session.terminal.panes), tty, |pane| {
+            *terminals.entry(pane.clone()).or_insert_with(|| pane.mux.inspect(pane).tty())
+        });
+    }
+    sessions
 }
 
 /// Sessions come newest first, so a pane still registered to a session that

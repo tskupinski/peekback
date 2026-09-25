@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail, ensure};
 const TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_OUTPUT: usize = 4 * 1024 * 1024;
 
-pub(super) fn output(cmd: &mut Command) -> Result<String> {
+pub(crate) fn output(cmd: &mut Command) -> Result<String> {
     execute(cmd, "", TIMEOUT)
 }
 

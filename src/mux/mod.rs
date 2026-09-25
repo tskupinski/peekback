@@ -2,7 +2,7 @@
 //! interface. Each one records where a session's agent runs, tells whether that
 //! pane still exists, and pastes into it.
 
-mod command;
+pub(crate) mod command;
 mod kitty;
 mod tmux;
 mod wezterm;
@@ -41,14 +41,14 @@ pub enum Inspection {
 }
 
 impl Inspection {
-    fn tty(self) -> Option<u64> {
+    pub fn tty(self) -> Option<u64> {
         match self {
             Self::Available { tty } => tty,
             _ => None,
         }
     }
 
-    pub fn verifies(self, agent_tty: Option<u64>) -> bool {
+    pub fn matches_tty(self, agent_tty: Option<u64>) -> bool {
         matches!((self.tty(), agent_tty), (Some(pane), Some(agent)) if pane == agent)
     }
 }
@@ -118,19 +118,12 @@ impl Pane {
     }
 }
 
-/// Capture candidates, preferring matching TTYs and dropping known mismatches.
-pub fn capture(env: impl Fn(&str) -> Option<String>, agent_tty: Option<u64>) -> Vec<Pane> {
-    let panes = Mux::ALL.into_iter().filter_map(|mux| mux.capture(&env)).collect();
-    on_agent_tty(panes, agent_tty, |pane| pane.mux.inspect(pane).tty())
+/// Capture addresses without contacting terminal servers; sending verifies ownership.
+pub fn capture(env: impl Fn(&str) -> Option<String>) -> Vec<Pane> {
+    Mux::ALL.into_iter().filter_map(|mux| mux.capture(&env)).collect()
 }
 
-/// Variables leak through nesting, so they cannot tell which pane the agent
-/// draws in: a WezTerm window or herdr started inside tmux hands the outer
-/// `TMUX_PANE` to everything it runs. The agent's own tty can. A pane known to
-/// sit on another tty is dropped, since pasting into it types into whatever
-/// runs there, and the one on the agent's tty comes first. Panes whose tty
-/// cannot be read keep the order of `Mux::ALL`.
-fn on_agent_tty(panes: Vec<Pane>, agent_tty: Option<u64>, tty: impl Fn(&Pane) -> Option<u64>) -> Vec<Pane> {
+pub fn on_agent_tty(panes: Vec<Pane>, agent_tty: Option<u64>, mut tty: impl FnMut(&Pane) -> Option<u64>) -> Vec<Pane> {
     let Some(agent_tty) = agent_tty else { return panes };
     let (mut on_agent, unknown): (Vec<_>, Vec<_>) = panes
         .into_iter()
@@ -185,7 +178,7 @@ mod tests {
             Some(value.to_owned())
         };
         assert_eq!(
-            capture(env, None),
+            capture(env),
             [
                 Pane { mux: Mux::Tmux, server: Some("/tmp/tmux-501/default".into()), id: "%7".into() },
                 Pane { mux: Mux::Wezterm, server: Some("/wez.sock".into()), id: "3".into() },
@@ -197,7 +190,7 @@ mod tests {
     #[test]
     fn a_pane_without_its_server_is_not_captured_where_the_server_is_required() {
         let env = |key: &str| matches!(key, "TMUX_PANE" | "KITTY_WINDOW_ID" | "WEZTERM_PANE").then(|| "1".to_owned());
-        assert_eq!(capture(env, None), [Pane { mux: Mux::Wezterm, server: None, id: "1".into() }]);
+        assert_eq!(capture(env), [Pane { mux: Mux::Wezterm, server: None, id: "1".into() }]);
     }
 
     #[test]

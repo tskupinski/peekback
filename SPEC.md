@@ -18,7 +18,7 @@ present that evidence.
 | `crates/session-activity/` | Agent adapters, event schemas, path normalization, storage, scans, reconciliation, compaction and retention |
 | `src/setup.rs`, `src/hooks.rs` | Agent hook configuration and collection |
 | `src/registry.rs`, `src/lifecycle.rs` | Live sessions, terminal identity, lifecycle locks and end markers |
-| `src/activity.rs`, `src/discovery.rs` | Turn capture roots, JSON queries, Markdown filtering |
+| `src/capture.rs`, `src/capture_jobs.rs`, `src/activity.rs`, `src/discovery.rs` | Capture policy and retry jobs, JSON queries, Markdown filtering |
 | `src/browse.rs` | Interactive terminal browser and plain listing |
 | `src/client.rs`, `src/protocol.rs`, `src/daemon/` | Viewer IPC, native window, file watchers, global hotkey |
 | `src/mux/`, `src/send.rs` | Multiplexer adapters and verified delivery selection |
@@ -73,6 +73,8 @@ peekback/
   lifecycle/<SESSION_ID>.lock
   lifecycle/<AGENT>.<SESSION_ID>.ended
   activity/<AGENT>/<SESSION_ID>/
+  turns/<AGENT>.<SESSION_ID>.json
+  pending-captures/<AGENT>/<SESSION_ID>/<JOB>.json
   daemon.sock
   daemon.lock
   daemon.log
@@ -84,13 +86,15 @@ files are written through unique temporary files, synced, and renamed. A
 legacy observations and removing the live entry. Existing retained activity
 survives session exit and pruning. A late tool hook can append observations
 without reopening a closed session; an explicit `SessionStart` reopens it.
-A resumed session keeps everything it captured before.
+A resumed session keeps everything it captured before. Each non-compaction
+`SessionStart` creates a new incarnation, so an old viewer cannot silently
+send to a resumed session even if the native session ID is unchanged.
 
 Hooks record the agent process, the nearest non-shell ancestor of the hook,
 with its start time against PID reuse. A registered session whose agent has
-exited is not live: listings, session resolution, the hotkey and concurrency
-checks skip it, as they skip ended sessions, and a later hook from a resumed
-process records the new agent. Entries from before process tracking count as
+exited is not live: listings, session resolution and the hotkey skip it, as
+they skip ended sessions. Overlap detection still uses its recorded turns.
+A later hook from a resumed process records the new agent. Entries from before process tracking count as
 live. This is verified for Claude Code, where hooks run through a shell child
 of the `claude` process; Codex is not yet verified.
 
@@ -157,8 +161,18 @@ activity rather than at that hook, which can come hours later: the newest
 assistant message or tool result in the last 512 KiB of the Claude transcript,
 or the session's last hook without one. A new prompt is neither kind of
 record, so it cannot stretch the turn. Compaction can happen inside a turn and
-keeps it open. Each close runs a capture under the session's lifecycle lock,
-then the transcript backfill:
+keeps it open. Before a close updates or removes the live entry, it saves a
+pending capture with the previous session's cwd, transcript path and turn
+bounds. Capture and transcript backfill run under the lifecycle lock; a resume
+in another directory cannot change the closed turn's scan roots.
+
+Jobs are removed only after both history and file evidence are stored. Later
+hooks retry them idempotently. `peekback activity retry --agent <AGENT>
+--session <ID>` also retries jobs after session exit. A retry preserves context,
+not a filesystem snapshot: files changed again before retry may no longer
+provide evidence for the original turn.
+
+Capture roots:
 
 | Root | Depth | Accepted modification time |
 | --- | --- | --- |
@@ -173,9 +187,10 @@ linked worktree). A submodule's `.git` file points into `modules/`, so
 submodules stay part of the project. The cwd scan is skipped for `/` and the
 home directory.
 Budget exhaustion and read failures are reported on the hook's stderr; depth
-limits are policy and are not reported. A capture must finish well inside the
-hook timeout; the measured cost in a large Rails worktree is about 0.15
-seconds including transcript parsing.
+limits are policy and are not reported. A hook interrupted during capture
+leaves the job available for retry. Transcript parsing and retained-history
+reads still scale with history size; incremental parsing and indexing remain
+future performance work.
 
 A modification time only shows the last change, which is why the decision is
 made and stored at the end of the turn: a later edit outside any turn does not
@@ -274,10 +289,23 @@ backend from the CLI and does not require the daemon.
 
 Tao owns the main-thread event loop. Socket and watcher threads pass messages
 through an event proxy; UI state and JavaScript evaluation stay on the main
-thread. Scratchpad and bookmark listings run on workers and return documents
-plus warnings; a scratchpad listing that arrives after the viewer moved to
-another session is discarded. The page may open a scratchpad file or bookmark
-only from the daemon's most recent list.
+thread. `daemon/controller.rs` coordinates state and effects;
+`daemon/messages.rs` defines the protocol and `daemon/state.rs` defines session
+and view identity. Four bounded workers handle file reads, discovery, listings
+and theme extraction. A separate serial worker handles sends and clipboard
+operations. The UI thread never waits for these operations.
+
+Every view has a generation and a namespaced session identity with incarnation
+and process identity. Actions carry that context; stale actions are rejected.
+Listings also carry request IDs, so an older result cannot replace a newer
+request, including within the same session. Files may be opened only from the
+matching accepted list. Registry changes are coalesced; a five-second refresh
+also catches process exits and activity maintenance without a registry event.
+
+The socket accepts at most 16 concurrent connections, requests up to 64 KiB,
+and uses absolute read deadlines and bounded response waits. Queued socket
+opens expire before application rather than opening a file after their client
+has timed out. Page messages are capped at 4 MiB.
 
 Wry hosts the embedded page at `peekback://app/`. The page sends messages through
 `window.ipc.postMessage`; Rust pushes updates through JavaScript evaluation.
@@ -309,7 +337,11 @@ Showing a session always makes it current, including its documents and send targ
 renders an empty state instead of keeping the previous session's document, and opens its first document when a
 registry change lists one.
 
-A watcher reloads the current document. If it is deleted, the last rendered
+Document loading shares the terminal browser's nonblocking regular-file check.
+The native viewer rejects files over 4 MiB and loads them on workers. A watcher
+reloads the current document, observing both a symlink and its resolved target.
+Changes are debounced and stale reads are discarded; an intentionally emptied
+file replaces the previous content. If it is deleted, the last rendered
 content remains with a banner. Registry changes update the live session list
 and current-session documents. The document picker has Current session,
 Scratchpad and Bookmarks scopes, cycled with Tab and Shift-Tab. Scratchpad and
@@ -336,19 +368,28 @@ like Scratchpad.
 
 Keyboard and mouse selections map back to Markdown. Copy writes to the
 clipboard; Send pastes a blockquote; Comment accumulates notes for a combined
-paste. Nothing submits a prompt. Comments are not persisted. Esc and `:q` hide
+paste. Drafts belong to their session incarnation and outgoing groups use
+canonical file paths, with labels calculated for the delivery target. Other
+sessions' drafts are preserved separately. Send results carry request IDs;
+only a matching successful paste removes that batch. Clipboard fallback keeps
+the draft. Selection actions are disabled while block mappings are rendering.
+Nothing submits a prompt. Comments are not persisted. Esc and `:q` hide
 the viewer; `peekback quit` stops the daemon and unregisters the hotkey.
 
-The config file is `~/.config/peekback/config.toml`, read at daemon startup.
+The config file is `~/.config/peekback/config.toml`. Window placement and hotkeys
+are read at daemon startup; bookmarks refresh their configuration on request,
+themes on opening a view, and delivery preferences on sending.
 Automatic themes read iTerm2 preferences or Ghostty configuration; unknown
 terminals use built-in system light/dark palettes. Terminal colors and monospace
-fonts style code and chrome while body text keeps the system font.
+fonts style code and chrome while body text keeps the system font. Font and
+size overrides also work with system colors and unsupported terminals. Theme
+subprocesses use the same bounded runner as multiplexer commands.
 
 ## Sending to the terminal
 
-Hooks record candidate panes from the environment. A known TTY mismatch is
-excluded; unknown ownership is retained as a candidate, never treated as
-verification. Each adapter owns capture, inspection, focus discovery, sending,
+Hooks record candidate panes from the environment without contacting terminal
+servers. Pane and focus resolution excludes known TTY mismatches; unknown
+ownership remains a candidate for display, never verification for delivery. Each adapter owns capture, inspection, focus discovery, sending,
 and the environment variables its commands must clear. Inspection distinguishes
 an available pane (with optional TTY evidence), an absent pane, and an unknown
 result such as a timeout. Focus policy caches results by adapter and server;
@@ -357,7 +398,9 @@ Terminal application placement and explicit keystroke paste live separately in
 `terminal.rs`.
 
 Automatic selection requires a matching TTY from both the live agent process
-and the addressed pane. It returns that exact destination and its TTY evidence,
+and the addressed pane, and the agent must be running or sleeping in that
+terminal's foreground process group. Suspended and background agents do not
+qualify. It returns that exact destination and its TTY evidence,
 then rechecks both immediately before sending. If none can be verified, it
 copies to the clipboard. A pinned multiplexer also requires verification and
 reports an error when it cannot establish ownership. A missing WezTerm socket
@@ -370,7 +413,8 @@ permission and pastes into the terminal application's currently focused split
 or tab, without verifying it belongs to the session. Automatic selection never
 uses this backend. Clipboard can also be selected explicitly.
 
-The viewer re-reads the live session before sending. Sent text loses control
+The viewer re-reads the live session before sending and requires the same
+session incarnation and process that the action targeted. Sent text loses control
 characters except tab and newline. tmux sends multi-line text only when the
 pane has bracketed paste enabled. Adapter commands drain input/output with a
 two-second deadline and bounded output; errors after delivery starts are

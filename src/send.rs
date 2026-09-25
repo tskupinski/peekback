@@ -56,7 +56,9 @@ impl Destination<'_> {
 }
 
 fn resolve(session: &Session, pinned: Option<Backend>) -> Result<Destination<'_>> {
-    select(session, pinned, session.terminal.agent.and_then(|agent| agent.tty()), |pane| pane.mux.inspect(pane))
+    select(session, pinned, session.terminal.agent.and_then(|agent| agent.foreground_tty()), |pane| {
+        pane.mux.inspect(pane)
+    })
 }
 
 fn select(
@@ -73,7 +75,7 @@ fn select(
     let candidate = session.terminal.panes.iter().find(|pane| {
         agent_tty.is_some()
             && pinned.is_none_or(|backend| backend == Backend::Mux(pane.mux))
-            && inspect(pane).verifies(agent_tty)
+            && inspect(pane).matches_tty(agent_tty)
     });
     if let Some(pane) = candidate {
         return Ok(Destination::Pane { pane, tty: agent_tty.expect("verified tty") });
@@ -103,7 +105,7 @@ pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Ou
                 pane,
                 tty,
                 text,
-                || session.terminal.agent.and_then(|agent| agent.tty()),
+                || session.terminal.agent.and_then(|agent| agent.foreground_tty()),
                 |pane| pane.mux.inspect(pane),
                 |pane, text| pane.mux.send(pane, text),
             )?;
@@ -138,7 +140,7 @@ fn deliver(
 ) -> Result<()> {
     let inspection = inspect(pane);
     let current_tty = agent_tty();
-    if current_tty != Some(tty) || !inspection.verifies(current_tty) {
+    if current_tty != Some(tty) || !inspection.matches_tty(current_tty) {
         bail!("the selected pane can no longer be verified; nothing was sent");
     }
     send(pane, text)

@@ -22,17 +22,28 @@ pub struct Theme {
 }
 
 pub fn detect(terminal: &Terminal, config: &Config) -> Option<Theme> {
-    if config.theme != "auto" {
-        return None;
-    }
-    let mut theme = match terminal.term_program.as_deref() {
-        Some("ghostty") => ghostty(),
-        _ => match terminal.bundle_id.as_deref() {
-            Some("com.googlecode.iterm2") => iterm(terminal.iterm_profile.as_deref()),
-            Some("com.mitchellh.ghostty") => ghostty(),
-            _ => None,
-        },
-    }?;
+    let detected = if config.theme != "auto" {
+        None
+    } else {
+        match terminal.term_program.as_deref() {
+            Some("ghostty") => ghostty(),
+            _ => match terminal.bundle_id.as_deref() {
+                Some("com.googlecode.iterm2") => iterm(terminal.iterm_profile.as_deref()),
+                Some("com.mitchellh.ghostty") => ghostty(),
+                _ => None,
+            },
+        }
+    };
+    let mut theme = if config.theme == "auto" { detected } else { None }.or_else(|| {
+        (config.font.is_some() || config.font_size.is_some()).then(|| Theme {
+            source: "system".into(),
+            font_family: None,
+            font_size: None,
+            background: String::new(),
+            foreground: String::new(),
+            palette: Vec::new(),
+        })
+    })?;
     if config.font.is_some() {
         theme.font_family = config.font.clone();
     }
@@ -43,11 +54,9 @@ pub fn detect(terminal: &Terminal, config: &Config) -> Option<Theme> {
 }
 
 fn iterm(profile_name: Option<&str>) -> Option<Theme> {
-    let output = Command::new("defaults").args(["export", "com.googlecode.iterm2", "-"]).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let root: plist::Value = plist::from_bytes(&output.stdout).ok()?;
+    let output =
+        crate::mux::command::output(Command::new("defaults").args(["export", "com.googlecode.iterm2", "-"])).ok()?;
+    let root: plist::Value = plist::from_bytes(output.as_bytes()).ok()?;
     let profiles = root.as_dictionary()?.get("New Bookmarks")?.as_array()?;
     fn name(p: &plist::Value) -> Option<&str> {
         p.as_dictionary()?.get("Name")?.as_string()
@@ -187,4 +196,24 @@ fn default_palette() -> Vec<String> {
 fn hex(r: f64, g: f64, b: f64) -> String {
     let c = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02x}{:02x}{:02x}", c(r), c(g), c(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn font_overrides_do_not_require_a_supported_terminal_or_terminal_colors() {
+        for mode in ["auto", "system"] {
+            let config = Config {
+                theme: mode.into(),
+                font: Some("My Font".into()),
+                font_size: Some(17.0),
+                ..Default::default()
+            };
+            let theme = detect(&Terminal::default(), &config).unwrap();
+            assert_eq!(theme.font_family.as_deref(), Some("My Font"));
+            assert_eq!(theme.font_size, Some(17.0));
+            assert!(theme.palette.is_empty());
+        }
+    }
 }

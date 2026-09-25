@@ -708,3 +708,90 @@ fn a_live_session_does_not_move_its_old_turns_to_a_new_directory() {
     assert_eq!(docs.len(), 1);
     assert!(!docs[0].shared);
 }
+
+#[test]
+fn resuming_in_another_directory_captures_the_original_turn_context() {
+    let f = Fixture::new();
+    let now = crate::registry::now_unix();
+    let other = f.0.join("new-project");
+    fs::create_dir_all(&other).unwrap();
+    hook_at(&f, "UserPromptSubmit", now - 600, json!({}));
+    let old = f.project().join("old.md");
+    let unrelated = other.join("unrelated.md");
+    for path in [&old, &unrelated] {
+        fs::write(path, "# Document").unwrap();
+        age(path, 500);
+    }
+    hook_at(&f, "PostToolUse", now - 400, json!({"tool_name":"Bash"}));
+    f.hook(None, "SessionStart", json!({"cwd":other}));
+    assert_eq!(documents(&f), [old]);
+}
+
+#[test]
+fn failed_capture_can_be_retried_after_the_turn_closes() {
+    let f = Fixture::new();
+    f.hook(None, "UserPromptSubmit", json!({}));
+    let file = f.project().join("shell.md");
+    fs::write(&file, "# Shell write").unwrap();
+    let dir = f.0.join("state/activity/claude/test-session");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(".checkpoint"), "{").unwrap();
+    let input = json!({"session_id":"test-session", "hook_event_name":"Stop", "cwd":f.project()});
+    assert!(
+        crate::hooks::register(
+            &f.0.join("state"),
+            Agent::Claude,
+            &input,
+            crate::registry::now_unix(),
+            Default::default()
+        )
+        .is_err()
+    );
+    fs::remove_file(dir.join(".checkpoint")).unwrap();
+    f.hook(None, "Stop", json!({}));
+    assert_eq!(documents(&f), [file]);
+}
+
+#[test]
+fn failed_exit_capture_is_retryable_without_a_live_session() {
+    let f = Fixture::new();
+    f.hook(None, "UserPromptSubmit", json!({}));
+    let file = f.project().join("after-exit.md");
+    fs::write(&file, "# Written").unwrap();
+    let root = f.0.join("state");
+    let dir = root.join("activity/claude/test-session");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(".checkpoint"), "{").unwrap();
+    let input = json!({"session_id":"test-session", "hook_event_name":"SessionEnd", "cwd":f.project()});
+    assert!(
+        crate::hooks::register(&root, Agent::Claude, &input, crate::registry::now_unix(), Default::default()).is_err()
+    );
+    assert!(!f.record().exists());
+    fs::remove_file(dir.join(".checkpoint")).unwrap();
+    let key = crate::registry::SessionKey { agent: Agent::Claude, session_id: "test-session".into() };
+    let _lock = crate::lifecycle::lock(&root, &key.session_id).unwrap();
+    crate::capture_jobs::retry(&root, &key).unwrap();
+    let first = store(&f).read(&key).unwrap().events;
+    assert!(first.iter().any(|event| event.path == file));
+    crate::capture_jobs::retry(&root, &key).unwrap();
+    assert_eq!(store(&f).read(&key).unwrap().events.len(), first.len());
+}
+
+#[test]
+fn stop_can_supply_a_previously_unknown_transcript_without_changing_turn_roots() {
+    let f = Fixture::new();
+    f.hook(None, "UserPromptSubmit", json!({}));
+    let external = f.0.join("external.md");
+    fs::write(&external, "# External").unwrap();
+    let transcript = f.0.join("late.jsonl");
+    fs::write(
+        &transcript,
+        json!({"type":"assistant", "message":{"content":[
+            {"type":"tool_use", "id":"late-path", "name":"Write", "input":{"file_path":external}}
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    f.hook(None, "Stop", json!({"transcript_path":transcript}));
+    assert_eq!(documents(&f), [external]);
+}

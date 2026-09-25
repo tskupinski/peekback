@@ -19,7 +19,7 @@ pub fn terminal() -> Terminal {
         bundle_id: get("__CFBundleIdentifier"),
         term_program: get("TERM_PROGRAM"),
         iterm_profile: get("ITERM_PROFILE"),
-        panes: crate::mux::capture(get, agent.and_then(crate::process::ProcessId::tty)),
+        panes: crate::mux::capture(get),
         agent,
     }
 }
@@ -54,6 +54,18 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
         }
         _ => None,
     };
+    let queued = if closed.is_some() || event == "SessionEnd" || event == "Stop" {
+        previous.as_ref().map_or(Ok(()), |s| {
+            let mut context = s.clone();
+            if event == "Stop" && context.transcript_path.is_none() {
+                context.transcript_path = input["transcript_path"].as_str().filter(|p| !p.is_empty()).map(Into::into);
+            }
+            crate::capture_jobs::enqueue(root, &context, closed)
+        })
+    } else {
+        Ok(())
+    };
+    queued?;
     let retained = if closed.is_some() || event == "SessionEnd" {
         previous.as_ref().map_or(Ok(()), |s| crate::turn_history::record(root, s, closed))
     } else {
@@ -62,7 +74,7 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     if event == "SessionEnd" {
         // Closing the session must survive an interrupted capture.
         crate::lifecycle::mark_ended(root, &key)?;
-        let captured = previous.as_ref().map_or(Ok(()), |s| capture::capture(root, s, &store, closed));
+        let captured = crate::capture_jobs::retry(root, &key);
         crate::lifecycle::end(root, &key)?;
         return retained.and(captured);
     }
@@ -72,6 +84,15 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     }
     let mut session = Session {
         session_id: id.into(),
+        incarnation: if event == "SessionStart" && !compacting || previous.is_none() {
+            format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos()
+            )
+        } else {
+            previous.as_ref().map(|s| s.incarnation.clone()).unwrap_or_default()
+        },
         agent,
         cwd: cwd.to_owned(),
         terminal,
@@ -89,7 +110,7 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
             "SessionStart" if !compacting => None,
             _ => open_turn,
         },
-        recent_turns: previous.map_or_else(Vec::new, |s| s.recent_turns),
+        recent_turns: previous.as_ref().map_or_else(Vec::new, |s| s.recent_turns.clone()),
     };
     if let Some(turn) = closed {
         capture::remember(&mut session.recent_turns, turn);
@@ -102,8 +123,9 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     }
     // A failed capture must still record the new turn state, so its error is
     // reported after the registry write.
-    let captured =
-        if event == "Stop" || closed.is_some() { capture::capture(root, &session, &store, closed) } else { Ok(()) };
+    if event == "Stop" && previous.is_none() {
+        crate::capture_jobs::enqueue(root, &session, None)?;
+    }
     crate::lifecycle::ensure_dir(&dir)?;
     #[cfg(unix)]
     {
@@ -133,5 +155,7 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     if result.is_err() {
         let _ = fs::remove_file(tmp);
     }
-    result.and(retained).and(captured)
+    result?;
+    let captured = crate::capture_jobs::retry(root, &key);
+    retained.and(captured)
 }

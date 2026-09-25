@@ -84,6 +84,11 @@
   mermaid.initialize(mermaidOptions);
 
   let renderGeneration = 0;
+  let rendering = false;
+  let nextRequestId = 1;
+  const sameContext = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const commentOwner = () => JSON.stringify(state.doc?.context?.session ?? null);
+  const activeComments = () => state.comments.filter(c => c.owner === commentOwner());
 
   async function render(message) {
     const generation = ++renderGeneration;
@@ -92,9 +97,16 @@
     const scrollY = samePath ? window.scrollY : 0;
     const previousLine = samePath ? state.blocks[state.cursor]?.dataset.sourceLine : undefined;
 
+    rendering = true;
+    state.blocks = [];
+    if (!sameContext(state.doc?.context, message.context)) {
+      for (const listing of [scratchpad, bookmarks]) Object.assign(listing, { documents: [], request_id: null, loading: false });
+    }
     state.lastRender = message;
     state.doc = {
       path: message.path,
+      fileIdentity: message.file_identity ?? message.path,
+      context: message.context,
       source: message.source,
       sessionId: message.session?.session_id ?? null,
       documents: message.documents,
@@ -135,7 +147,8 @@
     window.scrollTo(0, scrollY);
 
     collectBlocks();
-    paintComments();
+    rendering = false;
+    renderComments();
     if (sourceChanged && state.anchor !== null) setMode("normal");
     if (state.pendingJump?.path === message.path) {
       state.cursor = nearestBlock(state.pendingJump.line);
@@ -146,6 +159,7 @@
     if (state.search.query) runSearch(state.search.query, { keepIndex: true });
     paintCursor(false);
     renderDocuments();
+    if (!pickerEl.hidden) updatePickerItems();
     renderStatus();
   }
 
@@ -240,6 +254,10 @@
         },
       };
     }
+    if (theme?.font_family) root.style.setProperty("--mono", `"${theme.font_family}", ui-monospace, Menlo, monospace`);
+    else root.style.removeProperty("--mono");
+    if (theme?.font_size) root.style.setProperty("--mono-size", `${theme.font_size}px`);
+    else root.style.removeProperty("--mono-size");
     mermaid.initialize(mermaidOptions);
     rerender();
   }
@@ -253,6 +271,10 @@
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (document.documentElement.dataset.theme) return;
     mermaidOptions = mermaidDefaults();
+    if (theme?.font_family) root.style.setProperty("--mono", `"${theme.font_family}", ui-monospace, Menlo, monospace`);
+    else root.style.removeProperty("--mono");
+    if (theme?.font_size) root.style.setProperty("--mono-size", `${theme.font_size}px`);
+    else root.style.removeProperty("--mono-size");
     mermaid.initialize(mermaidOptions);
     rerender();
   });
@@ -386,7 +408,7 @@
     const session = currentSession();
     if (session) parts.push(sessionName(session));
     if (state.doc) parts.push(state.doc.label);
-    if (state.comments.length) parts.push(`${state.comments.length} pending`);
+    if (activeComments().length) parts.push(`${activeComments().length} pending`);
     statusDocEl.textContent = parts.join(" › ");
   }
 
@@ -429,7 +451,7 @@
   }
 
   function perform(action, text, line, endLine) {
-    if (!text) return;
+    if (rendering || !text) return;
     if (action === "copy") post({ type: "copy", text });
     if (action === "send") post({ type: "send", text: blockquote(text), purpose: "selection" });
     if (action === "comment") openNoteInput(text, line, endLine);
@@ -446,6 +468,8 @@
     if (!state.doc) return null;
     return {
       path: state.doc.path,
+      fileIdentity: state.doc.fileIdentity,
+      owner: commentOwner(),
       label: promptPathFor(state.doc.path),
       quote,
       line,
@@ -469,7 +493,7 @@
       note: note.trim(),
     });
     renderComments();
-    setMessage(`${state.comments.length} pending comment${state.comments.length === 1 ? "" : "s"}`);
+    setMessage(`${activeComments().length} pending comment${activeComments().length === 1 ? "" : "s"}`);
   }
 
   function removeComment(id) {
@@ -488,11 +512,12 @@
   function commentsPrompt(comments) {
     const byPath = new Map();
     for (const c of comments) {
-      if (!byPath.has(c.label)) byPath.set(c.label, []);
-      byPath.get(c.label).push(c);
+      if (!byPath.has(c.fileIdentity)) byPath.set(c.fileIdentity, []);
+      byPath.get(c.fileIdentity).push(c);
     }
     return [...byPath.entries()]
-      .map(([label, group]) => {
+      .map(([path, group]) => {
+        const label = promptPathFor(path);
         const body = group.map((c) => `${blockquote(c.quote)}\n${c.note}`.trimEnd()).join("\n\n");
         return `Comments on \`${label}\`:\n\n${body}`;
       })
@@ -500,17 +525,18 @@
   }
 
   function sendAllComments() {
-    if (state.comments.length === 0) return setMessage("no pending comments");
+    const comments = activeComments();
+    if (rendering || comments.length === 0) return setMessage("no pending comments for this session");
     if (commentsInFlight) return setMessage("still sending the previous batch");
-    commentsInFlight = state.comments.map((c) => c.id);
-    post({ type: "send", text: commentsPrompt(state.comments), purpose: "comments" });
+    const request_id = post({ type: "send", text: commentsPrompt(comments), purpose: "comments" });
+    commentsInFlight = { request_id, ids: comments.map(c => c.id) };
   }
 
   function onSendResult(message) {
     toast(message.text);
-    if (message.purpose !== "comments") return;
-    if (message.ok && commentsInFlight) {
-      const sent = new Set(commentsInFlight);
+    if (message.purpose !== "comments" || message.request_id !== commentsInFlight?.request_id) return;
+    if (message.ok && message.outcome === "pasted") {
+      const sent = new Set(commentsInFlight.ids);
       state.comments = state.comments.filter((c) => !sent.has(c.id));
       renderComments();
     }
@@ -520,7 +546,7 @@
   function renderComments() {
     paintComments();
     commentsEl.replaceChildren(
-      ...state.comments.map((c) => {
+      ...activeComments().map((c) => {
         const li = document.createElement("li");
         li.className = "comment";
         const quote = document.createElement("div");
@@ -542,14 +568,14 @@
         return li;
       })
     );
-    sendAllButton.hidden = state.comments.length === 0;
-    sendAllButton.textContent = `Send all (${state.comments.length})`;
+    sendAllButton.hidden = activeComments().length === 0;
+    sendAllButton.textContent = `Send all (${activeComments().length})`;
     renderStatus();
   }
 
   function paintComments() {
     const lines = state.doc?.source.split("\n") ?? [];
-    const comments = state.comments.filter((c) => c.path === state.doc?.path
+    const comments = activeComments().filter((c) => c.fileIdentity === state.doc?.fileIdentity
       && c.anchorSource !== null
       && lines.slice(c.line, c.endLine).join("\n") === c.anchorSource);
     for (const block of state.blocks) {
@@ -577,7 +603,7 @@
   }
 
   function commentCandidates() {
-    return state.comments.map((c) => ({
+    return activeComments().map((c) => ({
       label: `${c.quote.split("\n")[0].slice(0, 60)}${c.note ? "  ·  " + c.note : ""}`,
       meta: c.label,
       id: c.id,
@@ -673,7 +699,7 @@
         search: `${d.label} ${d.path}`,
         meta: d.touched_at ? `edited ${ago(d.touched_at)}` : "",
         current: d.path === state.doc?.path,
-        run: () => post({ type: "open-bookmark", path: d.path }),
+        run: () => post({ type: "open-bookmark", path: d.path, request_id: bookmarks.request_id }),
       }));
     }
     if (picker.scope === "scratchpad") {
@@ -681,7 +707,7 @@
         label: d.label,
         meta: d.touched_at ? ago(d.touched_at) : "",
         current: d.path === state.doc?.path,
-        run: () => post({ type: "open-scratchpad", path: d.path }),
+        run: () => post({ type: "open-scratchpad", path: d.path, request_id: scratchpad.request_id }),
       }));
     }
     if (!state.doc) return [];
@@ -861,14 +887,15 @@
   // Read by the daemon on every request, so config edits apply on the next open.
   function refreshBookmarks() {
     bookmarks.loading = true;
-    post({ type: "list-bookmarks" });
+    bookmarks.documents = [];
+    bookmarks.request_id = post({ type: "list-bookmarks" });
   }
 
   // Listed live, so files show up as soon as they are written, mid-turn too.
   function refreshScratchpad() {
     // The previous list may belong to another session; never offer it meanwhile.
     Object.assign(scratchpad, { documents: [], found: 0, warnings: [], loading: true });
-    post({ type: "list-scratchpad" });
+    scratchpad.request_id = post({ type: "list-scratchpad" });
   }
 
   function refreshScope() {
@@ -1056,6 +1083,7 @@
   const modifierKeys = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
 
   window.addEventListener("keydown", (event) => {
+    if (rendering && event.key !== "Escape") return;
     if (["command", "search", "picker", "comment"].includes(state.mode)) return;
     if (modifierKeys.has(event.key)) return;
     if (event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -1314,13 +1342,19 @@
   }
 
   function post(message) {
+    if (["send", "switch", "list-bookmarks", "list-scratchpad", "open-bookmark", "open-scratchpad"].includes(message.type)) {
+      message.context = state.doc?.context ?? { generation: 0, session: null };
+      message.request_id ??= nextRequestId++;
+    }
     window.ipc.postMessage(JSON.stringify(message));
+    return message.request_id;
   }
 
   function receive(message) {
     switch (message.type) {
       case "render": render(message); break;
       case "scratchpad":
+        if (!sameContext(message.context, state.doc?.context) || message.request_id !== scratchpad.request_id) break;
         Object.assign(scratchpad, {
           documents: message.documents, found: message.found, warnings: message.warnings,
           available: message.available, loading: false,
@@ -1328,6 +1362,7 @@
         if (!pickerEl.hidden && picker.kind === "documents" && picker.scope === "scratchpad") updatePickerItems();
         break;
       case "bookmarks":
+        if (!sameContext(message.context, state.doc?.context) || message.request_id !== bookmarks.request_id) break;
         bookmarks.documents = message.documents;
         bookmarks.found = message.found;
         bookmarks.warnings = message.warnings;
@@ -1335,7 +1370,7 @@
         if (!pickerEl.hidden && picker.kind === "documents" && picker.scope === "bookmarks") updatePickerItems();
         break;
       case "documents":
-        if (state.doc?.sessionId === message.session_id) {
+        if (sameContext(message.context, state.doc?.context) && state.doc?.sessionId === message.session_id) {
           state.doc.documents = message.documents;
           if (state.lastRender) state.lastRender.documents = message.documents;
           renderDocuments();
