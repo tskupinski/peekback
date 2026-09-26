@@ -99,10 +99,6 @@ pub enum DaemonMessage<'a> {
         /// The agent in the focused pane, when it has not started a session.
         unstarted: Option<&'static str>,
     },
-    Sessions {
-        sessions: Vec<PageSession<'a>>,
-        current: Option<&'a str>,
-    },
     Documents {
         context: &'a ViewContext,
         session_id: &'a str,

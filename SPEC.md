@@ -382,8 +382,9 @@ The native viewer rejects files over 4 MiB and loads them on workers. A watcher
 reloads the current document, observing both a symlink and its resolved target.
 Changes are debounced and stale reads are discarded; an intentionally emptied
 file replaces the previous content. If it is deleted, the last rendered
-content remains with a banner. Registry changes update the live session list
-and current-session documents. The document picker has Current session,
+content remains with a banner. Registry changes update the current session's
+documents. The viewer shows one session at a time; the hotkey or `show`
+changes it. The document picker has Current session,
 Scratchpad and Bookmarks scopes, cycled with Tab and Shift-Tab. Scratchpad and
 Bookmarks refresh on opening and with Ctrl-R, and their warnings appear in the
 picker.

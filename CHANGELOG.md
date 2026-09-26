@@ -27,6 +27,9 @@
 - Sessions recorded by an earlier version send through keystroke or the
   clipboard until their next prompt or tool call re-records the pane.
 - `peekback setup --all` replaces `--agent all`.
+- The viewer shows one session at a time. The sidebar's session list, the
+  session picker (`Space s`, `:session`) and `]s` / `[s` are gone; press the
+  hotkey in another session's pane, or use `peekback show --session ID`.
 
 ## 0.2.0 - 2026-09-25
 

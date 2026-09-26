@@ -4,7 +4,6 @@
   const bannerEl = $("banner");
   const noDocumentsEl = $("no-documents");
   const noDocumentsText = noDocumentsEl.textContent.trim();
-  const sessionsEl = $("sessions");
   const documentsEl = $("documents");
   const toastEl = $("toast");
   const toolbarEl = $("toolbar");
@@ -32,10 +31,8 @@
   // ---------------------------------------------------------------- state
 
   const state = {
-    doc: null, // { path, source, label, sessionId, documents }; path is null before a session's first Markdown
+    doc: null, // { path, source, label, session, sessionId, documents }; path is null before a session's first Markdown
     lastRender: null, // the render message, so the page can re-render itself
-    sessions: [],
-    currentSession: null,
     blocks: [],
     cursor: 0,
     mode: "normal", // normal | visual | search | command | comment | picker
@@ -110,6 +107,7 @@
       fileIdentity: message.file_identity ?? message.path,
       context: message.context,
       source: message.source,
+      session: message.session ?? null,
       sessionId: message.session?.session_id ?? null,
       documents: message.documents,
       label: labelFor(message.path, message.documents),
@@ -405,13 +403,9 @@
     return `${project} · ${s.agent_name}`;
   }
 
-  function currentSession() {
-    return state.sessions.find((s) => s.session_id === state.currentSession) ?? null;
-  }
-
   function renderStatus() {
     const parts = [];
-    const session = currentSession();
+    const session = state.doc?.session;
     if (session) parts.push(sessionName(session));
     if (state.doc) parts.push(state.doc.label);
     if (activeComments().length) parts.push(`${activeComments().length} pending`);
@@ -510,7 +504,7 @@
   // Relative to the session's cwd when under it, otherwise absolute, since
   // the agent will read this path.
   function promptPathFor(path) {
-    const session = state.sessions.find((s) => s.session_id === state.doc?.sessionId);
+    const session = state.doc?.session;
     if (session && path.startsWith(session.cwd + "/")) return path.slice(session.cwd.length + 1);
     return path;
   }
@@ -681,7 +675,6 @@
     q: () => post({ type: "hide" }),
     quit: () => post({ type: "hide" }),
     doc: (arg) => (arg ? switchByName(documentCandidates(), arg, "document") : openPicker("documents")),
-    session: (arg) => (arg ? switchByName(sessionCandidates(), arg, "session") : openPicker("sessions")),
     send: () => actOnSelection("send"),
     copy: () => actOnSelection("copy"),
     c: (arg) => {
@@ -729,15 +722,6 @@
   function evidenceNote(d) {
     if (d.shared) return "found by scan, maybe another session's";
     return d.scanned ? "found by scan" : "";
-  }
-
-  function sessionCandidates() {
-    return state.sessions.map((s) => ({
-      label: sessionName(s),
-      meta: `${ago(s.last_active_at)} · ${s.cwd}`,
-      current: s.session_id === state.currentSession,
-      run: () => switchTo(s.session_id),
-    }));
   }
 
   function switchByName(candidates, arg, what) {
@@ -812,7 +796,7 @@
         .filter((c) => c.startsWith(name))
         .map((c) => ({ label: c, apply: () => `${c} ` }));
     }
-    const source = name === "doc" ? documentCandidates() : name === "session" ? sessionCandidates() : [];
+    const source = name === "doc" ? documentCandidates() : [];
     return fuzzy(source, arg).map((c) => ({ label: c.label, apply: () => `${name} ${c.label}` }));
   }
 
@@ -882,7 +866,7 @@
   // ---------------------------------------------------------------- picker
 
   // An fzf-style overlay: type to filter, Enter to open. Replaces the
-  // sidebar as the way to move between documents and sessions.
+  // sidebar as the way to move between documents.
   const picker = { kind: null, scope: "current", items: [], filtered: [], index: 0 };
   const scratchpad = { documents: [], found: 0, warnings: [], loading: false, available: true };
   const bookmarks = { documents: [], found: 0, warnings: [], loading: false };
@@ -910,7 +894,7 @@
   }
 
   function updatePickerItems() {
-    picker.items = picker.kind === "documents" ? documentCandidates() : picker.kind === "sessions" ? sessionCandidates() : commentCandidates();
+    picker.items = picker.kind === "documents" ? documentCandidates() : commentCandidates();
     filterPicker();
   }
 
@@ -931,7 +915,7 @@
     if (kind === "documents" && picker.scope !== "bookmarks" && !state.doc?.sessionId) picker.scope = "bookmarks";
     if (kind === "documents") refreshScope();
     pickerInput.value = "";
-    pickerInput.placeholder = { documents: "open document", sessions: "switch session", comments: "pending comments, Ctrl-D removes" }[kind];
+    pickerInput.placeholder = { documents: "open document", comments: "pending comments, Ctrl-D removes" }[kind];
     pickerEl.hidden = false;
     setMode("picker");
     updatePickerItems();
@@ -1125,14 +1109,12 @@
       else handled = false;
     } else if (pending === " ") {
       if (key === "d") openPicker("documents");
-      else if (key === "s") openPicker("sessions");
       else if (key === "c") openPicker("comments");
       else handled = false;
     } else if (pending === "]" || pending === "[") {
       const direction = pending === "]" ? 1 : -1;
       if (key === pending) nextHeading(direction);
       else if (key === "d") cycleDocument(direction);
-      else if (key === "s") cycleSession(direction);
       else handled = false;
     } else {
       switch (key) {
@@ -1178,14 +1160,6 @@
     const i = docs.findIndex((d) => d.path === state.doc.path);
     const next = docs[(i + direction + docs.length) % docs.length];
     if (next) switchTo(state.doc.sessionId, next.path);
-  }
-
-  function cycleSession(direction) {
-    const list = state.sessions;
-    if (list.length === 0) return;
-    const i = list.findIndex((s) => s.session_id === state.currentSession);
-    const next = list[(i + direction + list.length) % list.length];
-    switchTo(next.session_id);
   }
 
   // -------------------------------------------------------- mouse and links
@@ -1298,26 +1272,6 @@
     return li;
   }
 
-  function renderSessions() {
-    sessionsEl.replaceChildren(
-      ...state.sessions.map((s) =>
-        item({
-          name: sessionName(s),
-          meta: ago(s.last_active_at),
-          title: `${s.cwd}\n${s.session_id}`,
-          current: s.session_id === state.currentSession,
-          onClick: () => switchTo(s.session_id),
-        })
-      )
-    );
-    if (state.sessions.length === 0) {
-      const li = document.createElement("li");
-      li.className = "empty";
-      li.textContent = "No live sessions";
-      sessionsEl.append(li);
-    }
-  }
-
   function renderDocuments() {
     if (!state.doc) return;
     documentsEl.replaceChildren(
@@ -1333,8 +1287,6 @@
       })
     );
   }
-
-  setInterval(renderSessions, 30000);
 
   // ------------------------------------------------------------------ misc
 
@@ -1390,12 +1342,6 @@
           renderDocuments();
           if (!pickerEl.hidden && picker.kind === "documents" && picker.scope === "current") updatePickerItems();
         }
-        break;
-      case "sessions":
-        state.sessions = message.sessions;
-        state.currentSession = message.current;
-        renderSessions();
-        renderStatus();
         break;
       case "banner":
         bannerEl.textContent = message.text;

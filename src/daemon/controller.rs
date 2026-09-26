@@ -206,14 +206,6 @@ impl App {
         }
     }
 
-    fn push_sessions(&self) {
-        if self.page_ready {
-            let current = self.session_id();
-            let sessions = self.sessions.iter().map(Into::into).collect();
-            self.view.push(&DaemonMessage::Sessions { sessions, current: current.as_deref() });
-        }
-    }
-
     fn refresh(&mut self) -> Result<()> {
         if self.refresh_pending {
             return Ok(());
@@ -329,7 +321,6 @@ impl App {
                 self.page_ready = true;
                 self.view.push(&DaemonMessage::Theme { theme: self.theme.as_ref() });
                 self.render();
-                self.push_sessions();
             }
             PageMessage::ListScratchpad { context, request_id } => self.list(context, request_id, true)?,
             PageMessage::ListBookmarks { context, request_id } => self.list(context, request_id, false)?,
@@ -522,7 +513,6 @@ impl App {
                         {
                             let target = Target::Session(Some(started.session_id.clone()));
                             self.show(target, None, Presentation::Keep, None)?;
-                            self.push_sessions();
                             return Ok(());
                         }
                         doc.documents = documents;
@@ -545,7 +535,6 @@ impl App {
                     (None, None) => {}
                     _ => self.refresh_at = Some(Instant::now()),
                 }
-                self.push_sessions();
             }
             UserEvent::Listed { context, request_id, scratchpad, listing, available } => {
                 if !self.accepts(&context) {
