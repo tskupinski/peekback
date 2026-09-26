@@ -2395,7 +2395,6 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
- "time",
 ]
 
 [[package]]
