@@ -59,3 +59,25 @@ Settled while discussing it:
   something else, but the viewer can show it in fewer places: keep the `]c`
   label and the note in the sent text, and drop the status-line count and the
   sidebar and picker labels.
+
+## Decision: one document list instead of Current session and Scratchpad
+
+Parked until the picker has been used for a while. Today Scratchpad is its
+own scope, and a file the agent wrote there from the shell mid-turn shows
+only under it, so you have to know to look there. Proposal from the product
+review: Current session lists the session's recorded files and the live
+scratchpad listing together, deduplicated and newest first, and the hotkey's
+"newest document" considers both. `Tab`/`Shift-Tab` then cycle only to
+Bookmarks. This touches how the newest document is chosen, so it is the
+larger change.
+
+## Needs testing: hide the viewer after a send
+
+Try by hand before deciding. After a successful paste the next action is
+Enter or typing in the terminal, so the viewer could hide itself and return
+focus, saving an `Esc` on every send. Open questions:
+
+- Does it feel right for `S` (send all comments)? Likely yes.
+- For `s` (send a selection), do you often send several selections in a row?
+  If so, `s` should keep the viewer open.
+- A clipboard fallback is part of the parked clipboard decision above.
