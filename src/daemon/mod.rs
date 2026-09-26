@@ -1,123 +1,31 @@
+mod controller;
 mod lock;
+mod messages;
 mod server;
-mod terminal;
+mod state;
 mod watcher;
 mod window;
+mod workers;
 
-use std::fs::{self, DirBuilder};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
+pub use messages::{DaemonMessage, PageMessage, UserEvent};
 
-use anyhow::{Context, Result, anyhow, bail};
+use crate::{config, paths, registry};
+use anyhow::{Context, Result, anyhow};
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-use serde::{Deserialize, Serialize};
+use std::fs::{self, DirBuilder};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::time::{Duration, Instant};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 
-use crate::discovery::{self, Document};
-use crate::paths;
-use crate::protocol::{Request, Response};
-use crate::registry::{self, Session};
-use crate::theme::{self, Theme};
-use crate::{bookmarks, config, send, session};
-
-/// Everything that reaches the main thread from elsewhere: socket requests,
-/// file changes, hotkey presses, and messages from the page.
-pub enum UserEvent {
-    Request { request: Request, reply: Sender<Response> },
-    DocChanged,
-    RegistryChanged,
-    Hotkey,
-    Page(PageMessage),
-    BookmarksLoaded(bookmarks::Listing),
-    ScratchpadLoaded { session_id: String, listing: bookmarks::Listing },
-}
-
-/// Messages the page sends through `window.ipc.postMessage`.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-pub enum PageMessage {
-    Ready,
-    ListScratchpad,
-    OpenScratchpad { path: PathBuf },
-    ListBookmarks,
-    OpenBookmark { path: PathBuf },
-    Switch { session_id: Option<String>, path: Option<PathBuf> },
-    Send { text: String, purpose: Option<String> },
-    Copy { text: String },
-    Hide,
-    OpenExternal { url: String },
-}
-
-/// Messages pushed into the page through `window.peekback.receive`.
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-pub enum DaemonMessage<'a> {
-    /// No path means the session has no Markdown yet; the page shows an empty state.
-    Render {
-        path: Option<&'a Path>,
-        source: &'a str,
-        session: Option<&'a Session>,
-        documents: &'a [Document],
-    },
-    Sessions {
-        sessions: &'a [Session],
-        current: Option<&'a str>,
-    },
-    Documents {
-        session_id: &'a str,
-        documents: &'a [Document],
-    },
-    Scratchpad {
-        /// False when the session has no scratchpad, such as a Codex session.
-        available: bool,
-        documents: &'a [Document],
-        found: usize,
-        warnings: &'a [String],
-    },
-    Bookmarks {
-        documents: &'a [Document],
-        found: usize,
-        warnings: &'a [String],
-    },
-    Banner {
-        text: &'a str,
-    },
-    Toast {
-        text: &'a str,
-    },
-    Theme {
-        theme: Option<&'a Theme>,
-    },
-    SendResult {
-        ok: bool,
-        purpose: Option<&'a str>,
-        text: &'a str,
-    },
-}
-
-const DELETED_BANNER: &str = "This file was deleted. Showing the last rendered version.";
-
-struct Current {
-    session: Option<Session>,
-    documents: Vec<Document>,
-    path: Option<PathBuf>,
-    source: String,
-    missing: bool,
-}
-
 pub fn run() -> Result<()> {
-    // State names sessions, paths and terminal ids; only this user reads it.
     for dir in [paths::state_dir(), registry::dir()] {
         DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
     }
     let _lock = lock::acquire(&paths::lock_path())?;
     let config = config::load();
-    let pinned_backend = config.pinned_backend();
-
     let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     #[cfg(target_os = "macos")]
     {
@@ -126,354 +34,33 @@ pub fn run() -> Result<()> {
     }
     let proxy = event_loop.create_proxy();
     server::start(proxy.clone())?;
-    let mut doc_watcher = watcher::DocWatcher::new(proxy.clone())?;
+    let watcher = watcher::DocWatcher::new(proxy.clone())?;
     let _registry_watcher = watcher::watch_registry(proxy.clone())?;
-    let _hotkeys = match register_hotkey(&config.hotkey, proxy.clone()) {
-        Ok(manager) => manager,
-        Err(e) => {
-            eprintln!("no global hotkey: {e:#}");
-            None
-        }
-    };
+    let _hotkeys = register_hotkey(&config.hotkey, proxy.clone()).unwrap_or_else(|error| {
+        eprintln!("no global hotkey: {error:#}");
+        None
+    });
     let view = window::create(&event_loop, config.placement, config.split)?;
-
-    let mut current: Option<Current> = None;
-    let mut page_ready = false;
-    let mut current_theme: Option<Theme> = None;
-    // The session the scratchpad list belongs to; files from it may only open
-    // while that session is still the viewer's.
-    let mut scratchpad_list: (Option<String>, bookmarks::Listing) = Default::default();
-    let mut bookmark_list = bookmarks::Listing::default();
-
+    let mut app = controller::App::new(proxy, view, watcher);
     eprintln!("peekback daemon listening on {}", paths::socket_path().display());
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
-
-        let mut show = |session_id: Option<String>,
-                        path: Option<PathBuf>,
-                        current: &mut Option<Current>,
-                        current_theme: &mut Option<Theme>|
-         -> Result<()> {
-            let next = open(session_id, path)?;
-            match &next.path {
-                Some(path) => {
-                    if let Err(e) = doc_watcher.watch(path) {
-                        eprintln!("no live reload for {}: {e}", path.display());
-                    }
-                }
-                None => doc_watcher.clear(),
+        if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event {
+            app.hide();
+        } else if let Event::UserEvent(event) = event {
+            if let Err(error) = app.event(event, control_flow) {
+                app.toast(&format!("{error:#}"));
             }
-            let theme = next.session.as_ref().and_then(|s| theme::detect(&s.terminal, &config));
-            if theme != *current_theme {
-                *current_theme = theme;
-                if page_ready {
-                    view.push(&DaemonMessage::Theme { theme: current_theme.as_ref() });
+        }
+        if *control_flow != ControlFlow::Exit {
+            *control_flow = match app.tick() {
+                Ok(next) => ControlFlow::WaitUntil(next),
+                Err(error) => {
+                    app.toast(&format!("{error:#}"));
+                    ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(1))
                 }
-            }
-            if page_ready {
-                view.push(&render_message(&next));
-                push_sessions(&view, next.session.as_ref());
-            }
-            view.place(terminal_frame(next.session.as_ref()));
-            *current = Some(next);
-            Ok(())
-        };
-
-        match event {
-            Event::UserEvent(UserEvent::Page(PageMessage::ListScratchpad)) => {
-                scratchpad_list = Default::default();
-                // Ended and Codex sessions and standalone documents have none.
-                let session = live_session_id(&current).and_then(|id| registry::find(&id));
-                let Some((session_id, dir)) = session.and_then(|s| Some((s.session_id.clone(), s.scratchpad_dir()?)))
-                else {
-                    view.push(&DaemonMessage::Scratchpad { available: false, documents: &[], found: 0, warnings: &[] });
-                    return;
-                };
-                let proxy = proxy.clone();
-                std::thread::spawn(move || {
-                    let listing = bookmarks::folder(&dir);
-                    let _ = proxy.send_event(UserEvent::ScratchpadLoaded { session_id, listing });
-                });
-            }
-            Event::UserEvent(UserEvent::ScratchpadLoaded { session_id, listing }) => {
-                // The viewer may have moved to another session meanwhile, and
-                // its files must not open with that session as send target.
-                if live_session_id(&current).as_deref() != Some(session_id.as_str()) {
-                    return;
-                }
-                scratchpad_list = (Some(session_id), listing);
-                let listing = &scratchpad_list.1;
-                if page_ready {
-                    view.push(&DaemonMessage::Scratchpad {
-                        available: true,
-                        documents: &listing.documents,
-                        found: listing.found,
-                        warnings: &listing.warnings,
-                    });
-                }
-            }
-            Event::UserEvent(UserEvent::Page(PageMessage::OpenScratchpad { path })) => {
-                let (owner, listing) = &scratchpad_list;
-                let listed = listing.documents.iter().any(|d| d.path == path);
-                if owner.is_none() || *owner != live_session_id(&current) || !listed {
-                    view.push(&DaemonMessage::Toast { text: "That file is not in this session's scratchpad" });
-                    return;
-                }
-                if let Err(e) = show(live_session_id(&current), Some(path), &mut current, &mut current_theme) {
-                    view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
-                }
-            }
-            Event::UserEvent(UserEvent::Page(PageMessage::ListBookmarks)) => {
-                // Read on every request, so edits apply without a restart.
-                let entries = config::load().bookmarks;
-                let cwd = current.as_ref().and_then(|c| c.session.as_ref()).map(|s| s.cwd.clone());
-                let proxy = proxy.clone();
-                std::thread::spawn(move || {
-                    let home = dirs::home_dir().unwrap_or_default();
-                    let report = bookmarks::list(&entries, cwd.as_deref(), &home);
-                    let _ = proxy.send_event(UserEvent::BookmarksLoaded(report));
-                });
-            }
-            Event::UserEvent(UserEvent::BookmarksLoaded(report)) => {
-                bookmark_list = report;
-                if page_ready {
-                    view.push(&DaemonMessage::Bookmarks {
-                        documents: &bookmark_list.documents,
-                        found: bookmark_list.found,
-                        warnings: &bookmark_list.warnings,
-                    });
-                }
-            }
-            Event::UserEvent(UserEvent::Page(PageMessage::OpenBookmark { path })) => {
-                if !bookmark_list.documents.iter().any(|d| d.path == path) {
-                    view.push(&DaemonMessage::Toast { text: "That file is not among the bookmarks" });
-                    return;
-                }
-                if let Err(e) = show(live_session_id(&current), Some(path), &mut current, &mut current_theme) {
-                    view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
-                }
-            }
-            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => view.hide(),
-            Event::UserEvent(UserEvent::Request { request, reply }) => {
-                let response = match request {
-                    Request::Show { session_id, path, focus } => {
-                        match show(session_id, path, &mut current, &mut current_theme) {
-                            Ok(()) => {
-                                if focus {
-                                    view.focus();
-                                } else {
-                                    view.bring_forward();
-                                }
-                                Response::Ok
-                            }
-                            Err(e) => Response::Error { message: format!("{e:#}") },
-                        }
-                    }
-                    Request::Status => Response::Status {
-                        document: current.as_ref().and_then(|c| c.path.clone()),
-                        session_id: current.as_ref().and_then(|c| c.session.as_ref()).map(|s| s.session_id.clone()),
-                    },
-                    Request::Hide => {
-                        view.hide_and_return_focus();
-                        Response::Ok
-                    }
-                    Request::Quit => {
-                        *control_flow = ControlFlow::Exit;
-                        Response::Ok
-                    }
-                };
-                let _ = reply.send(response);
-            }
-            // Hidden: open on the newest session. Visible but behind the
-            // terminal: just enter it. Focused: leave.
-            Event::UserEvent(UserEvent::Hotkey) => {
-                if view.is_focused() {
-                    view.hide_and_return_focus();
-                } else if view.is_visible() {
-                    view.place(terminal_frame(current.as_ref().and_then(|c| c.session.as_ref())));
-                    view.focus();
-                } else {
-                    // The daemon is never inside a session; the one the user
-                    // last worked in is the best guess for a hotkey.
-                    if let Err(e) =
-                        show(session::focused().map(|s| s.session_id), None, &mut current, &mut current_theme)
-                    {
-                        eprintln!("hotkey: {e:#}");
-                        if page_ready {
-                            view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
-                        }
-                    }
-                    view.focus();
-                }
-            }
-            Event::UserEvent(UserEvent::Page(PageMessage::Send { text, purpose })) => {
-                let purpose = purpose.as_deref();
-                let Some(shown) = current.as_ref().and_then(|c| c.session.as_ref()) else {
-                    view.push(&DaemonMessage::SendResult { ok: false, purpose, text: "No session to send to" });
-                    return;
-                };
-                // The hook rewrites the entry on every prompt and removes it
-                // on exit; the copy taken at show time may point at a pane
-                // that now holds something else.
-                let Some(target) = registry::find(&shown.session_id) else {
-                    view.push(&DaemonMessage::SendResult { ok: false, purpose, text: "This session has ended" });
-                    return;
-                };
-                match send::send(&target, &text, pinned_backend) {
-                    Ok(outcome) => view.push(&DaemonMessage::SendResult { ok: true, purpose, text: &outcome.note }),
-                    Err(e) => view.push(&DaemonMessage::SendResult {
-                        ok: false,
-                        purpose,
-                        text: &format!("Send failed: {e:#}"),
-                    }),
-                }
-            }
-            Event::UserEvent(UserEvent::Page(PageMessage::Copy { text })) => match send::copy(&text) {
-                Ok(()) => view.push(&DaemonMessage::Toast { text: "Copied" }),
-                Err(e) => view.push(&DaemonMessage::Toast { text: &format!("Copy failed: {e:#}") }),
-            },
-            Event::UserEvent(UserEvent::Page(PageMessage::Hide)) => view.hide_and_return_focus(),
-            Event::UserEvent(UserEvent::DocChanged) => {
-                let Some(doc) = current.as_mut() else { return };
-                let Some(path) = doc.path.clone() else { return };
-                match fs::read_to_string(&path) {
-                    // A truncate-then-write shows up as an empty file for a
-                    // moment; the write that follows triggers another event.
-                    Ok(source) if source.is_empty() && !doc.source.is_empty() && !doc.missing => {}
-                    Ok(source) if source != doc.source || doc.missing => {
-                        doc.source = source;
-                        doc.missing = false;
-                        view.push(&render_message(doc));
-                    }
-                    Ok(_) => {}
-                    Err(_) if !path.exists() => {
-                        doc.missing = true;
-                        if page_ready {
-                            view.push(&DaemonMessage::Banner { text: DELETED_BANNER });
-                        }
-                    }
-                    Err(e) => eprintln!("reread {}: {e}", path.display()),
-                }
-            }
-            Event::UserEvent(UserEvent::RegistryChanged) => {
-                let mut first_document = None;
-                if let Some(doc) = current.as_mut() {
-                    if let Some(session) = doc.session.as_ref().and_then(|s| registry::find(&s.session_id)) {
-                        doc.documents = discovery::documents(&session);
-                        if page_ready {
-                            view.push(&DaemonMessage::Documents {
-                                session_id: &session.session_id,
-                                documents: &doc.documents,
-                            });
-                        }
-                        if doc.path.is_none() {
-                            first_document = doc.documents.first().map(|d| d.path.clone());
-                        }
-                        doc.session = Some(session);
-                    }
-                }
-                // A session shown before it wrote any Markdown opens its
-                // first document as soon as one appears.
-                if let Some(path) = first_document {
-                    if let Err(e) = show(live_session_id(&current), Some(path), &mut current, &mut current_theme) {
-                        eprintln!("open first document: {e:#}");
-                    }
-                }
-                if page_ready {
-                    push_sessions(&view, current.as_ref().and_then(|c| c.session.as_ref()));
-                }
-            }
-            Event::UserEvent(UserEvent::Page(PageMessage::Ready)) => {
-                page_ready = true;
-                if current_theme.is_some() {
-                    view.push(&DaemonMessage::Theme { theme: current_theme.as_ref() });
-                }
-                push_sessions(&view, current.as_ref().and_then(|c| c.session.as_ref()));
-                if let Some(doc) = &current {
-                    view.push(&render_message(doc));
-                    if doc.missing {
-                        view.push(&DaemonMessage::Banner { text: DELETED_BANNER });
-                    }
-                }
-            }
-            // The page renders untrusted documents, so it may only ask for
-            // paths the daemon itself listed.
-            Event::UserEvent(UserEvent::Page(PageMessage::Switch { session_id, path })) => {
-                let listed = path
-                    .as_ref()
-                    .is_none_or(|p| current.as_ref().is_some_and(|c| c.documents.iter().any(|d| d.path == *p)));
-                if !listed {
-                    view.push(&DaemonMessage::Toast { text: "That file is not in this session's documents" });
-                    return;
-                }
-                if let Err(e) = show(session_id, path, &mut current, &mut current_theme) {
-                    view.push(&DaemonMessage::Toast { text: &format!("{e:#}") });
-                }
-            }
-            Event::UserEvent(UserEvent::Page(PageMessage::OpenExternal { url })) => {
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    let _ = std::process::Command::new("open").arg(&url).spawn();
-                }
-            }
-            _ => {}
+            };
         }
     })
-}
-
-/// Resolves what to show: the session's documents, and the requested path
-/// or the newest of them. A session without Markdown still becomes current,
-/// so the viewer never keeps showing, and sending to, the previous one.
-fn open(session_id: Option<String>, path: Option<PathBuf>) -> Result<Current> {
-    let session = match session_id {
-        Some(id) => Some(registry::find(&id).ok_or_else(|| anyhow!("session {id} is not registered or has ended"))?),
-        None => None,
-    };
-    let documents = session.as_ref().map(discovery::documents).unwrap_or_default();
-    let path = match (path, session.is_some()) {
-        (Some(path), _) => Some(path),
-        (None, false) => bail!("nothing to show: no session and no file"),
-        (None, true) => documents.first().map(|d| d.path.clone()),
-    };
-    let source = match &path {
-        Some(path) => fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?,
-        None => String::new(),
-    };
-    Ok(Current { session, documents, path, source, missing: false })
-}
-
-/// Files opened from the scratchpad or bookmarks keep the viewer in the
-/// session it was opened for, with its documents and send target, while that
-/// session is live.
-fn live_session_id(current: &Option<Current>) -> Option<String> {
-    current
-        .as_ref()
-        .and_then(|c| c.session.as_ref())
-        .filter(|s| registry::find(&s.session_id).is_some())
-        .map(|s| s.session_id.clone())
-}
-
-/// The terminal window to sit on: the session's own, else the most recently
-/// active session's, since under tmux several sessions share one window.
-fn terminal_frame(session: Option<&Session>) -> Option<terminal::Frame> {
-    let bundle_id = session
-        .and_then(|s| registry::find(&s.session_id).or_else(|| Some(s.clone())))
-        .and_then(|s| s.terminal.bundle_id)
-        .or_else(|| registry::newest().and_then(|s| s.terminal.bundle_id))?;
-    terminal::frontmost_window(&bundle_id)
-}
-
-fn render_message(current: &Current) -> DaemonMessage<'_> {
-    DaemonMessage::Render {
-        path: current.path.as_deref(),
-        source: &current.source,
-        session: current.session.as_ref(),
-        documents: &current.documents,
-    }
-}
-
-fn push_sessions(view: &window::View, current: Option<&Session>) {
-    let sessions = registry::load_all();
-    view.push(&DaemonMessage::Sessions { sessions: &sessions, current: current.map(|s| s.session_id.as_str()) });
 }
 
 fn register_hotkey(

@@ -3,12 +3,15 @@ mod assets;
 mod bookmarks;
 mod browse;
 mod capture;
+mod capture_jobs;
 mod client;
 mod config;
 mod daemon;
 mod discovery;
+mod document;
 mod hooks;
 mod lifecycle;
+mod mux;
 mod paths;
 mod process;
 mod protocol;
@@ -16,9 +19,11 @@ mod registry;
 mod send;
 mod session;
 mod setup;
+mod terminal;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod turn_history;
 
 use std::path::PathBuf;
 
@@ -156,8 +161,8 @@ fn status(prune: bool) -> Result<()> {
         let now = registry::now_unix();
         let pinned = config::load().pinned_backend();
         for s in sessions {
-            let terminal = match (&s.terminal.tmux_pane, &s.terminal.term_program) {
-                (Some(pane), _) => format!("tmux {pane}"),
+            let terminal = match (s.terminal.panes.first(), &s.terminal.term_program) {
+                (Some(pane), _) => pane.label(),
                 (None, Some(program)) => program.clone(),
                 (None, None) => "unknown terminal".into(),
             };
@@ -168,12 +173,11 @@ fn status(prune: bool) -> Result<()> {
                 s.cwd.display(),
                 ago(now - s.last_active_at),
                 terminal,
-                send::probe(&s, pinned).name()
+                send::probe(&s, pinned).map(|backend| backend.name()).unwrap_or("unverified")
             );
         }
     }
-    let tools: Vec<&str> = ["tmux", "wezterm", "kitten"].into_iter().filter(|t| send::on_path(t)).collect();
-    println!("backend tools on PATH: {}", if tools.is_empty() { "none".to_string() } else { tools.join(", ") });
+    println!("tmux on PATH: {}", if send::on_path("tmux") { "yes" } else { "no" });
     Ok(())
 }
 

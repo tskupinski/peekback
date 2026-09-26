@@ -88,7 +88,11 @@ def main():
                 for index in range(5):
                     conn, _ = server.accept()
                     with conn, conn.makefile("rb") as reader:
-                        requests.append(json.loads(reader.readline()))
+                        request = json.loads(reader.readline())
+                        # The client says when it stops waiting; the rest is the request.
+                        expires = request.pop("expires_at_ms")
+                        assert 0 < expires - time.time() * 1000 <= 3000, expires
+                        requests.append(request)
                         if index == 4:
                             # A connected but stalled daemon must not freeze the
                             # browser indefinitely or trigger a second daemon.

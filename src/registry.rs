@@ -13,6 +13,8 @@ pub use session_activity::{Agent, SessionKey};
 pub struct Session {
     pub session_id: String,
     #[serde(default)]
+    pub incarnation: String,
+    #[serde(default)]
     pub agent: Agent,
     pub transcript_path: Option<PathBuf>,
     /// Paths from older registry versions; new observations live in the activity store.
@@ -36,11 +38,9 @@ pub struct Terminal {
     pub bundle_id: Option<String>,
     pub term_program: Option<String>,
     pub iterm_profile: Option<String>,
-    pub tmux_pane: Option<String>,
-    pub tmux_socket: Option<String>,
-    pub kitty_window: Option<String>,
-    pub kitty_listen_on: Option<String>,
-    pub wezterm_pane: Option<String>,
+    /// Environment addresses are candidates only. Sending verifies ownership.
+    #[serde(default, deserialize_with = "crate::mux::deserialize_known")]
+    pub panes: Vec<crate::mux::Pane>,
     /// The agent process running in this terminal, when the hook could see it.
     pub agent: Option<crate::process::ProcessId>,
 }
@@ -97,7 +97,7 @@ pub fn load_all_in(root: &Path) -> Vec<Session> {
 }
 
 /// Entries without an end marker, including ones whose agent has exited.
-fn registered_in(root: &Path) -> Vec<Session> {
+pub(crate) fn registered_in(root: &Path) -> Vec<Session> {
     let Ok(entries) = fs::read_dir(root.join("sessions")) else { return Vec::new() };
     let mut sessions: Vec<Session> = entries
         .flatten()
@@ -133,10 +133,6 @@ fn registered_at(root: &Path, session_id: &str) -> Option<Session> {
     (!crate::lifecycle::ended(root, &session.activity_key())).then_some(session)
 }
 
-pub fn find_by_pane(pane: &str) -> Option<Session> {
-    load_all().into_iter().find(|s| s.terminal.tmux_pane.as_deref() == Some(pane))
-}
-
 pub fn newest() -> Option<Session> {
     load_all().into_iter().next()
 }
@@ -165,11 +161,28 @@ pub(crate) fn prune_in(root: &Path, max_idle_secs: i64) -> Vec<Session> {
         // A session that died mid-turn gets that turn captured, as SessionEnd
         // would have done.
         let turn = session.turn_started_at.map(|started_at| crate::capture::abandoned(&session, started_at));
-        let store = session_activity::Store::new(root.join("activity"));
-        if let Err(error) = crate::capture::capture(root, &session, &store, turn) {
+        // Without a job, the session is still pruned and captured directly
+        // afterwards, as a hook does.
+        let queued = crate::capture_jobs::enqueue(root, &session, turn);
+        if let Err(error) = &queued {
+            eprintln!("retain capture before pruning {}: {error:#}", session.session_id);
+        }
+        if let Err(error) = crate::turn_history::record(root, &session, turn) {
+            eprintln!("retain turns before pruning {}: {error:#}", session.session_id);
+        }
+        if let Err(error) =
+            crate::capture_jobs::retry(root, &session.activity_key(), crate::capture_jobs::Retry::Automatic)
+        {
             eprintln!("capture before pruning {}: {error:#}", session.session_id);
         }
-        if crate::lifecycle::end(root, &session.activity_key()).is_ok() {
+        let ended = crate::lifecycle::end(root, &session.activity_key()).is_ok();
+        if queued.is_err() {
+            let store = session_activity::Store::new(root.join("activity"));
+            if let Err(error) = crate::capture::capture(root, &session, &store, turn) {
+                eprintln!("capture after pruning {}: {error:#}", session.session_id);
+            }
+        }
+        if ended {
             removed.push(session);
         }
     }

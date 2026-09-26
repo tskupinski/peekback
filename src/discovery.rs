@@ -30,7 +30,9 @@ pub(crate) fn documents_in(session: &Session, store: &Store) -> Vec<Document> {
         }
     };
     session_activity::files(
-        events.into_iter().filter(|e| e.operation != Operation::Read && e.outcome != Outcome::Failed),
+        session_activity::reconcile(events)
+            .into_iter()
+            .filter(|e| e.operation != Operation::Read && e.outcome != Outcome::Failed),
     )
     .into_iter()
     .filter(|file| file.exists && is_markdown(&file.path))

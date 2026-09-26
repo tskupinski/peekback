@@ -34,9 +34,9 @@ pub fn list(entries: &[String], cwd: Option<&Path>, home: &Path) -> Listing {
         let Some((path, base)) = resolve(entry, cwd, home) else { continue };
         let mut found = Vec::new();
         let result = if has_glob(entry) {
-            glob_files(&path, &mut scan.budget, &mut found)
+            glob_files(&path, &mut scan.budget, &mut scan.listing.warnings, &mut found)
         } else if path.is_dir() {
-            walk(&path, &mut scan.budget, &mut |file| found.push(file.to_owned()));
+            walk(&path, &mut scan.budget, &mut scan.listing.warnings, &mut |file| found.push(file.to_owned()));
             Ok(())
         } else if path.is_file() && !discovery::is_markdown(&path) {
             Err("not a Markdown file".to_string())
@@ -67,7 +67,9 @@ pub fn list(entries: &[String], cwd: Option<&Path>, home: &Path) -> Listing {
 pub fn folder(dir: &Path) -> Listing {
     let mut scan = Scan { budget: SCAN_BUDGET, seen: HashSet::new(), listing: Listing::default() };
     let mut found = Vec::new();
-    walk(dir, &mut scan.budget, &mut |file| found.push((modified_at(file).unwrap_or(0), file.to_owned())));
+    walk(dir, &mut scan.budget, &mut scan.listing.warnings, &mut |file| {
+        found.push((modified_at(file).unwrap_or(0), file.to_owned()))
+    });
     found.sort_by(|a, b| b.cmp(a));
     for (touched_at, file) in found {
         scan.add(file, touched_at, &Base::Project(dir.to_owned()), dir);
@@ -135,7 +137,12 @@ fn has_glob(entry: &str) -> bool {
 
 /// Walks from the deepest directory before the first wildcard, matching whole
 /// paths, so `docs/*.md` never scans more than `docs`.
-fn glob_files(pattern: &Path, budget: &mut usize, found: &mut Vec<PathBuf>) -> Result<(), String> {
+fn glob_files(
+    pattern: &Path,
+    budget: &mut usize,
+    warnings: &mut Vec<String>,
+    found: &mut Vec<PathBuf>,
+) -> Result<(), String> {
     let text = pattern.to_str().ok_or("path is not valid UTF-8")?;
     let matcher: GlobMatcher = GlobBuilder::new(text)
         .literal_separator(true)
@@ -150,7 +157,7 @@ fn glob_files(pattern: &Path, budget: &mut usize, found: &mut Vec<PathBuf>) -> R
         root.push(component);
     }
     if root.is_dir() {
-        walk(&root, budget, &mut |file| {
+        walk(&root, budget, warnings, &mut |file| {
             if matcher.is_match(file) {
                 found.push(file.to_owned());
             }
@@ -162,11 +169,25 @@ fn glob_files(pattern: &Path, budget: &mut usize, found: &mut Vec<PathBuf>) -> R
 /// Markdown files under `dir`. Hidden entries are skipped and directory
 /// symlinks are not followed, which rules out loops; file symlinks are, since
 /// agent instruction files are often links into a dotfiles repository.
-fn walk(dir: &Path, budget: &mut usize, visit: &mut dyn FnMut(&Path)) {
+fn walk(dir: &Path, budget: &mut usize, warnings: &mut Vec<String>, visit: &mut dyn FnMut(&Path)) {
     let mut pending = vec![(dir.to_owned(), 0)];
     while let Some((dir, depth)) = pending.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                warnings.push(format!("{}: {error}", dir.display()));
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    warnings.push(format!("{}: {error}", dir.display()));
+                    continue;
+                }
+            };
             if *budget == 0 {
                 return;
             }
@@ -175,7 +196,13 @@ fn walk(dir: &Path, budget: &mut usize, visit: &mut dyn FnMut(&Path)) {
                 continue;
             }
             let path = entry.path();
-            let Ok(kind) = entry.file_type() else { continue };
+            let kind = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(error) => {
+                    warnings.push(format!("{}: {error}", path.display()));
+                    continue;
+                }
+            };
             if kind.is_dir() {
                 if depth < MAX_DEPTH {
                     pending.push((path, depth + 1));

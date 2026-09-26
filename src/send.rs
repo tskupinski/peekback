@@ -1,31 +1,21 @@
-use std::io::Write;
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::Duration;
-
 use anyhow::{Context, Result, anyhow, bail};
 
+pub use crate::mux::on_path;
+use crate::mux::{Inspection, Mux, Pane};
 use crate::registry::Session;
 
-/// How text reaches the session's prompt, in probe order.
+/// Delivery preference. Automatic delivery requires a verified pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
-    Tmux,
-    Wezterm,
-    Kitty,
+    Mux(Mux),
     Keystroke,
     Clipboard,
 }
 
-const PROBE_ORDER: [Backend; 4] = [Backend::Tmux, Backend::Wezterm, Backend::Kitty, Backend::Keystroke];
-
 impl Backend {
     pub fn name(self) -> &'static str {
         match self {
-            Backend::Tmux => "tmux",
-            Backend::Wezterm => "wezterm",
-            Backend::Kitty => "kitty",
+            Backend::Mux(mux) => mux.name(),
             Backend::Keystroke => "keystroke",
             Backend::Clipboard => "clipboard",
         }
@@ -35,12 +25,10 @@ impl Backend {
     pub fn parse(name: &str) -> Result<Option<Backend>> {
         Ok(Some(match name {
             "auto" => return Ok(None),
-            "tmux" => Backend::Tmux,
-            "wezterm" => Backend::Wezterm,
-            "kitty" => Backend::Kitty,
             "keystroke" => Backend::Keystroke,
             "clipboard" => Backend::Clipboard,
-            other => bail!("unknown backend {other:?}"),
+            "wezterm" | "kitty" => bail!("the {name} backend was removed; use auto, keystroke or clipboard"),
+            other => Backend::Mux(Mux::parse(other).ok_or_else(|| anyhow!("unknown backend {other:?}"))?),
         }))
     }
 }
@@ -51,55 +39,112 @@ pub struct Outcome {
     pub note: String,
 }
 
-static NEXT_BUFFER: AtomicU64 = AtomicU64::new(0);
+#[derive(Debug, PartialEq, Eq)]
+enum Destination<'a> {
+    Pane { pane: &'a Pane, tty: u64 },
+    Keystroke,
+    Clipboard,
+}
 
-/// The backend `send` would use for this session.
-pub fn probe(session: &Session, pinned: Option<Backend>) -> Backend {
-    // The viewer can hold a session whose agent exited since it was shown. Its
-    // terminal may then hold a shell, where every pasted newline would run a
-    // command.
-    if pinned.is_none() && !session.agent_alive() {
-        return Backend::Clipboard;
+impl Destination<'_> {
+    fn backend(&self) -> Backend {
+        match self {
+            Self::Pane { pane, .. } => Backend::Mux(pane.mux),
+            Self::Keystroke => Backend::Keystroke,
+            Self::Clipboard => Backend::Clipboard,
+        }
     }
-    pinned.unwrap_or_else(|| PROBE_ORDER.into_iter().find(|b| available(*b, session)).unwrap_or(Backend::Clipboard))
+}
+
+fn resolve(session: &Session, pinned: Option<Backend>) -> Result<Destination<'_>> {
+    select(session, pinned, session.terminal.agent.and_then(|agent| agent.foreground_tty()), |pane| {
+        pane.mux.inspect(pane)
+    })
+}
+
+fn select(
+    session: &Session,
+    pinned: Option<Backend>,
+    agent_tty: Option<u64>,
+    mut inspect: impl FnMut(&Pane) -> Inspection,
+) -> Result<Destination<'_>> {
+    match pinned {
+        Some(Backend::Clipboard) => return Ok(Destination::Clipboard),
+        Some(Backend::Keystroke) => return Ok(Destination::Keystroke),
+        _ => {}
+    }
+    let candidate = session.terminal.panes.iter().find(|pane| {
+        agent_tty.is_some()
+            && pinned.is_none_or(|backend| backend == Backend::Mux(pane.mux))
+            && inspect(pane).matches_tty(agent_tty)
+    });
+    if let Some(pane) = candidate {
+        return Ok(Destination::Pane { pane, tty: agent_tty.expect("verified tty") });
+    }
+    if let Some(backend) = pinned {
+        bail!("cannot verify that a {} pane belongs to this agent; use clipboard instead", backend.name());
+    }
+    Ok(Destination::Clipboard)
+}
+
+/// Status inspection never sends text or activates a terminal application.
+pub fn probe(session: &Session, pinned: Option<Backend>) -> Result<Backend> {
+    resolve(session, pinned).map(|destination| destination.backend())
 }
 
 pub fn send(session: &Session, text: &str, pinned: Option<Backend>) -> Result<Outcome> {
     let text = paste_safe(text);
     let text = text.as_str();
-    let backend = probe(session, pinned);
+    let destination = resolve(session, pinned)?;
+    let backend = destination.backend();
     if backend != Backend::Clipboard && !session.agent_alive() {
         bail!("the session's agent is no longer running, so its terminal may now hold something else");
     }
-    let note = match backend {
-        Backend::Tmux => {
-            send_tmux(session, text)?;
-            "Sent to the prompt through tmux".to_string()
+    let note = match destination {
+        Destination::Pane { pane, tty } => {
+            deliver(
+                pane,
+                tty,
+                text,
+                || session.terminal.agent.and_then(|agent| agent.foreground_tty()),
+                |pane| pane.mux.inspect(pane),
+                |pane, text| pane.mux.send(pane, text),
+            )?;
+            format!("Sent to the prompt through {}", pane.mux.name())
         }
-        Backend::Wezterm => {
-            send_wezterm(session, text)?;
-            "Sent to the prompt through wezterm".to_string()
-        }
-        Backend::Kitty => {
-            send_kitty(session, text)?;
-            "Sent to the prompt through kitty".to_string()
-        }
-        Backend::Keystroke => {
-            send_keystroke(session, text)?;
+        Destination::Keystroke => {
+            let bundle_id = session.terminal.bundle_id.as_deref().ok_or_else(|| anyhow!("no terminal bundle id"))?;
+            crate::terminal::paste_into_frontmost(bundle_id, text)?;
             "Pasted into the terminal, which is now in front".to_string()
         }
-        Backend::Clipboard => {
+        Destination::Clipboard => {
             copy(text)?;
             if !session.agent_alive() {
                 "Copied. The session's agent is no longer running, so nothing was pasted.".to_string()
-            } else if session.terminal.bundle_id.is_some() && !keystroke::trusted() {
-                "Copied. Paste it into the prompt. Grant peekback Accessibility for direct paste.".to_string()
-            } else {
+            } else if pinned == Some(Backend::Clipboard) {
                 "Copied. Paste it into the prompt.".to_string()
+            } else {
+                "Copied. No verified pane is available; paste it into the prompt.".to_string()
             }
         }
     };
     Ok(Outcome { backend, note })
+}
+
+fn deliver(
+    pane: &Pane,
+    tty: u64,
+    text: &str,
+    agent_tty: impl FnOnce() -> Option<u64>,
+    inspect: impl FnOnce(&Pane) -> Inspection,
+    send: impl FnOnce(&Pane, &str) -> Result<()>,
+) -> Result<()> {
+    let inspection = inspect(pane);
+    let current_tty = agent_tty();
+    if current_tty != Some(tty) || !inspection.matches_tty(current_tty) {
+        bail!("the selected pane can no longer be verified; nothing was sent");
+    }
+    send(pane, text)
 }
 
 /// Pasted text must stay text. Escape sequences can end a bracketed paste
@@ -118,181 +163,46 @@ pub fn copy(text: &str) -> Result<()> {
     arboard::Clipboard::new()?.set_text(text).context("clipboard")
 }
 
-fn available(backend: Backend, session: &Session) -> bool {
-    let t = &session.terminal;
-    match backend {
-        Backend::Tmux => match (&t.tmux_socket, &t.tmux_pane) {
-            (Some(socket), Some(pane)) => tmux(socket)
-                .args(["display-message", "-p", "-t", pane, "#{pane_id}"])
-                .output()
-                .is_ok_and(|o| o.status.success()),
-            _ => false,
-        },
-        Backend::Wezterm => t.wezterm_pane.is_some() && on_path("wezterm"),
-        Backend::Kitty => t.kitty_window.is_some() && t.kitty_listen_on.is_some() && on_path("kitten"),
-        Backend::Keystroke => t.bundle_id.is_some() && keystroke::trusted(),
-        Backend::Clipboard => true,
-    }
-}
-
-fn tmux(socket: &str) -> Command {
-    let mut cmd = Command::new("tmux");
-    cmd.arg("-S").arg(socket);
-    cmd
-}
-
-fn send_tmux(session: &Session, text: &str) -> Result<()> {
-    let socket = session.terminal.tmux_socket.as_deref().ok_or_else(|| anyhow!("no tmux socket"))?;
-    let pane = session.terminal.tmux_pane.as_deref().ok_or_else(|| anyhow!("no tmux pane"))?;
-    // tmux brackets the paste only when the program asked for it. Without
-    // that, it turns every newline into Enter.
-    if text.contains('\n')
-        && tmux_output(socket, &["display-message", "-p", "-t", pane, "#{bracket_paste_flag}"])? != "1"
-    {
-        bail!("the tmux pane does not accept pasted text, so its newlines would be typed as Enter");
-    }
-    let buffer = format!("peekback-{}-{}", std::process::id(), NEXT_BUFFER.fetch_add(1, Ordering::Relaxed));
-    run_with_stdin(tmux(socket).args(["load-buffer", "-b", &buffer, "-"]), text)?;
-    run(tmux(socket).args(["paste-buffer", "-p", "-b", &buffer, "-t", pane, "-d"]))
-}
-
-/// The pane the most recently used client of this tmux server is on.
-pub fn tmux_active_pane(socket: &str) -> Option<String> {
-    tmux_output(socket, &["display-message", "-p", "#{pane_id}"]).ok().filter(|pane| !pane.is_empty())
-}
-
-fn tmux_output(socket: &str, args: &[&str]) -> Result<String> {
-    let output = tmux(socket).args(args).output().context("run tmux")?;
-    if !output.status.success() {
-        bail!("tmux failed: {}", String::from_utf8_lossy(&output.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
-fn send_wezterm(session: &Session, text: &str) -> Result<()> {
-    let pane = session.terminal.wezterm_pane.as_deref().ok_or_else(|| anyhow!("no wezterm pane"))?;
-    run_with_stdin(Command::new("wezterm").args(["cli", "send-text", "--pane-id", pane]), text)
-}
-
-fn send_kitty(session: &Session, text: &str) -> Result<()> {
-    let window = session.terminal.kitty_window.as_deref().ok_or_else(|| anyhow!("no kitty window"))?;
-    let to = session.terminal.kitty_listen_on.as_deref().ok_or_else(|| anyhow!("no kitty socket"))?;
-    run_with_stdin(
-        Command::new("kitten").args([
-            "@",
-            "--to",
-            to,
-            "send-text",
-            // Always bracket, so a newline can never be typed as Enter.
-            "--bracketed-paste=enable",
-            "--match",
-            &format!("id:{window}"),
-            "--stdin",
-        ]),
-        text,
-    )
-}
-
-/// Puts the text on the clipboard, brings the terminal app forward, and
-/// presses Cmd+V. The previous clipboard contents are restored afterwards.
-fn send_keystroke(session: &Session, text: &str) -> Result<()> {
-    let bundle_id = session.terminal.bundle_id.as_deref().ok_or_else(|| anyhow!("no terminal bundle id"))?;
-    let mut clipboard = arboard::Clipboard::new()?;
-    let previous = clipboard.get_text().ok();
-    clipboard.set_text(text)?;
-    keystroke::activate(bundle_id)?;
-    thread::sleep(Duration::from_millis(150));
-    keystroke::press_cmd_v()?;
-    thread::sleep(Duration::from_millis(300));
-    if let Some(previous) = previous {
-        let _ = clipboard.set_text(previous);
-    }
-    Ok(())
-}
-
-fn run(cmd: &mut Command) -> Result<()> {
-    let output = cmd.output().with_context(|| format!("run {:?}", cmd.get_program()))?;
-    if !output.status.success() {
-        bail!("{:?} failed: {}", cmd.get_program(), String::from_utf8_lossy(&output.stderr).trim());
-    }
-    Ok(())
-}
-
-fn run_with_stdin(cmd: &mut Command, input: &str) -> Result<()> {
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("run {:?}", cmd.get_program()))?;
-    child.stdin.take().expect("piped stdin").write_all(input.as_bytes())?;
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        bail!("{:?} failed: {}", cmd.get_program(), String::from_utf8_lossy(&output.stderr).trim());
-    }
-    Ok(())
-}
-
-pub fn on_path(program: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
-}
-
-#[cfg(target_os = "macos")]
-mod keystroke {
-    use anyhow::{Result, anyhow};
-    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
-    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
-    use objc2_foundation::NSString;
-
-    const KEY_V: u16 = 9;
-
-    #[link(name = "ApplicationServices", kind = "framework")]
-    unsafe extern "C" {
-        fn AXIsProcessTrusted() -> bool;
-    }
-
-    pub fn trusted() -> bool {
-        unsafe { AXIsProcessTrusted() }
-    }
-
-    pub fn activate(bundle_id: &str) -> Result<()> {
-        let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(bundle_id));
-        let app = apps.iter().next().ok_or_else(|| anyhow!("{bundle_id} is not running"))?;
-        app.activateWithOptions(NSApplicationActivationOptions::empty());
-        Ok(())
-    }
-
-    pub fn press_cmd_v() -> Result<()> {
-        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_| anyhow!("event source"))?;
-        for down in [true, false] {
-            let event =
-                CGEvent::new_keyboard_event(source.clone(), KEY_V, down).map_err(|_| anyhow!("keyboard event"))?;
-            event.set_flags(CGEventFlags::CGEventFlagCommand);
-            event.post(CGEventTapLocation::HID);
-        }
-        Ok(())
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-mod keystroke {
-    use anyhow::{Result, bail};
-    pub fn trusted() -> bool {
-        false
-    }
-    pub fn activate(_: &str) -> Result<()> {
-        bail!("keystroke backend is macOS only")
-    }
-    pub fn press_cmd_v() -> Result<()> {
-        bail!("keystroke backend is macOS only")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::process::ProcessId;
+
+    fn session(terminal: serde_json::Value) -> Session {
+        serde_json::from_value(serde_json::json!({
+            "session_id": "s", "cwd": "/tmp", "started_at": 0, "last_active_at": 0, "terminal": terminal,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn delivery_rechecks_ownership_and_propagates_partial_failure_without_retry() {
+        let pane = Pane { mux: Mux::Tmux, server: Some("/s".into()), id: "%1".into() };
+        for (tty, state) in [
+            (None, Inspection::Available { tty: Some(10) }),
+            (Some(10), Inspection::Unavailable),
+            (Some(10), Inspection::Available { tty: Some(20) }),
+        ] {
+            assert!(deliver(&pane, 10, "text", || tty, |_| state, |_, _| panic!("must not send")).is_err());
+        }
+        let mut sends = 0;
+        let error = deliver(
+            &pane,
+            10,
+            "text",
+            || Some(10),
+            |_| Inspection::Available { tty: Some(10) },
+            |target, text| {
+                assert_eq!(target, &pane);
+                assert_eq!(text, "text");
+                sends += 1;
+                bail!("partial write")
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "partial write");
+        assert_eq!(sends, 1);
+    }
 
     #[test]
     fn pasted_text_cannot_carry_control_sequences() {
@@ -302,14 +212,58 @@ mod tests {
 
     #[test]
     fn a_session_whose_agent_exited_falls_back_to_the_clipboard() {
-        let mut session: Session = serde_json::from_value(serde_json::json!({
-            "session_id": "s", "cwd": "/tmp", "started_at": 0, "last_active_at": 0,
-            "terminal": { "tmux_pane": "%1", "tmux_socket": "/nonexistent" },
-        }))
-        .unwrap();
+        let mut session = session(serde_json::json!({
+            "panes": [{ "mux": "tmux", "server": "/nonexistent", "id": "%1" }],
+        }));
         assert!(session.agent_alive()); // Entries from before agent tracking.
         session.terminal.agent = Some(ProcessId { pid: u32::MAX, started_at_us: 0 });
-        assert_eq!(probe(&session, None), Backend::Clipboard);
-        assert!(send(&session, "text", Some(Backend::Tmux)).is_err());
+        assert_eq!(probe(&session, None).unwrap(), Backend::Clipboard);
+        assert!(send(&session, "text", Some(Backend::Mux(Mux::Tmux))).is_err());
+    }
+
+    #[test]
+    fn selection_keeps_the_exact_verified_pane_and_never_guesses() {
+        let session = session(serde_json::json!({
+            "bundle_id": "terminal", "panes": [
+                { "mux": "tmux", "server": "/outer", "id": "%9" },
+                { "mux": "tmux", "server": "/wrong", "id": "%1" },
+                { "mux": "tmux", "server": "/right", "id": "%2" }
+            ]
+        }));
+        let inspect = |p: &Pane| match p.server.as_deref() {
+            Some("/outer") => Inspection::Available { tty: None },
+            Some("/wrong") => Inspection::Available { tty: Some(9) },
+            _ => Inspection::Available { tty: Some(10) },
+        };
+        for pinned in [None, Some(Backend::Mux(Mux::Tmux))] {
+            assert_eq!(
+                select(&session, pinned, Some(10), inspect).unwrap(),
+                Destination::Pane { pane: &session.terminal.panes[2], tty: 10 }
+            );
+        }
+        for state in [Inspection::Unknown, Inspection::Unavailable, Inspection::Available { tty: None }] {
+            assert_eq!(select(&session, None, Some(10), |_| state).unwrap(), Destination::Clipboard);
+            assert!(select(&session, Some(Backend::Mux(Mux::Tmux)), Some(10), |_| state).is_err());
+        }
+        assert_eq!(select(&session, None, None, inspect).unwrap(), Destination::Clipboard);
+        assert_eq!(select(&session, Some(Backend::Keystroke), None, inspect).unwrap(), Destination::Keystroke);
+    }
+
+    #[test]
+    fn sessions_recorded_before_panes_still_load() {
+        let old = session(serde_json::json!({ "tmux_pane": "%1", "tmux_socket": "/t", "bundle_id": "b" }));
+        assert!(old.terminal.panes.is_empty());
+        assert_eq!(old.terminal.bundle_id.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn config_backend_names_parse_as_before() {
+        for name in ["tmux", "keystroke", "clipboard"] {
+            assert_eq!(Backend::parse(name).unwrap().map(Backend::name), Some(name));
+        }
+        assert_eq!(Backend::parse("auto").unwrap(), None);
+        assert!(Backend::parse("screen").is_err());
+        let removed = Backend::parse("wezterm").unwrap_err().to_string();
+        assert_eq!(removed, "the wezterm backend was removed; use auto, keystroke or clipboard");
     }
 }

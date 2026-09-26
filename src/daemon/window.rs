@@ -9,8 +9,8 @@ use wry::{NewWindowResponse, WebView, WebViewBuilder};
 
 use crate::assets;
 use crate::config::Placement;
-use crate::daemon::terminal::Frame;
 use crate::daemon::{DaemonMessage, PageMessage, UserEvent};
+use crate::terminal::Frame;
 
 const SCHEME: &str = "peekback";
 const ORIGIN: &str = "peekback://app/";
@@ -46,11 +46,15 @@ pub fn create(event_loop: &EventLoop<UserEvent>, placement: Placement, split: f6
                 eprintln!("ignored page message from {}", message.uri());
                 return;
             }
+            if message.body().len() > 4 * 1024 * 1024 {
+                eprintln!("ignored page message of {} bytes", message.body().len());
+                return;
+            }
             match serde_json::from_str::<PageMessage>(message.body()) {
                 Ok(page_message) => {
                     let _ = proxy.send_event(UserEvent::Page(page_message));
                 }
-                Err(e) => eprintln!("bad page message {:?}: {e}", message.body()),
+                Err(e) => eprintln!("bad page message: {e}"),
             }
         })
         .with_devtools(cfg!(debug_assertions))

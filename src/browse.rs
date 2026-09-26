@@ -1,8 +1,6 @@
 //! Terminal consumer of session-activity. Opening the rendered preview is an
 //! explicit action; listing and inspecting files never starts the daemon.
-use std::fs::OpenOptions;
-use std::io::{self, IsTerminal, Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -463,14 +461,7 @@ fn preview_request(key: Option<&SessionKey>, path: &Path) -> Result<Request> {
 
 fn text_preview(path: &Path) -> Vec<String> {
     let read = (|| -> Result<Vec<String>> {
-        // O_NONBLOCK prevents a replaced path or symlink to a FIFO from hanging
-        // the browser before we can verify the opened file's type.
-        let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path)?;
-        ensure!(file.metadata()?.is_file(), "Not a regular file.");
-        let mut bytes = Vec::new();
-        file.take(PREVIEW_BYTES + 1).read_to_end(&mut bytes)?;
-        let truncated = bytes.len() as u64 > PREVIEW_BYTES;
-        bytes.truncate(PREVIEW_BYTES as usize);
+        let (bytes, truncated) = crate::document::read(path, PREVIEW_BYTES)?;
         ensure!(!bytes.contains(&0), "Binary file; text preview unavailable.");
         let text = match std::str::from_utf8(&bytes) {
             Ok(text) => text,

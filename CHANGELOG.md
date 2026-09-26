@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- Open the hotkey on the tmux pane you are actually in. The daemon inherited
+  the pane of whichever terminal started it, and tmux answered every "which
+  pane is active" query for that pane's window, so the hotkey kept opening a
+  session from that window. The active pane is now the one of the tmux
+  server's most recently used client, and a server with no client attached
+  has none.
+- Send to the pane the agent actually runs in when multiplexers are nested.
+  A terminal window opened from tmux inherits `TMUX_PANE`, so text went to the
+  tmux pane instead, and the hotkey and `--pane` could open it for the tmux
+  pane's own session. A pane on another tty than the agent's is no longer
+  recorded.
+- Look up `--pane` on the caller's tmux server. Pane ids repeat across tmux
+  servers, so it could open a session from another server.
+- Open the hotkey on a fresh Codex or Claude Code pane even before its agent
+  registers a session. Codex creates one only at its first prompt, so the
+  hotkey opened another session; it now shows an empty view for that pane and
+  switches to its session once it starts.
+- Remove the WezTerm and Kitty backends. They were never exercised on a real
+  install and could not verify that a pane belongs to the agent, so automatic
+  sends through them already used the clipboard. tmux is the supported
+  multiplexer; other terminals use the clipboard, or `backend = "keystroke"`.
+  A config naming `wezterm` or `kitty` reports that and uses `auto`.
+- Sessions recorded by an earlier version send through keystroke or the
+  clipboard until their next prompt or tool call re-records the pane.
+
 ## 0.2.0 - 2026-09-25
 
 Session files are now decided when each turn ends and stored, instead of

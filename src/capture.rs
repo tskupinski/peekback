@@ -26,7 +26,7 @@ pub struct Turn {
 }
 
 impl Turn {
-    fn covers(self, at: i64) -> bool {
+    pub(crate) fn covers(self, at: i64) -> bool {
         self.started_at - SLACK_SECS <= at && at <= self.ended_at.saturating_add(SLACK_SECS)
     }
 }
@@ -40,15 +40,28 @@ pub fn abandoned(session: &Session, started_at: i64) -> Turn {
 
 /// A session's recent turns and its open one, as others see them. The open
 /// turn only reaches the present while the agent looks busy.
-fn turns(session: &Session, now: i64) -> impl Iterator<Item = Turn> + '_ {
+fn turns<'a>(
+    session: &'a Session,
+    recorded: Option<&'a crate::turn_history::History>,
+    now: i64,
+) -> impl Iterator<Item = Turn> + 'a {
     let open = session.turn_started_at.map(|started_at| {
         let turn = abandoned(session, started_at);
-        if now - turn.ended_at < QUIET_SECS { Turn { ended_at: i64::MAX, ..turn } } else { turn }
+        if session.agent_alive() && now - turn.ended_at < QUIET_SECS {
+            Turn { ended_at: i64::MAX, ..turn }
+        } else {
+            turn
+        }
     });
-    session.recent_turns.iter().copied().chain(open)
+    session
+        .recent_turns
+        .iter()
+        .copied()
+        .filter(move |turn| !recorded.is_some_and(|history| history.turns.iter().any(|record| record.turn == *turn)))
+        .chain(open)
 }
 
-/// Turns ended long ago cannot overlap anything a live session still captures.
+/// Bound the registry cache; durable history retains older overlap evidence.
 pub fn remember(turns: &mut Vec<Turn>, closed: Turn) {
     turns.push(closed);
     turns.retain(|turn| turn.ended_at >= closed.ended_at - RECENT_TURNS_SECS);
@@ -70,11 +83,31 @@ pub fn capture(root: &Path, session: &Session, store: &Store, turn: Option<Turn>
     for warning in report.warnings {
         eprintln!("peekback: incomplete capture: {}: {}", warning.path.display(), warning.message);
     }
-    let others: Vec<_> = registry::load_all_in(root).into_iter().filter(|s| s.activity_key() != key).collect();
+    let others: Vec<_> = registry::registered_in(root).into_iter().filter(|s| s.activity_key() != key).collect();
+    // Read live entries first: a concurrently ending session publishes its
+    // history before removing the entry, so it appears in at least one read.
+    let history = crate::turn_history::load(root).unwrap_or_else(|error| {
+        eprintln!("peekback: incomplete overlap history: {error:#}");
+        Vec::new()
+    });
     let now = registry::now_unix();
     for mut event in report.events {
         if event.source != Source::ScratchpadScan {
-            event.concurrent = concurrent(&event, &others, now);
+            event.concurrent = concurrent(&event, &others, &history, now);
+            for other in &history {
+                if other.session != key
+                    && other.turns.iter().any(|record| {
+                        record.turn.covers(event.timestamp)
+                            && record.roots.iter().any(|dir| event.path.starts_with(dir))
+                    })
+                    && !event.concurrent.contains(&other.session)
+                {
+                    event.concurrent.push(other.session.clone());
+                }
+            }
+            event
+                .concurrent
+                .sort_by(|a, b| a.agent.slug().cmp(b.agent.slug()).then_with(|| a.session_id.cmp(&b.session_id)));
         }
         events.push(event);
     }
@@ -110,13 +143,21 @@ fn scan_roots(session: &Session, turn: Option<Turn>) -> Vec<ScanRoot> {
 
 /// Sessions whose roots contain the file and that were working when it last
 /// changed; the filesystem cannot tell which of them changed it.
-fn concurrent(event: &FileEvent, others: &[Session], now: i64) -> Vec<SessionKey> {
+fn concurrent(
+    event: &FileEvent,
+    others: &[Session],
+    history: &[crate::turn_history::History],
+    now: i64,
+) -> Vec<SessionKey> {
     others
         .iter()
         .filter(|other| {
             event.path.starts_with(&other.cwd) || other.memory_dir().is_some_and(|dir| event.path.starts_with(dir))
         })
-        .filter(|other| turns(other, now).any(|turn| turn.covers(event.timestamp)))
+        .filter(|other| {
+            let recorded = history.iter().find(|history| history.session == other.activity_key());
+            turns(other, recorded, now).any(|turn| turn.covers(event.timestamp))
+        })
         .map(Session::activity_key)
         .collect()
 }
