@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Remove the sidebar, `Tab` and `:sidebar`. It was off by default, and the
+  document and comments pickers list the same things from the keyboard.
 - End the line reference of a list's last item at its text; it included the
   blank line after the list.
 - Stop re-reading the session registry over and over while a document is
@@ -34,7 +36,7 @@
   added as "(no note)", and emptying a comment in `C` removes it.
 - Review before sending: `S` opens a sheet with the target session, an
   editable opening line, and exactly what will be pasted; `Enter` sends and
-  `Esc` closes. `Ctrl-S` in the comments picker sends a single comment.
+  `Esc` closes.
 - Mark each comment with one bar in the left margin beside its blocks, instead
   of a badge under every block and a tinted background. A range comment no
   longer looks like several, and adding one no longer moves the text.
@@ -43,8 +45,8 @@
 - Show the pending count with `S send` on the right of the status line.
 - Write comments in a note box that opens under the commented block, with
   several lines (`Shift-Enter`), instead of a one-line input at the bottom
-  edge. `C` edits the comment on the cursor's block, and `Ctrl-E` edits one
-  from the comments picker; comments could only be removed before.
+  edge. `C` edits and `x` removes the comment on the cursor's block;
+  comments could only be removed from the sidebar or the picker before.
 - Tell the agent where each comment and sent selection is, as a
   `path#L12-18` reference before the quote.
 - Replace terminal color detection with built-in light and dark themes, in

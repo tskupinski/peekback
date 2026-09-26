@@ -116,7 +116,6 @@ function boot({ markdown = false } = {}) {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../assets/app.js"), "utf8"), {
     window, document, console, CSS: {}, TextEncoder, hljs: { getLanguage: () => null },
     mermaid: { initialize(options) { env.mermaidInits += 1; env.mermaidOptions = options; } }, renderMathInElement() {},
-    localStorage: { getItem() { return null; }, setItem() {} },
     setInterval() {}, setTimeout() {}, clearTimeout() {}, requestAnimationFrame() {},
     getComputedStyle: () => ({ getPropertyValue: k => env.themeTokens[k.slice(2)] ?? "", colorScheme: env.systemDark ? "dark" : "light" }),
   });
@@ -160,9 +159,29 @@ function boot({ markdown = false } = {}) {
     const top = parseFloat(bar.style.top);
     return { line: top / 20, endLine: (top + parseFloat(bar.style.height)) / 20, note: bar.title };
   });
+  // What the status line counts, and what the comments picker lists, as a
+  // user would read them.
+  const pending = () => element("status-pending").hidden ? 0 : parseInt(element("status-pending").textContent, 10);
+  const listed = () => {
+    if (pending() === 0) return [];
+    key(" "); key("c");
+    const items = element("picker-list").children.map(li => ({
+      note: li.children[0].textContent.split("  ·  ")[1] ?? "", changed: /text changed or removed/.test(li.children[1].textContent),
+    }));
+    element("picker-input").dispatch("keydown", { key: "Escape" });
+    return items;
+  };
+  const notes = () => listed().map(c => c.note);
+  const remove = (index = 0) => {
+    key(" "); key("c");
+    for (let i = 0; i < index; i++) element("picker-input").dispatch("keydown", { key: "ArrowDown" });
+    element("picker-input").dispatch("keydown", { key: "d", ctrlKey: true });
+    element("picker-input").dispatch("keydown", { key: "Escape" });
+  };
+  const removeAll = () => { while (pending()) remove(); };
   return {
-    element, document, window, messages, schemeListeners, env, receive, expectRequest,
-    key, command, render, sendAll, bars, marked, context: () => context, input: element("picker-input"),
+    element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render,
+    sendAll, bars, marked, pending, listed, notes, remove, removeAll, context: () => context, input: element("picker-input"),
   };
 }
 
@@ -170,7 +189,7 @@ const scenarios = [];
 const scenario = (name, run, options) => scenarios.push({ name, run, options });
 
 scenario("Picker: scopes, scratchpad listing, filtering, caps, >30 results, opening, refresh, bookmarks", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { element, window, receive, expectRequest, key, render, listed, input } = page;
   receive({ type: "render", path: "/current.md", source: "", session: { session_id: "live" },
     documents: [{ path: "/current.md", label: "current.md", touched_at: 1 }] });
   await new Promise(setImmediate);
@@ -183,10 +202,10 @@ scenario("Picker: scopes, scratchpad listing, filtering, caps, >30 results, open
   assert.match(element("picker-note").textContent, /Loading scratchpad/);
   input.value = "note-4";
   input.dispatch("input");
-  const notes = Array.from({ length: 45 }, (_, index) => ({
+  const scratchFiles = Array.from({ length: 45 }, (_, index) => ({
     path: `/scratch/note-${index}.md`, label: `note-${index}.md`, touched_at: 100 - index,
   }));
-  receive({ type: "scratchpad", available: true, documents: notes, found: 250, warnings: [] });
+  receive({ type: "scratchpad", available: true, documents: scratchFiles, found: 250, warnings: [] });
   assert.equal(input.value, "note-4"); // Keep input typed while loading.
   assert.match(element("picker-note").textContent, /Showing 45 of 250 files\. Markdown in this session's scratchpad/);
   input.value = "";
@@ -203,7 +222,7 @@ scenario("Picker: scopes, scratchpad listing, filtering, caps, >30 results, open
   expectRequest({ type: "list-scratchpad" }); // Refresh on reopen.
   assert.equal(element("picker-list").children[0].textContent, "loading…"); // Never the previous session's list.
   input.dispatch("keydown", { key: "Tab", shiftKey: true }); // Shift-Tab cycles backwards.
-  receive({ type: "scratchpad", available: true, documents: notes, found: 45, warnings: [] }); // Late reply keeps scope.
+  receive({ type: "scratchpad", available: true, documents: scratchFiles, found: 45, warnings: [] }); // Late reply keeps scope.
   assert.equal(element("picker-current").attributes["aria-pressed"], "true");
   assert.equal(element("picker-list").children[0].children[0].textContent, "current.md");
   element("picker-scratchpad").dispatch("click");
@@ -246,7 +265,7 @@ scenario("Picker: scopes, scratchpad listing, filtering, caps, >30 results, open
 });
 
 scenario("Comment anchoring: ranges, document switches, moved and changed text, send lifecycle", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { element, messages, receive, key, command, render, sendAll, marked, pending, listed, remove } = page;
   await render();
   key("v"); key("j"); command("c Review both paragraphs");
   assert.deepEqual(marked(), [{ line: 0, endLine: 3, note: "Review both paragraphs" }]); // One bar for the range.
@@ -260,8 +279,7 @@ scenario("Comment anchoring: ranges, document switches, moved and changed text, 
   assert.deepEqual(marked().map(m => m.line), [2, 4]); // Moved text keeps its comments.
   await render("/comments.md", source.replace("First paragraph.", "First, rewritten."));
   assert.deepEqual(marked().map(m => m.note), ["Another note"]); // Changed text is reported, never guessed at.
-  assert.equal(element("comments").children[0].children[1].hidden, false);
-  assert.match(element("comments").children[0].children[1].textContent, /text changed or removed/);
+  assert.equal(listed()[0].changed, true);
   assert.equal(element("status-pending").textContent, "2 pending · 1 changed · S send");
   key("G"); key("]"); key("c"); // ]c stops on it too, and says what happened.
   assert.match(element("status-msg").textContent, /^comment 1 of 2 \(text changed or removed\): Review both paragraphs$/);
@@ -270,7 +288,7 @@ scenario("Comment anchoring: ranges, document switches, moved and changed text, 
   assert.match(messages.at(-1).text, /\(This text has since changed or been removed\.\)\n\nReview both paragraphs/);
   receive({ type: "send-result", purpose: "comments", ok: false, text: "failed" });
   await render();
-  assert.equal(element("comments").children[0].children[1].hidden, true);
+  assert.equal(listed()[0].changed, false);
   sendAll();
   receive({ type: "send-result", purpose: "comments", ok: false, text: "failed" });
   assert.equal(marked().length, 2);
@@ -278,7 +296,7 @@ scenario("Comment anchoring: ranges, document switches, moved and changed text, 
   command("c Added while sending");
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
   assert.deepEqual(marked().map(m => m.note), ["Added while sending"]); // Only the acknowledged batch disappears.
-  element("comments").children[0].children[3].dispatch("click");
+  remove();
   assert.equal(marked().length, 0);
 
   // With one of two identical blocks deleted, there is no telling which was
@@ -288,14 +306,14 @@ scenario("Comment anchoring: ranges, document switches, moved and changed text, 
   key("G"); command("c On the second Same");
   await render("/repeated.md", "Same.\n\nMiddle.");
   assert.equal(marked().length, 0);
-  assert.equal(element("comments").children[0].children[1].hidden, false);
+  assert.equal(listed()[0].changed, true);
   await render("/repeated.md", "Intro.\n\n" + repeated);
   assert.deepEqual(marked().map(m => m.line), [6]); // Both copies back: it follows the move.
-  element("comments").children[0].children[3].dispatch("click");
+  remove();
 });
 
 scenario("Composer: writing, editing, undo, the prompt's line references", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { element, messages, receive, key, render, sendAll, marked, pending, notes, remove, input } = page;
   await render();
   // Writing a note happens in a box under the block, all from the keyboard.
   key("g"); key("g"); key("j"); key("c");
@@ -313,18 +331,19 @@ scenario("Composer: writing, editing, undo, the prompt's line references", async
   assert.equal(marked()[0].note, "First line\nsecond line");
   key("c"); composer.value = "Never mind"; composer.dispatch("keydown", { key: "Escape" });
   assert.equal(element("composer").hidden, true);
-  assert.equal(element("comments").children.length, 1); // Esc adds nothing.
+  assert.equal(pending(), 1); // Esc adds nothing.
   // C edits the comment on the cursor's block; Ctrl-E does it from the list.
   key("C");
   assert.equal(composer.value, "First line\nsecond line");
   composer.value = "Reworded";
   composer.dispatch("keydown", { key: "Enter" });
   assert.equal(marked()[0].note, "Reworded");
-  assert.equal(element("comments").children.length, 1);
+  assert.equal(pending(), 1);
   key("g"); key("g"); key("C");
   assert.match(element("status-msg").textContent, /no comment on this block · c adds one/);
   key(" "); key("c");
-  input.dispatch("keydown", { key: "e", ctrlKey: true });
+  input.dispatch("keydown", { key: "Enter" }); // The comments picker jumps; C then edits.
+  key("C");
   assert.equal(composer.value, "Reworded");
   composer.dispatch("keydown", { key: "Escape" });
   // Nothing is lost by one wrong key: u takes back a removal or a discarded
@@ -336,34 +355,35 @@ scenario("Composer: writing, editing, undo, the prompt's line references", async
   key("u");
   assert.match(element("status-msg").textContent, /nothing to undo/);
   key("g"); key("g"); key("c"); composer.value = ""; composer.dispatch("keydown", { key: "Enter" });
-  assert.equal(element("comments").children.length, 1); // Still only "Reworded".
+  assert.equal(pending(), 1); // Still only "Reworded".
   key("c"); composer.value = "Half a thought"; composer.dispatch("keydown", { key: "Escape" });
   assert.match(element("toast").textContent, /note discarded · u restores/);
   key("u");
   assert.equal(element("composer").hidden, false);
   assert.equal(composer.value, "Half a thought");
   composer.dispatch("keydown", { key: "Enter" });
-  assert.equal(element("comments").children.length, 2);
+  assert.equal(pending(), 2);
   key("g"); key("g"); key("C"); composer.value = ""; composer.dispatch("keydown", { key: "Enter" });
-  assert.equal(element("comments").children.length, 1); // Emptied: removed.
+  assert.equal(pending(), 1); // Emptied: removed.
   assert.match(element("toast").textContent, /comment removed · u restores/);
   key("u");
-  assert.equal(element("comments").children.length, 2);
-  element("comments").children[1].children[3].dispatch("click"); // The sidebar's ×.
-  assert.equal(element("comments").children.length, 1);
+  assert.equal(pending(), 2);
+  key("g"); key("g"); key("x"); // x removes the comment on the cursor's block.
+  assert.equal(pending(), 1);
+  assert.match(element("toast").textContent, /comment removed · u restores/);
   key("u");
-  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent).sort(), ["Half a thought", "Reworded"]);
-  element("comments").children.find(li => li.children[2].textContent === "Half a thought").children[3].dispatch("click");
+  assert.deepEqual(notes().sort(), ["Half a thought", "Reworded"]);
+  remove(notes().indexOf("Half a thought"));
 
   // What the agent gets: where each quote is, as a line reference.
   sendAll();
   assert.match(messages.at(-1).text, /Comments on `\/comments\.md`:\n\n`\/comments\.md#L3`\n> Second paragraph\.\n\nReworded$/);
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
-  assert.equal(element("comments").children.length, 0);
+  assert.equal(pending(), 0);
 });
 
 scenario("Review sheet: preview, opening line, one comment, no session", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { element, messages, receive, key, command, render, pending, remove, input } = page;
   await render();
   // Send all reviews first: the sheet shows the target and exactly what will
   // be pasted, with an opening line you can change.
@@ -388,20 +408,7 @@ scenario("Review sheet: preview, opening line, one comment, no session", async p
   intro.dispatch("keydown", { key: "Enter" });
   assert.match(messages.at(-1).text, /^Please fix:\n\nComments on/);
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
-  assert.equal(element("comments").children.length, 0);
-  // Ctrl-S in the comments picker sends just the chosen one, through the sheet.
-  command("c Keep"); key("j"); command("c Send only this");
-  key(" "); key("c");
-  input.value = "only this";
-  input.dispatch("input");
-  input.dispatch("keydown", { key: "s", ctrlKey: true });
-  assert.equal(element("review-target").textContent, "Send 1 comment to / · Claude Code");
-  assert.equal(intro.value, "Please fix:"); // Remembered.
-  assert.doesNotMatch(element("review-preview").textContent, /Keep/);
-  intro.dispatch("keydown", { key: "Enter" });
-  receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
-  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent), ["Keep"]);
-  element("comments").children[0].children[3].dispatch("click");
+  assert.equal(pending(), 0);
   intro.value = "";
   key("S");
   assert.match(element("status-msg").textContent, /no pending comments for this session/);
@@ -416,11 +423,11 @@ scenario("Review sheet: preview, opening line, one comment, no session", async p
   intro.dispatch("keydown", { key: "Enter" });
   assert.equal(messages.length, beforeStandalone);
   intro.dispatch("keydown", { key: "Escape" });
-  element("comments").children[0].children[3].dispatch("click");
+  remove();
 });
 
 scenario("Margin bars: one per comment, lanes, stepping with ]c and [c", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { element, document, receive, key, command, render, sendAll, bars, pending, notes } = page;
   await render();
   // One bar per comment beside its blocks: a range is one mark, not three, and
   // overlapping comments sit in lanes side by side.
@@ -448,7 +455,7 @@ scenario("Margin bars: one per comment, lanes, stepping with ]c and [c", async p
 });
 
 scenario("Selection sends: comments inside go along, those reaching beyond stay", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { messages, receive, key, command, render, notes, remove } = page;
   await render();
   // Sending a selection takes the comments inside it along, and sends them.
   key("g"); key("g"); command("c On the first");
@@ -461,8 +468,8 @@ scenario("Selection sends: comments inside go along, those reaching beyond stay"
   assert.match(withComments.text, /On the first/);
   assert.doesNotMatch(withComments.text, /On the last/);
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
-  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent), ["On the last"]);
-  element("comments").children[0].children[3].dispatch("click");
+  assert.deepEqual(notes(), ["On the last"]);
+  remove();
   key("Escape");
   // A comment reaching beyond the selection stays behind.
   key("g"); key("g"); key("v"); key("j"); command("c On both");
@@ -470,11 +477,11 @@ scenario("Selection sends: comments inside go along, those reaching beyond stay"
   assert.equal(messages.at(-1).purpose, "selection");
   assert.doesNotMatch(messages.at(-1).text, /On both/);
   receive({ type: "send-result", purpose: "selection", ok: true, text: "sent" });
-  element("comments").children[0].children[3].dispatch("click");
+  remove();
 });
 
 scenario("Size limit: refused in the page, not left in flight", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { element, messages, command, render, sendAll, remove } = page;
   // Too large for the daemon: refused in the page, and not left "in flight".
   const huge = "x".repeat(4.5 * 1024 * 1024);
   await render("/huge.md", huge);
@@ -485,11 +492,11 @@ scenario("Size limit: refused in the page, not left in flight", async page => {
   assert.match(element("toast").textContent, /Too large to send/);
   sendAll();
   assert.match(element("toast").textContent, /Too large to send/); // Not "still sending".
-  element("comments").children[0].children[3].dispatch("click");
+  remove();
 });
 
 scenario("Leaving a document: the note is saved with it, a reload keeps it open", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { element, document, key, render, marked, pending, remove, input } = page;
   await render();
   // Leaving the document saves the note with it; the box does not follow.
   key("g"); key("g"); key("c");
@@ -504,10 +511,10 @@ scenario("Leaving a document: the note is saved with it, a reload keeps it open"
   await render("/other.md");
   assert.equal(element("composer").hidden, true);
   await render();
-  assert.equal(element("comments").children.length, 1);
+  assert.equal(pending(), 1);
   // A reload while writing a note on a range keeps the note open and on its
   // text, and no question interrupts it.
-  element("comments").children[0].children[3].dispatch("click");
+  remove();
   key("g"); key("g"); key("v"); key("j"); key("c");
   element("composer-input").value = "Written during a reload";
   await render("/comments.md", "Inserted.\n\n" + source);
@@ -536,7 +543,7 @@ scenario("Real Markdown: frontmatter, headings, list items, fences and quotes ea
 }, { markdown: true });
 
 scenario("Keyboard after a stray click: the review sheet keeps the keys, Esc still closes it", async page => {
-  const { element, key, command, render } = page;
+  const { element, key, command, render, input } = page;
   await render();
   command("c Review this");
   key("S");
@@ -552,8 +559,7 @@ scenario("Keyboard after a stray click: the review sheet keeps the keys, Esc sti
 });
 
 scenario("Sends in flight: an edit made meanwhile stays pending, a removal is not undone into a resend", async page => {
-  const { element, receive, key, command, render, sendAll } = page;
-  const notes = () => element("comments").children.map(li => li.children[2].textContent);
+  const { element, receive, key, command, render, sendAll, notes, remove, input } = page;
   await render();
   command("c First version");
   sendAll();
@@ -562,10 +568,10 @@ scenario("Sends in flight: an edit made meanwhile stays pending, a removal is no
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
   key("y"); // What was pasted is sent; what was added after it was not.
   assert.deepEqual(notes(), ["First version, and more"]);
-  element("comments").children[0].children[3].dispatch("click");
+  remove();
   command("c Removed while sending");
   sendAll();
-  element("comments").children[0].children[3].dispatch("click");
+  remove();
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
   key("u");
   assert.match(element("status-msg").textContent, /nothing to undo/);
@@ -573,7 +579,7 @@ scenario("Sends in flight: an edit made meanwhile stays pending, a removal is no
 });
 
 scenario("Undo after a send: a discarded edit comes back as a new comment, on its own document", async page => {
-  const { element, receive, key, command, render, sendAll } = page;
+  const { element, receive, key, command, render, sendAll, pending, notes, remove, input } = page;
   const composer = element("composer-input");
   await render();
   command("c Keep me");
@@ -581,12 +587,12 @@ scenario("Undo after a send: a discarded edit comes back as a new comment, on it
   composer.dispatch("keydown", { key: "Escape" });
   sendAll();
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
-  assert.equal(element("comments").children.length, 0);
+  assert.equal(pending(), 0);
   key("u");
   assert.equal(composer.value, "Keep me, reworded");
   composer.dispatch("keydown", { key: "Enter" });
-  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent), ["Keep me, reworded"]);
-  element("comments").children[0].children[3].dispatch("click");
+  assert.deepEqual(notes(), ["Keep me, reworded"]);
+  remove();
   key("j"); key("c"); composer.value = "About the second paragraph";
   composer.dispatch("keydown", { key: "Escape" });
   await render("/other.md");
@@ -600,7 +606,7 @@ scenario("Undo after a send: a discarded edit comes back as a new comment, on it
 });
 
 scenario("Repeated text: a comment still on its lines keeps them when a copy appears", async page => {
-  const { element, messages, receive, command, render, sendAll, marked } = page;
+  const { element, messages, receive, command, render, sendAll, marked, pending } = page;
   await render("/plan.md", "### Tests\n\nOne.");
   command("c Cover the edge cases");
   await render("/plan.md", "### Tests\n\nOne.\n\n### Tests\n\nTwo."); // Another phase with its own Tests.
@@ -614,7 +620,7 @@ scenario("Repeated text: a comment still on its lines keeps them when a copy app
 });
 
 scenario("Another session on the same file: the open note is saved with its own session", async page => {
-  const { element, receive, key } = page;
+  const { element, document, receive, key, render, pending, notes, input } = page;
   const show = async session_id => {
     receive({ type: "render", path: "/repo/PLAN.md", source, session: { session_id }, documents: [] });
     await new Promise(setImmediate);
@@ -624,27 +630,27 @@ scenario("Another session on the same file: the open note is saved with its own 
   await show("b");
   assert.equal(element("composer").hidden, true);
   assert.match(element("toast").textContent, /note saved with its document/);
-  assert.equal(element("comments").children.length, 0);
+  assert.equal(pending(), 0);
   await show("a");
-  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent), ["From A"]);
+  assert.deepEqual(notes(), ["From A"]);
 });
 
 scenario("Comments elsewhere: jumping reaches the session's documents, and says so for others", async page => {
-  const { element, messages, receive, key, command, input } = page;
+  const { element, messages, receive, key, command, render, notes, input } = page;
   const show = async (path, documents) => {
     receive({ type: "render", path, source, session: { session_id: "s" }, documents });
     await new Promise(setImmediate);
   };
-  const listed = [{ path: "/plan.md", label: "plan.md", touched_at: 2 }, { path: "/notes.md", label: "notes.md", touched_at: 1 }];
-  await show("/bookmark.md", listed); // Opened from Bookmarks: not one of the session's documents.
+  const sessionFiles = [{ path: "/plan.md", label: "plan.md", touched_at: 2 }, { path: "/notes.md", label: "notes.md", touched_at: 1 }];
+  await show("/bookmark.md", sessionFiles); // Opened from Bookmarks: not one of the session's documents.
   command("c On the bookmark");
-  await show("/plan.md", listed);
+  await show("/plan.md", sessionFiles);
   command("c On the plan");
-  await show("/notes.md", listed);
+  await show("/notes.md", sessionFiles);
   const before = messages.length;
   key(" "); key("c");
   input.value = "bookmark"; input.dispatch("input");
-  input.dispatch("keydown", { key: "e", ctrlKey: true });
+  input.dispatch("keydown", { key: "Enter" });
   assert.equal(messages.length, before);
   assert.match(element("status-msg").textContent, /\/bookmark\.md is not in this session's documents · Ctrl-P opens it/);
   key(" "); key("c");
@@ -655,7 +661,7 @@ scenario("Comments elsewhere: jumping reaches the session's documents, and says 
 });
 
 scenario("Links: HTML and SVG anchors never navigate the webview", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { document, messages } = page;
   const anchor = (attributes, xlink = {}) => ({
     getAttribute: name => attributes[name] ?? null,
     getAttributeNS: (ns, name) => ns === "http://www.w3.org/1999/xlink" ? xlink[name] ?? null : null,
@@ -676,7 +682,7 @@ scenario("Links: HTML and SVG anchors never navigate the webview", async page =>
 });
 
 scenario("Empty session: placeholder, inert actions, picker hint, first document, scan notes", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { element, window, messages, receive, key, render, input } = page;
   // A focused Codex pane before its first prompt: no session exists yet.
   receive({ type: "render", path: null, source: "", session: null, documents: [], unstarted: "Codex" });
   await new Promise(setImmediate);
@@ -710,7 +716,7 @@ scenario("Empty session: placeholder, inert actions, picker hint, first document
 });
 
 scenario("Session isolation: drafts, delivery identity, acknowledgments, copied drafts, stale listings", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { element, window, messages, receive, key, command, render, sendAll, pending, notes, remove, context, input } = page;
   const project = async (id, text, file = "README.md") => {
     receive({ type: "render", path: `/${id}/${file}`, file_identity: `/${id}/${file}`, source: text,
       session: { session_id: id, cwd: `/${id}` }, documents: [] });
@@ -723,13 +729,13 @@ scenario("Session isolation: drafts, delivery identity, acknowledgments, copied 
     session: { session_id: "a", cwd: "/a" }, documents: [],
     context: { generation: 99, session: { ...aContext.session, incarnation: "resumed" } } });
   await new Promise(setImmediate);
-  assert.equal(element("comments").children.length, 1);
+  assert.equal(pending(), 1);
   // Another session parks them, without asking; coming back restores them.
   await project("b", "Project B");
-  assert.equal(element("comments").children.length, 0);
+  assert.equal(pending(), 0);
   assert.doesNotMatch(element("status-doc").textContent, /pending/);
   await project("a", "Project A");
-  assert.equal(element("comments").children.length, 1);
+  assert.equal(pending(), 1);
   assert.match(element("toast").textContent, /1 unsent comment restored/);
   await project("a", "Project A, reloaded");
   assert.doesNotMatch(element("toast").textContent, /Project A, reloaded/); // A reload restores nothing.
@@ -740,8 +746,8 @@ scenario("Session isolation: drafts, delivery identity, acknowledgments, copied 
     session: { session_id: "a", cwd: "/a" }, documents: [],
     context: { generation: 120, session: { ...aContext.session, incarnation: "resumed later" } } });
   await new Promise(setImmediate);
-  assert.equal(element("comments").children.length, 1);
-  element("comments").children[0].children[3].dispatch("click");
+  assert.equal(pending(), 1);
+  remove();
   // Every question is answered in turn, and only an answer ends one: a
   // reload does not hide "Pasted it?".
   command("c Fix A once");
@@ -755,11 +761,11 @@ scenario("Session isolation: drafts, delivery identity, acknowledgments, copied 
   key("j");
   assert.equal(element("mode").textContent, "CONFIRM"); // Other keys do nothing.
   key("Escape"); // Escape keeps them.
-  assert.equal(element("comments").children.length, 1);
+  assert.equal(pending(), 1);
   sendAll();
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
   key("y");
-  assert.equal(element("comments").children.length, 0);
+  assert.equal(pending(), 0);
   // A question arriving while a note is being written waits for it.
   command("c Fix A again");
   sendAll();
@@ -772,7 +778,7 @@ scenario("Session isolation: drafts, delivery identity, acknowledgments, copied 
   assert.equal(element("mode").textContent, "CONFIRM");
   assert.match(element("status-msg").textContent, /Pasted\?/); // Saving the note did not replace it.
   key("y");
-  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent), ["Written while asked"]);
+  assert.deepEqual(notes(), ["Written while asked"]);
   // While "Pasted?" waits behind an open input, nothing more can be sent:
   // those comments may already be in the prompt.
   command("sendall"); // The sheet is open when the copied result arrives...
@@ -786,25 +792,7 @@ scenario("Session isolation: drafts, delivery identity, acknowledgments, copied 
   await new Promise(setImmediate);
   assert.equal(element("mode").textContent, "CONFIRM");
   key("y");
-  assert.equal(element("comments").children.length, 0);
-  // A comment removed while the sheet is open is not sent.
-  command("c Stays"); key("j"); command("c Removed while reviewing");
-  command("sendall");
-  element("comments").children[1].children[3].dispatch("click");
-  assert.doesNotMatch(element("review-preview").textContent, /Removed while reviewing/);
-  element("review-intro").dispatch("keydown", { key: "Enter" });
-  assert.doesNotMatch(messages.at(-1).text, /Removed while reviewing/);
-  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
-  assert.equal(element("comments").children.length, 0);
-  // The sidebar's Send all button sends like S does.
-  command("c From the button");
-  element("send-all").dispatch("click");
-  assert.equal(element("mode").textContent, "REVIEW"); // The button reviews too.
-  element("review-intro").dispatch("keydown", { key: "Enter" });
-  assert.equal(messages.at(-1).type, "send");
-  assert.match(messages.at(-1).text, /From the button/);
-  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
-  assert.equal(element("comments").children.length, 0);
+  assert.equal(pending(), 0);
   await project("b", "Project B"); command("c Fix B"); sendAll();
   const bSend = messages.at(-1);
   assert.equal(bSend.type, "send");
@@ -814,16 +802,16 @@ scenario("Session isolation: drafts, delivery identity, acknowledgments, copied 
   assert.match(bSend.text, /(^|[^/])README\.md/, "paths are relative to the session's cwd");
   assert.doesNotMatch(bSend.text, /\/b\/README\.md/);
   assert.match(element("status-doc").textContent, /^b · Claude Code › /);
-  assert.equal(element("comments").children.length, 1);
+  assert.equal(pending(), 1);
   receive({ type: "send-result", purpose: "comments", ok: true, request_id: bSend.request_id - 1, text: "stale" });
-  assert.equal(element("comments").children.length, 1);
+  assert.equal(pending(), 1);
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
-  assert.equal(element("comments").children.length, 1); // Clipboard fallback keeps the draft until answered.
+  assert.equal(pending(), 1); // Clipboard fallback keeps the draft until answered.
   key("y");
-  assert.equal(element("comments").children.length, 0); // So it cannot go out twice.
+  assert.equal(pending(), 0); // So it cannot go out twice.
   await project("b", "Project B"); command("c Fix B again"); sendAll();
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
-  assert.equal(element("comments").children.length, 0);
+  assert.equal(pending(), 0);
   await project("a", "Project A"); command("c Fix A"); sendAll();
   assert.match(messages.at(-1).text, /Fix A/);
   assert.doesNotMatch(messages.at(-1).text, /Fix B/);
@@ -849,7 +837,7 @@ scenario("Session isolation: drafts, delivery identity, acknowledgments, copied 
 });
 
 scenario("Themes: auto follows the system, pinned themes stay, font overrides, diagram colors", async page => {
-  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  const { element, document, schemeListeners, env, receive, input } = page;
   // Auto follows the system between the light and dark themes, and diagrams
   // follow along; a pinned theme ignores the system.
   const root = document.documentElement;

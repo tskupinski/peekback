@@ -420,16 +420,16 @@ box is placed under it. A reload never ends a note being written. Opening
 another document or session saves a non-empty note with its own document and
 closes the box. `Enter` saves, `Shift-Enter` adds a line, `Esc` cancels. An
 empty new note adds nothing, and saving an existing comment empty removes it.
-`u` takes back the last removal (the sidebar's ×, `Ctrl-D` in the comments
-picker, or an emptied note) or the last note discarded with `Esc`, once, in
+`u` takes back the last removal (`x`, `Ctrl-D` in the comments picker, or an
+emptied note) or the last note discarded with `Esc`, once, in
 the session it belongs to; each says so in a toast. A note is restored on its
 own document; elsewhere `u` says where it is. A note editing a comment that
 was sent or removed meanwhile is saved as a new comment on the same text.
-`C` edits the latest comment on the cursor's block, and `Ctrl-E` in the
-comments picker edits the chosen one, opening its document first when it is
-another of the session's documents; a comment on a file opened from
-Bookmarks or the live scratchpad listing is reached by opening that file
-again. `:c note` still adds a one-line note directly. A click outside an open
+`C` edits and `x` removes the latest comment on the cursor's block. `Enter`
+in the comments picker jumps to the chosen one, opening its document first
+when it is another of the session's documents; a comment on a file opened
+from Bookmarks or the live scratchpad listing is reached by opening that
+file again. The pickers are the only lists: there is no sidebar. `:c note` still adds a one-line note directly. A click outside an open
 note or review sheet does not take the keyboard with it: the next key goes
 back to it, and `Esc` closes it.
 
@@ -474,7 +474,7 @@ searched for as an exact block sequence elsewhere in the file. It moves only
 when the text occurs as often as when the comment was written, to the same
 copy in order; with a copy of repeated text gone there is no telling which was
 the comment's. Otherwise it is marked "text changed or removed": no margin
-bar, a label in the sidebar and pickers, and a line in the sent
+bar, a label in the comments picker, and a line in the sent
 prompt saying the quote is no longer in the file, so it is not read as a
 request to restore it. A later reload that brings the text back clears the
 mark. Only the document on screen is checked: a comment on another document
@@ -486,9 +486,8 @@ or the comments change; a comment edited or removed while the sheet is open
 is sent as it is then, or not at all. `Enter` sends, `Esc` closes, the arrow keys scroll the
 preview. The opening line defaults to "Address these review comments.", is
 remembered while the daemon runs, and is left out when empty. Without a
-session the sheet says there is nowhere to send and sends nothing. `Ctrl-S` in
-the comments picker reviews and sends one comment; `s` on a selection sends
-at once. The sent text groups the session's comments by canonical file
+session the sheet says there is nowhere to send and sends nothing. `s` on a
+selection sends at once. The sent text groups the session's comments by canonical file
 path, with labels relative to the delivery target. Each comment starts with
 a `path#L<start>-<end>` reference to its source lines, 1-based, before its
 quote, and its note follows after a blank line, so Markdown does not read the

@@ -8,7 +8,6 @@
   const composerQuote = $("composer-quote");
   const composerInput = $("composer-input");
   const statusPendingEl = $("status-pending");
-  const documentsEl = $("documents");
   const toastEl = $("toast");
   const toolbarEl = $("toolbar");
   const helpEl = $("help");
@@ -27,8 +26,6 @@
   const pickerScratchpad = $("picker-scratchpad");
   const pickerBookmarks = $("picker-bookmarks");
   const pickerNote = $("picker-note");
-  const commentsEl = $("comments");
-  const sendAllButton = $("send-all");
 
   const darkMode = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
 
@@ -47,7 +44,6 @@
     comments: [], // { id, owner, path, fileIdentity, quote, note, line, endLine, anchorSource, anchorCount, anchorIndex, changed }
     question: null, // { text, yes, no, shown }: the one question, about a clipboard send
     pendingJump: null, // { fileIdentity, line }: where to go once that document renders
-    pendingEdit: null, // a comment id to edit once its document renders
     undo: null, // { comment } removed, or { what, note } a discarded note: what u brings back
     currentComment: null, // the comment ]c and [c last stopped on
   };
@@ -180,11 +176,8 @@
     if (composing?.target?.anchorSource) locate(composing.target, message.source.split("\n"));
     renderComments();
     placeComposer();
-    // A jump or edit waiting for a document applies when that one renders;
-    // any other render means it went elsewhere.
-    const pendingEdit = state.pendingEdit && activeComments().find((c) => c.id === state.pendingEdit);
-    state.pendingEdit = null;
-    if (pendingEdit?.fileIdentity === state.doc.fileIdentity) Promise.resolve().then(() => openComposer({ editing: pendingEdit }));
+    // A jump waiting for a document applies when that one renders; any
+    // other render means it went elsewhere.
     // A changed selection cannot stay; a note being written on it stays open.
     if (sourceChanged && state.mode === "visual") setMode("normal");
     if (state.pendingJump?.fileIdentity === state.doc.fileIdentity) {
@@ -195,7 +188,6 @@
     state.pendingJump = null;
     if (state.search.query) runSearch(state.search.query, { keepIndex: true });
     paintCursor(false);
-    renderDocuments();
     if (!pickerEl.hidden) updatePickerItems();
     renderStatus();
   }
@@ -439,30 +431,13 @@
     if (session) parts.push(sessionName(session));
     if (state.doc) parts.push(state.doc.label);
     statusDocEl.textContent = parts.join(" › ");
-    // Pending comments stay in view while the sidebar is closed, with the key
-    // that sends them.
+    // Pending comments stay in view, with the key that sends them.
     const pending = activeComments().length;
     const changed = activeComments().filter((c) => c.changed).length;
     statusPendingEl.hidden = pending === 0;
     statusPendingEl.textContent = `${pending} pending${changed ? ` · ${changed} changed` : ""} · S send`;
   }
 
-  // The sidebar is off by default; the popup is narrow and the picker
-  // covers the same ground.
-  function setSidebar(visible) {
-    document.body.classList.toggle("no-sidebar", !visible);
-    try {
-      localStorage.setItem("sidebar", visible ? "1" : "0");
-    } catch (_) {}
-  }
-  function sidebarVisible() {
-    return !document.body.classList.contains("no-sidebar");
-  }
-  try {
-    setSidebar(localStorage.getItem("sidebar") === "1");
-  } catch (_) {
-    setSidebar(false);
-  }
 
   // --------------------------------------------------------------- actions
 
@@ -666,25 +641,17 @@
     }
   });
 
-  // The comment on the cursor's block; with several, the latest.
-  function editCommentAtCursor() {
+  // C edits and x removes the comment on the cursor's block; with several,
+  // the latest.
+  function onCommentAtCursor(act) {
     const block = state.blocks[state.cursor];
     if (!block) return;
     const start = Number(block.dataset.sourceLine);
     const end = Number(block.dataset.sourceEnd);
     const here = attachedHere().filter((c) => c.line < end && c.endLine > start);
     if (here.length === 0) return setMessage("no comment on this block · c adds one");
-    openComposer({ editing: here.at(-1) });
+    act(here.at(-1));
     if (here.length > 1) setMessage(`${here.length} comments here · Space c lists them`);
-  }
-
-  function editComment(c) {
-    if (c.fileIdentity !== state.doc?.fileIdentity) {
-      jumpToComment(c);
-      if (state.pendingJump) state.pendingEdit = c.id;
-      return;
-    }
-    openComposer({ editing: c });
   }
 
   function addComment(target, note) {
@@ -936,36 +903,7 @@
 
   function renderComments() {
     paintComments();
-    commentsEl.replaceChildren(
-      ...activeComments().map((c) => {
-        const li = document.createElement("li");
-        li.className = "comment";
-        const quote = document.createElement("div");
-        quote.className = "comment-quote";
-        quote.textContent = c.quote;
-        const note = document.createElement("div");
-        note.className = "comment-note";
-        note.textContent = c.note || "(no note)";
-        const changed = document.createElement("div");
-        changed.className = "comment-changed";
-        changed.textContent = "text changed or removed";
-        changed.hidden = !c.changed;
-        const remove = document.createElement("button");
-        remove.className = "comment-remove";
-        remove.textContent = "×";
-        remove.title = "Remove";
-        remove.addEventListener("click", (event) => {
-          event.stopPropagation();
-          removeComment(c.id);
-        });
-        li.append(quote, changed, note, remove);
-        li.addEventListener("click", () => jumpToComment(c));
-        return li;
-      })
-    );
     showReviewText();
-    sendAllButton.hidden = activeComments().length === 0;
-    sendAllButton.textContent = `Send all (${activeComments().length})`;
     renderStatus();
   }
 
@@ -1094,8 +1032,6 @@
     }));
   }
 
-  sendAllButton.addEventListener("click", () => sendAllComments());
-
   // ---------------------------------------------------------------- search
 
   const highlightsSupported = "highlights" in CSS && typeof Highlight === "function";
@@ -1171,7 +1107,6 @@
     sendall: () => sendAllComments(),
     comments: () => openPicker("comments"),
     help: () => toggleHelp(),
-    sidebar: () => setSidebar(!sidebarVisible()),
   };
 
   function documentCandidates() {
@@ -1202,6 +1137,14 @@
   }
 
   // No tool reported these writes; a scan at the end of a turn found them.
+  function ago(unixSeconds) {
+    const s = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return `${Math.floor(s / 86400)}d ago`;
+  }
+
   function evidenceNote(d) {
     if (d.shared) return "found by scan, maybe another session's";
     return d.scanned ? "found by scan" : "";
@@ -1344,8 +1287,8 @@
 
   // ---------------------------------------------------------------- picker
 
-  // An fzf-style overlay: type to filter, Enter to open. Replaces the
-  // sidebar as the way to move between documents.
+  // An fzf-style overlay: type to filter, Enter to open. The one list of
+  // documents and of comments.
   const picker = { kind: null, scope: "current", items: [], filtered: [], index: 0 };
   const scratchpad = { documents: [], found: 0, warnings: [], loading: false, available: true };
   const bookmarks = { documents: [], found: 0, warnings: [], loading: false };
@@ -1508,18 +1451,6 @@
     } else if (event.key === "ArrowUp" || (ctrl && (event.key === "p" || event.key === "k"))) {
       event.preventDefault();
       movePicker(-1);
-    } else if (ctrl && event.key === "s" && picker.kind === "comments") {
-      event.preventDefault();
-      const chosen = picker.filtered[picker.index];
-      const comment = chosen && activeComments().find((c) => c.id === chosen.id);
-      closePicker();
-      if (comment) openReview([comment]);
-    } else if (ctrl && event.key === "e" && picker.kind === "comments") {
-      event.preventDefault();
-      const chosen = picker.filtered[picker.index];
-      const comment = chosen && activeComments().find((c) => c.id === chosen.id);
-      closePicker();
-      if (comment) editComment(comment);
     } else if (ctrl && event.key === "d" && picker.kind === "comments") {
       event.preventDefault();
       const chosen = picker.filtered[picker.index];
@@ -1640,14 +1571,14 @@
         case "y": actOnSelection("copy"); break;
         case "s": actOnSelection("send"); break;
         case "c": actOnSelection("comment"); break;
-        case "C": editCommentAtCursor(); break;
+        case "C": onCommentAtCursor((c) => openComposer({ editing: c })); break;
+        case "x": onCommentAtCursor((c) => removeComment(c.id)); break;
         case "S": sendAllComments(); break;
         case "/": openCmdline("/"); break;
         case ":": openCmdline(":"); break;
         case "n": gotoMatch(1); break;
         case "N": gotoMatch(-1); break;
         case "?": toggleHelp(); break;
-        case "Tab": setSidebar(!sidebarVisible()); break;
         case "Escape":
           if (state.count) state.count = "";
           else if (state.anchor !== null) setMode("normal");
@@ -1754,47 +1685,6 @@
     else setMessage(`${href} is not among this session's documents`);
   }
 
-  // --------------------------------------------------------------- sidebar
-
-  function ago(unixSeconds) {
-    const s = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
-    if (s < 60) return "just now";
-    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-    return `${Math.floor(s / 86400)}d ago`;
-  }
-
-  function item({ name, meta, title, current, onClick }) {
-    const li = document.createElement("li");
-    li.className = "item" + (current ? " current" : "");
-    li.title = title;
-    const nameEl = document.createElement("span");
-    nameEl.className = "name";
-    nameEl.textContent = name;
-    const metaEl = document.createElement("span");
-    metaEl.className = "meta";
-    metaEl.textContent = meta;
-    li.append(nameEl, metaEl);
-    li.addEventListener("click", onClick);
-    return li;
-  }
-
-  function renderDocuments() {
-    if (!state.doc) return;
-    documentsEl.replaceChildren(
-      ...state.doc.documents.map((d) => {
-        const slash = d.label.lastIndexOf("/");
-        return item({
-          name: slash >= 0 ? d.label.slice(slash + 1) : d.label,
-          meta: slash >= 0 ? d.label.slice(0, slash) : "",
-          title: [d.path, evidenceNote(d)].filter(Boolean).join("\n"),
-          current: d.path === state.doc.path,
-          onClick: () => switchTo(state.doc.sessionId, d.path),
-        });
-      })
-    );
-  }
-
   // ------------------------------------------------------------------ misc
 
   let toastTimer = null;
@@ -1846,8 +1736,7 @@
         if (sameContext(message.context, state.doc?.context) && state.doc?.sessionId === message.session_id) {
           state.doc.documents = message.documents;
           if (state.lastRender) state.lastRender.documents = message.documents;
-          renderDocuments();
-          if (!pickerEl.hidden && picker.kind === "documents" && picker.scope === "current") updatePickerItems();
+                if (!pickerEl.hidden && picker.kind === "documents" && picker.scope === "current") updatePickerItems();
         }
         break;
       case "banner":

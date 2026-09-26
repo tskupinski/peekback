@@ -33,10 +33,10 @@ for (const name of names) {
   assert.deepEqual(keys, expected, `${name}.css must define the same tokens as ${names[0]}.css`);
   const selection = mix(t.accent, t.bg, 0.12);
   const pairs = [
-    ["text", t.fg, t.bg, 4.5], ["text on sidebar", t.fg, t["sidebar-bg"], 4.5], ["text on code", t.fg, t["code-bg"], 4.5],
+    ["text", t.fg, t.bg, 4.5], ["text on panel", t.fg, t["panel-bg"], 4.5], ["text on code", t.fg, t["code-bg"], 4.5],
     ["text on selection", t.fg, selection, 4.5], ["text on comment", t.fg, t["annotate-bg"], 4.5],
-    ["muted", t.muted, t.bg, 4.5], ["muted on sidebar", t.muted, t["sidebar-bg"], 4.5], ["muted on code", t.muted, t["code-bg"], 4.5],
-    ["link", t.accent, t.bg, 4.5], ["current item", t.accent, t["sidebar-bg"], 4.5], ["button", t["on-accent"], t.accent, 4.5],
+    ["muted", t.muted, t.bg, 4.5], ["muted on panel", t.muted, t["panel-bg"], 4.5], ["muted on code", t.muted, t["code-bg"], 4.5],
+    ["link", t.accent, t.bg, 4.5], ["current item", t.accent, t["panel-bg"], 4.5], ["button", t["on-accent"], t.accent, 4.5],
     ["banner", t["banner-fg"], t["banner-bg"], 4.5], ["comment badge", t.annotate, t["annotate-bg"], 4.5],
     ["normal mode", t.bg, t.muted, 4.5], ["visual mode", t.bg, t["mode-visual"], 4.5], ["active mode", t.bg, t.accent, 4.5],
     ["search match", t["search-fg"], t["search-bg"], 4.5],

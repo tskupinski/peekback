@@ -76,7 +76,7 @@ impl DocWatcher {
     }
 }
 
-/// Watches the session registry directory so the sidebar follows sessions
+/// Watches the session registry directory so the document list follows sessions
 /// starting and ending.
 pub fn watch_registry(proxy: EventLoopProxy<UserEvent>) -> Result<RecommendedWatcher> {
     let dir = crate::registry::dir();
