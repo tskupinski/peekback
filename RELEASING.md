@@ -238,7 +238,7 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
 - [ ] Copy a selection and send one through a tested terminal backend. Confirm
       it lands in the intended prompt without submitting it. Record the backend.
 - [ ] Kill an agent process without ending its session. Confirm the session
-      drops out of `peekback status` and the pickers, sends from a viewer still
+      drops out of `peekback status` and the hotkey, sends from a viewer still
       showing it fall back to the clipboard, and `peekback status --prune`
       captures its open turn and removes it. Fresh hook activity records process
       identity; older entries without it retain the previous behavior until
