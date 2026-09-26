@@ -19,3 +19,18 @@ peekback activity add FILE [--session ID | --pane %N]
   `session-activity`.
 - Decide whether it also works for ended sessions, and whether a matching
   `remove` is needed to detach a file.
+
+## Viewer accessibility basics
+
+From the viewer UI review (findings A1 and A2).
+
+- Announce messages to VoiceOver: make the status message a live region
+  (`role="status"`). Today only the picker note has one, so send results,
+  toasts and questions are silent (WCAG 4.1.3).
+- Show each message in one place: toasts for send results, the status line
+  for everything else. Toasts now repeat their text in the status line.
+- Add a visible `:focus-visible` ring, 2 px, to every input and button, in the
+  theme's accent, which the theme contrast test already checks at 3:1. Inputs
+  set `outline: 0` and buttons have no focus style (WCAG 2.4.7).
+- Check focus by hand in the native window; the page tests can cover the
+  attributes.
