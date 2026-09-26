@@ -37,6 +37,22 @@ pub fn hook_agent() -> Option<ProcessId> {
     None
 }
 
+/// The agent in the foreground of the terminal a process is attached to, such
+/// as a pane's shell. It is named by the command it was started as: the
+/// native Claude Code executable is a file named after its version.
+pub fn foreground_agent(pid: u32) -> Option<session_activity::Agent> {
+    let leader = info(pid)?.foreground_group;
+    agent_named(started_as(leader)?.rsplit('/').next()?)
+}
+
+fn agent_named(name: &str) -> Option<session_activity::Agent> {
+    match name {
+        "claude" => Some(session_activity::Agent::Claude),
+        "codex" => Some(session_activity::Agent::Codex),
+        _ => None,
+    }
+}
+
 fn is_shell(name: &str) -> bool {
     matches!(name, "sh" | "bash" | "zsh" | "dash" | "fish" | "ksh")
 }
@@ -47,6 +63,7 @@ struct Info {
     name: String,
     tty: Option<u64>,
     foreground: bool,
+    foreground_group: u32,
 }
 
 #[cfg(target_os = "macos")]
@@ -71,6 +88,7 @@ fn info(pid: u32) -> Option<Info> {
             && bsd.pbi_pgid == bsd.e_tpgid
             && matches!(bsd.pbi_status, libc::SRUN | libc::SSLEEP),
         parent: bsd.pbi_ppid,
+        foreground_group: bsd.e_tpgid,
         name,
         // NODEV (all ones) when the process has no controlling terminal.
         tty: (bsd.e_tdev != u32::MAX).then_some(u64::from(bsd.e_tdev)),
@@ -79,6 +97,32 @@ fn info(pid: u32) -> Option<Info> {
 
 #[cfg(not(target_os = "macos"))]
 fn info(_pid: u32) -> Option<Info> {
+    None
+}
+
+/// `argv[0]`. `KERN_PROCARGS2` holds `argc`, the executable path, padding,
+/// then the arguments, each NUL-terminated.
+#[cfg(target_os = "macos")]
+fn started_as(pid: u32) -> Option<String> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+    let mut size: libc::size_t = 0;
+    let null = std::ptr::null_mut();
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, null, &mut size, null, 0) } != 0 {
+        return None;
+    }
+    let mut buffer = vec![0u8; size];
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buffer.as_mut_ptr().cast(), &mut size, null, 0) } != 0 {
+        return None;
+    }
+    let after_count = buffer.get(size_of::<libc::c_int>()..size)?;
+    let after_path = &after_count[after_count.iter().position(|&b| b == 0)?..];
+    let argument = &after_path[after_path.iter().position(|&b| b != 0)?..];
+    let end = argument.iter().position(|&b| b == 0).unwrap_or(argument.len());
+    Some(String::from_utf8_lossy(&argument[..end]).into_owned())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn started_as(_pid: u32) -> Option<String> {
     None
 }
 
@@ -152,5 +196,13 @@ mod tests {
     fn shells_are_skipped_when_finding_the_agent() {
         assert!(is_shell("zsh") && is_shell("sh"));
         assert!(!is_shell("claude") && !is_shell("codex") && !is_shell("node"));
+    }
+
+    #[test]
+    fn a_process_is_named_by_what_it_was_started_as() {
+        let me = started_as(std::process::id()).unwrap();
+        assert!(me.contains("peekback"), "{me}");
+        assert_eq!(agent_named("codex"), Some(session_activity::Agent::Codex));
+        assert_eq!(agent_named("2.1.282"), None);
     }
 }

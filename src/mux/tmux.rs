@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Result, anyhow, bail};
 
-use super::{Inspection, Pane, clear_ambient, output, run, run_with_stdin};
+use super::{Focused, Inspection, Pane, clear_ambient, output, run, run_with_stdin};
 
 pub const AMBIENT: &[&str] = &["TMUX", "TMUX_PANE"];
 
@@ -70,22 +70,32 @@ pub fn send(pane: &Pane, text: &str) -> Result<()> {
 /// The pane the most recently used client of this tmux server is on. Asked
 /// per client rather than left to tmux's choice of current client, which
 /// falls back to a session even when no client is attached.
-pub fn focused(server: Option<&str>) -> Option<String> {
+pub fn focused(server: Option<&str>) -> Option<Focused> {
     let socket = server?;
-    let clients = output(tmux(socket).args(["list-clients", "-F", "#{client_activity} #{pane_id}"])).ok()?;
+    let format = "#{client_activity}\t#{pane_id}\t#{pane_pid}";
+    let clients = output(tmux(socket).args(["list-clients", "-F", format])).ok()?;
     most_recent_client_pane(&clients)
 }
 
-fn most_recent_client_pane(clients: &str) -> Option<String> {
+fn most_recent_client_pane(clients: &str) -> Option<Focused> {
     clients
         .lines()
         .filter_map(|line| {
-            let (activity, pane) = line.split_once(' ')?;
-            Some((activity.parse::<u64>().ok()?, pane))
+            let mut fields = line.splitn(3, '\t');
+            let activity = fields.next()?.parse::<u64>().ok()?;
+            let pane = fields.next().filter(|pane| !pane.is_empty())?;
+            Some((activity, Focused { pane: pane.to_owned(), pid: fields.next().and_then(|pid| pid.parse().ok()) }))
         })
-        .filter(|(_, pane)| !pane.is_empty())
         .max_by_key(|(activity, _)| *activity)
-        .map(|(_, pane)| pane.to_owned())
+        .map(|(_, focused)| focused)
+}
+
+/// The server a plain `tmux` would use, so a pane can be checked before any
+/// session on it has registered.
+pub fn default_server() -> Option<String> {
+    let dir = std::env::var_os("TMUX_TMPDIR").filter(|d| !d.is_empty()).unwrap_or_else(|| "/tmp".into());
+    let socket = std::path::Path::new(&dir).join(format!("tmux-{}", unsafe { libc::getuid() })).join("default");
+    socket.canonicalize().ok().map(|path| path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -99,9 +109,10 @@ mod tests {
 
     #[test]
     fn the_active_pane_is_the_most_recently_used_clients() {
-        assert_eq!(most_recent_client_pane("1790353100 %3\n1790353127 %921\n1790353050 %887").as_deref(), Some("%921"));
+        let clients = "1790353100\t%3\t11\n1790353127\t%921\t12\n1790353050\t%887\t13";
+        assert_eq!(most_recent_client_pane(clients), Some(Focused { pane: "%921".into(), pid: Some(12) }));
         assert_eq!(most_recent_client_pane(""), None);
-        assert_eq!(most_recent_client_pane("garbage\n1790353100 "), None);
+        assert_eq!(most_recent_client_pane("garbage\n1790353100\t\t11"), None);
     }
 
     #[test]

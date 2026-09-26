@@ -151,7 +151,9 @@ should not interrupt your typing. `peekback show path/to/file.md` shows a
 specific file.
 
 For Codex CLI, use the global hotkey, a tmux binding, or `peekback show
---session ID` from another shell. When Codex runs `peekback show` itself,
+--session ID` from another shell. Codex creates its session only when you send
+the first prompt; until then the hotkey in its tmux pane shows an empty view
+that switches to the session once it starts. When Codex runs `peekback show` itself,
 Peekback uses `CODEX_THREAD_ID` (or `CODEX_SESSION_ID`) to select that session.
 
 ### Keys

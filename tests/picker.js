@@ -69,6 +69,7 @@ async function main() {
     ipc: { postMessage: text => messages.push(JSON.parse(text)) },
     scrollTo() {},
   });
+  element("no-documents").textContent = "This session has not written any Markdown yet. Its first document opens here.";
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../assets/app.js"), "utf8"), {
     window, document, console, CSS: {}, TextEncoder, mermaid: { initialize() { mermaidInits += 1; } }, renderMathInElement() {},
     localStorage: { getItem() { return null; }, setItem() {} },
@@ -248,10 +249,17 @@ async function main() {
   assert.equal(click(anchor({})), false);
   console.log("Links passed: HTML and SVG anchors never navigate the webview.");
 
+  // A focused Codex pane before its first prompt: no session exists yet.
+  receive({ type: "render", path: null, source: "", session: null, documents: [], unstarted: "Codex" });
+  await new Promise(setImmediate);
+  assert.equal(element("no-documents").hidden, false);
+  assert.match(element("no-documents").textContent, /This Codex session starts when you send its first prompt/);
+
   const posted = messages.length;
   receive({ type: "render", path: null, source: "", session: { session_id: "fresh" }, documents: [] });
   await new Promise(setImmediate);
   assert.equal(element("no-documents").hidden, false);
+  assert.match(element("no-documents").textContent, /has not written any Markdown yet/);
   assert.equal(element("doc").children.length, 0);
   key("y"); key("s"); key("c"); key("]"); key("d");
   assert.equal(messages.length, posted); // Nothing to copy, send, comment on or cycle to.

@@ -81,6 +81,8 @@ pub enum DaemonMessage<'a> {
         source: &'a str,
         session: Option<&'a Session>,
         documents: &'a [Document],
+        /// The agent in the focused pane, when it has not started a session.
+        unstarted: Option<&'static str>,
     },
     Sessions {
         sessions: &'a [Session],

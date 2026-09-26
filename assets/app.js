@@ -3,6 +3,7 @@
   const docEl = $("doc");
   const bannerEl = $("banner");
   const noDocumentsEl = $("no-documents");
+  const noDocumentsText = noDocumentsEl.textContent.trim();
   const sessionsEl = $("sessions");
   const documentsEl = $("documents");
   const toastEl = $("toast");
@@ -119,6 +120,9 @@
     document.title = `${state.doc.label} - peekback`;
     bannerEl.hidden = true;
     noDocumentsEl.hidden = message.path !== null;
+    noDocumentsEl.textContent = message.unstarted
+      ? `This ${message.unstarted} session starts when you send its first prompt. Its documents open here then.`
+      : noDocumentsText;
 
     const { frontmatter, body, offset } = splitFrontmatter(message.source);
     docEl.innerHTML = md.render(body);

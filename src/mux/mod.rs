@@ -11,7 +11,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use command::{output, run, run_with_stdin};
-pub use tmux::server_from_env as tmux_server_from_env;
+pub use tmux::{default_server as tmux_default_server, server_from_env as tmux_server_from_env};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -27,6 +27,14 @@ pub struct Pane {
     /// only unique within one server. A missing server cannot be verified.
     pub server: Option<String>,
     pub id: String,
+}
+
+/// The pane a server's most recently used client shows, and the process the
+/// pane was started with, whose terminal tells what runs there now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Focused {
+    pub pane: String,
+    pub pid: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +82,7 @@ impl Mux {
         }
     }
 
-    pub fn focused(self, server: Option<&str>) -> Option<String> {
+    pub fn focused(self, server: Option<&str>) -> Option<Focused> {
         match self {
             Mux::Tmux => tmux::focused(server),
         }

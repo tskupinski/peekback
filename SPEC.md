@@ -337,7 +337,12 @@ The app uses macOS accessory activation, without a Dock icon. `show` and the
 terminal browser's `p` focus the window; `show --no-focus` only brings it
 forward, and show requests from older clients without the field do the same. The global hotkey focuses it,
 or hides it when already focused. When hidden, it opens the session in the pane of the most recently used client
-of each registered session's tmux server, newest first, else the most recently
+of each registered session's tmux server, newest first. If no registered
+session is there but an agent is in that pane's foreground, named by the
+`argv[0]` of the terminal's foreground process group (Codex registers only at
+its first prompt), it opens an empty view for that pane, which switches to the
+pane's session once that agent registers one; the default tmux server is asked
+too, for when nothing has registered yet. Otherwise it opens the most recently
 active session. A tmux server with no attached client has no active pane. The hotkey exists only while the
 daemon runs.
 

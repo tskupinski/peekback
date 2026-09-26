@@ -15,6 +15,10 @@
   recorded.
 - Look up `--pane` on the caller's tmux server. Pane ids repeat across tmux
   servers, so it could open a session from another server.
+- Open the hotkey on a fresh Codex or Claude Code pane even before its agent
+  registers a session. Codex creates one only at its first prompt, so the
+  hotkey opened another session; it now shows an empty view for that pane and
+  switches to its session once it starts.
 - Remove the WezTerm and Kitty backends. They were never exercised on a real
   install and could not verify that a pane belongs to the agent, so automatic
   sends through them already used the clipboard. tmux is the supported

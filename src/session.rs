@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::mux::{self, Mux, Pane};
+use crate::mux::{self, Focused, Mux, Pane};
 use crate::registry::{self, Session};
 
 pub const HOOK_HINT: &str = "no registered sessions; run peekback setup, then start or resume your agent";
@@ -57,11 +57,50 @@ fn tmux_pane(session: &Session) -> Option<&Pane> {
     session.terminal.panes.iter().find(|p| p.mux == Mux::Tmux)
 }
 
+/// What the hotkey should open.
+#[derive(Debug)]
+pub enum Focus {
+    Session(Box<Session>),
+    /// An agent runs in the focused pane but has not registered a session:
+    /// Codex creates one only at its first prompt.
+    Unstarted {
+        agent: registry::Agent,
+        pane: Pane,
+    },
+    Nothing,
+}
+
 /// For callers outside any session, such as the hotkey: the session in the
-/// focused pane reported by an adapter, else the most recently active one.
-pub fn focused() -> Option<Session> {
+/// focused pane reported by an adapter, else an agent there that has not
+/// started a session, else the most recently active session.
+pub fn focused() -> Focus {
     let sessions = matching_panes(registry::load_all());
-    in_active_pane(&sessions, |mux, server| mux.focused(server)).or_else(|| sessions.into_iter().next())
+    let servers = mux::tmux_default_server().into_iter().map(|server| (Mux::Tmux, Some(server)));
+    resolve_focus(sessions, servers, |mux, server| mux.focused(server), crate::process::foreground_agent)
+}
+
+fn resolve_focus(
+    sessions: Vec<Session>,
+    extra_servers: impl IntoIterator<Item = (Mux, Option<String>)>,
+    mut focused: impl FnMut(Mux, Option<&str>) -> Option<Focused>,
+    agent_in: impl Fn(u32) -> Option<registry::Agent>,
+) -> Focus {
+    let mut active = HashMap::new();
+    let mut ask = |mux: Mux, server: &Option<String>| {
+        active.entry((mux, server.clone())).or_insert_with(|| focused(mux, server.as_deref())).clone()
+    };
+    if let Some(session) = in_active_pane(&sessions, &mut ask) {
+        return Focus::Session(Box::new(session));
+    }
+    let servers = sessions.iter().flat_map(|s| s.terminal.panes.iter().map(|p| (p.mux, p.server.clone())));
+    for (mux, server) in servers.chain(extra_servers) {
+        if let Some(Focused { pane, pid: Some(pid) }) = ask(mux, &server) {
+            if let Some(agent) = agent_in(pid) {
+                return Focus::Unstarted { agent, pane: Pane { mux, server, id: pane } };
+            }
+        }
+    }
+    sessions.into_iter().next().map_or(Focus::Nothing, |s| Focus::Session(Box::new(s)))
 }
 
 fn matching_panes(mut sessions: Vec<Session>) -> Vec<Session> {
@@ -79,19 +118,12 @@ fn matching_panes(mut sessions: Vec<Session>) -> Vec<Session> {
 /// died without ending loses to the one running there now.
 fn in_active_pane(
     sessions: &[Session],
-    mut focused: impl FnMut(Mux, Option<&str>) -> Option<String>,
+    mut focused: impl FnMut(Mux, &Option<String>) -> Option<Focused>,
 ) -> Option<Session> {
-    let mut active = HashMap::new();
     sessions
         .iter()
         .find(|session| {
-            session.terminal.panes.iter().any(|pane| {
-                active
-                    .entry((pane.mux, pane.server.clone()))
-                    .or_insert_with(|| focused(pane.mux, pane.server.as_deref()))
-                    .as_ref()
-                    == Some(&pane.id)
-            })
+            session.terminal.panes.iter().any(|pane| focused(pane.mux, &pane.server).is_some_and(|f| f.pane == pane.id))
         })
         .cloned()
 }
@@ -106,20 +138,66 @@ fn current_id(mut get: impl FnMut(&str) -> Option<String>) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// A focused pane whose shell pid stands for what runs there.
+    fn on(pane: &str, pid: u32) -> Option<Focused> {
+        Some(Focused { pane: pane.into(), pid: Some(pid) })
+    }
+
+    const SHELL: u32 = 1;
+    const CLAUDE: u32 = 2;
+    const CODEX: u32 = 3;
+
+    fn agent_in(pid: u32) -> Option<registry::Agent> {
+        match pid {
+            CLAUDE => Some(registry::Agent::Claude),
+            CODEX => Some(registry::Agent::Codex),
+            _ => None,
+        }
+    }
+
+    fn focus_id(focus: Focus) -> String {
+        match focus {
+            Focus::Session(s) => s.session_id,
+            Focus::Unstarted { agent, pane } => format!("unstarted {} in {}", agent.slug(), pane.id),
+            Focus::Nothing => "nothing".into(),
+        }
+    }
+
     #[test]
     fn focus_is_asked_once_per_server() {
-        let sessions = [
+        let sessions = vec![
             session("first-on-a", Some("/a"), Some("%1")),
             session("second-on-a", Some("/a"), Some("%2")),
             session("on-b", Some("/b"), Some("%3")),
         ];
         let mut calls = Vec::new();
-        let found = in_active_pane(&sessions, |mux, server| {
-            calls.push((mux, server.unwrap().to_owned()));
-            (server == Some("/b")).then(|| "%3".into())
-        });
-        assert_eq!(found.unwrap().session_id, "on-b");
+        let found = resolve_focus(
+            sessions,
+            [(Mux::Tmux, Some("/b".into()))],
+            |mux, server| {
+                calls.push((mux, server.unwrap().to_owned()));
+                if server == Some("/b") { on("%3", CLAUDE) } else { None }
+            },
+            agent_in,
+        );
+        assert_eq!(focus_id(found), "on-b");
         assert_eq!(calls, [(Mux::Tmux, "/a".into()), (Mux::Tmux, "/b".into())]);
+    }
+
+    #[test]
+    fn an_agent_without_a_session_in_the_focused_pane_is_opened_as_unstarted() {
+        let sessions = || vec![session("elsewhere", Some("/a"), Some("%1"))];
+        // A fresh Codex, which registers only at its first prompt.
+        let codex = |_: Mux, _: Option<&str>| on("%9", CODEX);
+        assert_eq!(focus_id(resolve_focus(sessions(), [], codex, agent_in)), "unstarted codex in %9");
+        // A pane without an agent keeps the most recently active session.
+        let shell = |_: Mux, _: Option<&str>| on("%9", SHELL);
+        assert_eq!(focus_id(resolve_focus(sessions(), [], shell, agent_in)), "elsewhere");
+        // Before any session has registered, the default server is asked.
+        let fresh = |_: Mux, server: Option<&str>| if server == Some("/default") { on("%2", CLAUDE) } else { None };
+        let default = [(Mux::Tmux, Some("/default".into()))];
+        assert_eq!(focus_id(resolve_focus(vec![], default, fresh, agent_in)), "unstarted claude in %2");
+        assert_eq!(focus_id(resolve_focus(vec![], [], |_, _| None, agent_in)), "nothing");
     }
 
     #[test]
@@ -148,19 +226,24 @@ mod tests {
 
     #[test]
     fn prefers_the_newest_session_in_each_servers_active_pane() {
-        let sessions = [
+        let sessions = vec![
             session("outside-tmux", None, None),
             session("other-pane", Some("/a"), Some("%1")),
             session("active", Some("/b"), Some("%7")),
             session("stale-in-active", Some("/b"), Some("%7")),
         ];
         let mut asked = Vec::new();
-        let found = in_active_pane(&sessions, |_, socket| {
-            let socket = socket.unwrap();
-            asked.push(socket.to_owned());
-            Some(if socket == "/a" { "%2" } else { "%7" }.into())
-        });
-        assert_eq!(found.map(|s| s.session_id), Some("active".into()));
+        let found = resolve_focus(
+            sessions,
+            [],
+            |_, socket| {
+                let socket = socket.unwrap();
+                asked.push(socket.to_owned());
+                on(if socket == "/a" { "%2" } else { "%7" }, CLAUDE)
+            },
+            agent_in,
+        );
+        assert_eq!(focus_id(found), "active");
         assert_eq!(asked, ["/a", "/b"]);
     }
 
@@ -192,15 +275,18 @@ mod tests {
 
     #[test]
     fn finds_nothing_when_no_tmux_server_answers() {
-        let sessions = [session("a", Some("/gone"), Some("%1")), session("b", Some("/gone"), Some("%2"))];
+        let sessions = vec![session("a", Some("/gone"), Some("%1")), session("b", Some("/gone"), Some("%2"))];
         let mut asked = 0;
-        assert!(
-            in_active_pane(&sessions, |_, _| {
+        let found = resolve_focus(
+            sessions,
+            [],
+            |_, _| {
                 asked += 1;
                 None
-            })
-            .is_none()
+            },
+            agent_in,
         );
+        assert_eq!(focus_id(found), "a"); // The most recently active session.
         assert_eq!(asked, 1);
     }
 }

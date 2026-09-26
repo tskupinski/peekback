@@ -19,11 +19,25 @@ const DELETED_BANNER: &str = "This file was deleted. Showing the last rendered v
 pub struct Current {
     context: ViewContext,
     session: Option<Session>,
+    /// A focused pane whose agent has not registered a session yet; its
+    /// session replaces this view once it does.
+    awaiting: Option<Awaiting>,
     documents: Vec<Document>,
     path: Option<PathBuf>,
     file_identity: Option<PathBuf>,
     source: String,
     missing: bool,
+}
+
+pub struct Awaiting {
+    agent: registry::Agent,
+    pane: crate::mux::Pane,
+}
+
+impl Awaiting {
+    fn started_in(&self, session: &Session) -> bool {
+        session.agent == self.agent && session.terminal.panes.contains(&self.pane)
+    }
 }
 
 pub struct Loaded {
@@ -147,12 +161,16 @@ impl App {
         let proxy = self.proxy.clone();
         self.workers.submit(move || {
             let result = (|| {
-                let session_id = match target {
-                    Target::Session(id) => id,
-                    Target::Focused => session::focused().map(|s| s.session_id),
-                    Target::SessionIfLive(id) => id.filter(|id| registry::find(id).is_some()),
+                let (session_id, awaiting) = match target {
+                    Target::Session(id) => (id, None),
+                    Target::SessionIfLive(id) => (id.filter(|id| registry::find(id).is_some()), None),
+                    Target::Focused => match session::focused() {
+                        session::Focus::Session(s) => (Some(s.session_id), None),
+                        session::Focus::Unstarted { agent, pane } => (None, Some(Awaiting { agent, pane })),
+                        session::Focus::Nothing => (None, None),
+                    },
                 };
-                let current = open(generation, session_id, path)?;
+                let current = open(generation, session_id, path, awaiting)?;
                 let config = config::load();
                 let terminal = current.session.as_ref().map(|s| s.terminal.clone()).unwrap_or_default();
                 let theme = theme::detect(&terminal, &config);
@@ -179,6 +197,7 @@ impl App {
                 source: &doc.source,
                 session: doc.session.as_ref(),
                 documents: &doc.documents,
+                unstarted: doc.awaiting.as_ref().map(|a| a.agent.name()),
             });
             if doc.missing {
                 self.view.push(&DaemonMessage::Banner { text: DELETED_BANNER });
@@ -496,6 +515,14 @@ impl App {
                 // after it lands the view is another session's.
                 match (&mut self.current, &context) {
                     (Some(doc), Some(context)) if doc.context.accepts(self.generation, context) => {
+                        if let Some(started) =
+                            doc.awaiting.as_ref().and_then(|a| self.sessions.iter().find(|s| a.started_in(s)))
+                        {
+                            let target = Target::Session(Some(started.session_id.clone()));
+                            self.show(target, None, Presentation::Keep, None)?;
+                            self.push_sessions();
+                            return Ok(());
+                        }
                         doc.documents = documents;
                         if let Some(session) = &doc.session {
                             if self.page_ready {
@@ -583,13 +610,18 @@ impl App {
     }
 }
 
-fn open(generation: u64, session_id: Option<String>, path: Option<PathBuf>) -> Result<Current> {
+fn open(
+    generation: u64,
+    session_id: Option<String>,
+    path: Option<PathBuf>,
+    awaiting: Option<Awaiting>,
+) -> Result<Current> {
     let session = match session_id {
         Some(id) => Some(registry::find(&id).ok_or_else(|| anyhow!("session {id} is not registered or has ended"))?),
         None => None,
     };
     let documents = session.as_ref().map(discovery::documents).unwrap_or_default();
-    let path = match (path, session.is_some()) {
+    let path = match (path, session.is_some() || awaiting.is_some()) {
         (Some(path), _) => Some(path),
         (None, false) => bail!("nothing to show: no session and no file"),
         (None, true) => documents.first().map(|d| d.path.clone()),
@@ -600,5 +632,5 @@ fn open(generation: u64, session_id: Option<String>, path: Option<PathBuf>) -> R
         None => String::new(),
     };
     let context = ViewContext { generation, session: session.as_ref().map(Into::into) };
-    Ok(Current { context, session, documents, path, file_identity, source, missing: false })
+    Ok(Current { context, session, awaiting, documents, path, file_identity, source, missing: false })
 }
