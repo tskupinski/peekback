@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
 
-use crate::{Agent, FileEvent, SessionKey};
+use crate::{AgentId, FileEvent, SessionKey};
 
 pub(crate) const MAX_BATCH_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -45,67 +45,82 @@ impl Store {
 
     pub(crate) fn directory(&self, session: &SessionKey) -> Result<PathBuf> {
         session.validate()?;
-        Ok(self.root.join(session.agent.slug()).join(&session.session_id))
+        Ok(self.root.join(session.agent.as_str()).join(&session.session_id))
     }
 
     /// Enumerate retained session directories, including ended/compacted sessions.
     /// Does not create state or follow namespace/session directory symlinks.
     pub fn sessions(&self) -> SessionReport {
         let mut report = SessionReport::default();
-        for agent in [Agent::Claude, Agent::Codex] {
-            let path = self.root.join(agent.slug());
-            let entries = (|| -> Result<Option<fs::ReadDir>> {
-                let metadata = match fs::symlink_metadata(&path) {
-                    Ok(metadata) => metadata,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                    Err(e) => return Err(e.into()),
-                };
-                ensure!(metadata.is_dir(), "agent namespace must be a directory, not a symlink");
-                Ok(Some(fs::read_dir(&path)?))
-            })();
-            let entries = match entries {
-                Ok(Some(entries)) => entries,
-                Ok(None) => continue,
+        let namespaces = match fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return report,
+            Err(e) => {
+                report.warnings.push(BatchWarning { path: self.root.clone(), message: e.to_string() });
+                return report;
+            }
+        };
+        for entry in namespaces {
+            let entry = match entry {
+                Ok(entry) => entry,
                 Err(error) => {
-                    report.warnings.push(BatchWarning { path, message: format!("{error:#}") });
+                    report.warnings.push(BatchWarning { path: self.root.clone(), message: error.to_string() });
                     continue;
                 }
             };
-            for entry in entries {
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(error) => {
-                        report.warnings.push(BatchWarning { path: path.clone(), message: error.to_string() });
-                        continue;
-                    }
-                };
-                let result = (|| -> Result<Option<SessionKey>> {
-                    let kind = entry.file_type()?;
-                    ensure!(!kind.is_symlink(), "session directory symlinks are not followed");
-                    if !kind.is_dir() {
-                        return Ok(None);
-                    }
-                    let session_id = entry
-                        .file_name()
-                        .into_string()
-                        .map_err(|_| anyhow::anyhow!("invalid session directory name"))?;
-                    let key = SessionKey { agent, session_id };
-                    key.validate()?;
-                    Ok(Some(key))
-                })();
-                match result {
-                    Ok(Some(key)) => report.sessions.push(key),
-                    Ok(None) => {}
-                    Err(error) => {
-                        report.warnings.push(BatchWarning { path: entry.path(), message: format!("{error:#}") })
-                    }
+            let namespace = (|| -> Result<Option<AgentId>> {
+                let kind = entry.file_type()?;
+                ensure!(!kind.is_symlink(), "agent namespace must be a directory, not a symlink");
+                if !kind.is_dir() {
+                    return Ok(None);
                 }
+                let name = entry.file_name().into_string().map_err(|_| anyhow::anyhow!("invalid agent namespace"))?;
+                Ok(Some(AgentId::new(name)?))
+            })();
+            match namespace {
+                Ok(Some(agent)) => self.sessions_in(agent, &entry.path(), &mut report),
+                Ok(None) => {}
+                Err(error) => report.warnings.push(BatchWarning { path: entry.path(), message: format!("{error:#}") }),
             }
         }
+        report.sessions.sort_by(|a, b| a.agent.cmp(&b.agent).then_with(|| a.session_id.cmp(&b.session_id)));
         report
-            .sessions
-            .sort_by(|a, b| a.agent.slug().cmp(b.agent.slug()).then_with(|| a.session_id.cmp(&b.session_id)));
-        report
+    }
+
+    fn sessions_in(&self, agent: AgentId, path: &Path, report: &mut SessionReport) {
+        let entries = match fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(error) => {
+                report.warnings.push(BatchWarning { path: path.to_path_buf(), message: error.to_string() });
+                return;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    report.warnings.push(BatchWarning { path: path.to_path_buf(), message: error.to_string() });
+                    continue;
+                }
+            };
+            let result = (|| -> Result<Option<SessionKey>> {
+                let kind = entry.file_type()?;
+                ensure!(!kind.is_symlink(), "session directory symlinks are not followed");
+                if !kind.is_dir() {
+                    return Ok(None);
+                }
+                let session_id =
+                    entry.file_name().into_string().map_err(|_| anyhow::anyhow!("invalid session directory name"))?;
+                let key = SessionKey { agent: agent.clone(), session_id };
+                key.validate()?;
+                Ok(Some(key))
+            })();
+            match result {
+                Ok(Some(key)) => report.sessions.push(key),
+                Ok(None) => {}
+                Err(error) => report.warnings.push(BatchWarning { path: entry.path(), message: format!("{error:#}") }),
+            }
+        }
     }
 
     /// Read retained history across agents/sessions. Per-session failures become
@@ -121,7 +136,7 @@ impl Store {
                     report.warnings.append(&mut read.warnings);
                 }
                 Err(error) => report.warnings.push(BatchWarning {
-                    path: self.root.join(key.agent.slug()).join(&key.session_id),
+                    path: self.root.join(key.agent.as_str()).join(&key.session_id),
                     message: format!("{error:#}"),
                 }),
             }

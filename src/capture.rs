@@ -105,9 +105,7 @@ pub fn capture(root: &Path, session: &Session, store: &Store, turn: Option<Turn>
                     event.concurrent.push(other.session.clone());
                 }
             }
-            event
-                .concurrent
-                .sort_by(|a, b| a.agent.slug().cmp(b.agent.slug()).then_with(|| a.session_id.cmp(&b.session_id)));
+            event.concurrent.sort_by(|a, b| a.agent.cmp(&b.agent).then_with(|| a.session_id.cmp(&b.session_id)));
         }
         events.push(event);
     }

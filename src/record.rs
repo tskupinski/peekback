@@ -71,7 +71,7 @@ pub(crate) fn hook(
     now: i64,
     terminal: impl FnOnce() -> Terminal,
 ) -> Result<()> {
-    match harness.decode(input, now)? {
+    match harness.decode(input, now) {
         Some(observation) => record(root, observation, now, terminal()),
         None => Ok(()),
     }

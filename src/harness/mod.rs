@@ -9,11 +9,10 @@ pub mod hook_json;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use session_activity::{FileEvent, SessionKey};
+use session_activity::{AgentId, FileEvent, SessionKey, Source};
 
 use crate::record::Observation;
 use crate::registry::Session;
@@ -71,9 +70,25 @@ impl Harness {
     }
 
     /// What one invocation of the harness's integration reports.
-    pub fn decode(self, input: &Value, now: i64) -> Result<Option<Observation>> {
+    pub fn decode(self, input: &Value, now: i64) -> Option<Observation> {
         match self {
             Harness::Claude | Harness::Codex => hook_json::decode(self, input, now),
+        }
+    }
+
+    /// File events for one tool call, from the harness's own tool names.
+    pub fn tool_events(
+        self,
+        key: &SessionKey,
+        cwd: &Path,
+        tool: &str,
+        input: &Value,
+        at: i64,
+        source: Source,
+    ) -> Vec<FileEvent> {
+        match self {
+            Harness::Claude => claude::tool_events(key, cwd, tool, input, at, source),
+            Harness::Codex => codex::tool_events(key, cwd, tool, input, at, source),
         }
     }
 
@@ -119,7 +134,23 @@ impl Harness {
     }
 
     pub fn key(self, session_id: impl Into<String>) -> SessionKey {
-        SessionKey { agent: self.into(), session_id: session_id.into() }
+        SessionKey { agent: self.agent_id(), session_id: session_id.into() }
+    }
+
+    /// The namespace this harness's history is stored under.
+    pub fn agent_id(self) -> AgentId {
+        AgentId::new(self.slug()).expect("harness slugs are valid agent ids")
+    }
+
+    /// The harness that stored history under `agent`, if this build knows it.
+    pub fn of(agent: &AgentId) -> Option<Harness> {
+        Harness::ALL.into_iter().find(|harness| harness.slug() == agent.as_str())
+    }
+
+    /// How to name the agent of stored history, including history from a
+    /// harness this build does not know.
+    pub fn label(agent: &AgentId) -> &str {
+        Harness::of(agent).map_or(agent.as_str(), |harness| harness.name())
     }
 
     /// Records written before Codex support name no harness.
@@ -139,24 +170,6 @@ pub struct ConfigFile {
     /// The hook entries to merge, with placeholder commands.
     pub template: &'static str,
     pub after_setup: &'static str,
-}
-
-impl From<Harness> for session_activity::Agent {
-    fn from(harness: Harness) -> Self {
-        match harness {
-            Harness::Claude => session_activity::Agent::Claude,
-            Harness::Codex => session_activity::Agent::Codex,
-        }
-    }
-}
-
-impl From<session_activity::Agent> for Harness {
-    fn from(agent: session_activity::Agent) -> Self {
-        match agent {
-            session_activity::Agent::Claude => Harness::Claude,
-            session_activity::Agent::Codex => Harness::Codex,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -240,6 +253,17 @@ mod tests {
             assert_eq!(stop[0]["hooks"][0]["command"], "other-tool");
             assert_eq!(stop.last().unwrap()["hooks"][0]["command"], ": ours; run");
         }
+    }
+
+    #[test]
+    fn stored_history_names_its_harness_or_keeps_an_unknown_one_as_is() {
+        for harness in Harness::ALL {
+            assert_eq!(Harness::of(&harness.agent_id()), Some(harness));
+            assert_eq!(Harness::label(&harness.agent_id()), harness.name());
+        }
+        let unknown = AgentId::new("future-agent").unwrap();
+        assert_eq!(Harness::of(&unknown), None);
+        assert_eq!(Harness::label(&unknown), "future-agent");
     }
 
     #[test]

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+Breaking: the library no longer knows any particular agent. Stored data is
+unchanged.
+
+- Replace the `Agent` enum with `AgentId`, a validated namespace the caller
+  chooses. It serializes as the same string, so existing history and keys
+  read unchanged.
+- `Store::sessions` and `Store::read_all` list every valid agent namespace
+  directory instead of a fixed set; an invalid namespace name is a warning.
+- Remove the Claude Code and Codex adapters (`hook_events`,
+  `transcript_events`, `subagent_transcripts`, `transcript_last_activity`).
+  Callers decode their agent's hooks and transcripts into `FileEvent`s.
+
 ## 0.2.0 - 2026-09-25
 
 Breaking: the event schema and public API change. Events are written with

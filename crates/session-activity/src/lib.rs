@@ -1,17 +1,16 @@
 //! File activity shared by consumers such as Peekback. No viewer, terminal,
 //! Markdown, or global state-directory dependency.
 #![doc = include_str!("../README.md")]
-mod adapters;
 mod lock;
 mod maintenance;
 mod query;
 mod store;
 
+use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub use adapters::{hook_events, subagent_transcripts, transcript_events, transcript_last_activity};
 pub use maintenance::MaintenanceReport;
 pub use query::{FileActivity, ScanReport, ScanRoot, ScanWarning, files, reconcile, scan, scan_report};
 pub use store::{BatchWarning, ReadReport, SessionReport, Store};
@@ -19,33 +18,51 @@ pub use store::{BatchWarning, ReadReport, SessionReport, Store};
 /// Schema 2 adds `FileEvent::concurrent`. Schema 1 batches remain readable.
 pub const SCHEMA_VERSION: u32 = 2;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Agent {
-    #[default]
-    Claude,
-    Codex,
-}
+/// The namespace of the agent that produced a session, such as `claude`. The
+/// caller chooses it; the library only requires lowercase ASCII letters,
+/// digits and `-`, since it names a directory.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct AgentId(String);
 
-impl Agent {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude Code",
-            Self::Codex => "Codex",
-        }
+impl AgentId {
+    pub fn new(id: impl Into<String>) -> anyhow::Result<Self> {
+        let id = id.into();
+        anyhow::ensure!(
+            !id.is_empty() && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+            "invalid agent id {id:?}"
+        );
+        Ok(Self(id))
     }
 
-    pub fn slug(self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-        }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for AgentId {
+    type Error = anyhow::Error;
+
+    fn try_from(id: String) -> anyhow::Result<Self> {
+        Self::new(id)
+    }
+}
+
+impl From<AgentId> for String {
+    fn from(id: AgentId) -> Self {
+        id.0
+    }
+}
+
+impl fmt::Display for AgentId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionKey {
-    pub agent: Agent,
+    pub agent: AgentId,
     pub session_id: String,
 }
 

@@ -15,8 +15,8 @@ present that evidence.
 
 | Component | Responsibility |
 | --- | --- |
-| `crates/session-activity/` | Agent adapters, event schemas, path normalization, storage, scans, reconciliation, compaction and retention |
-| `src/harness/` | One module per agent harness: identity, session variables, decoding its hook payloads into lifecycle observations |
+| `crates/session-activity/` | Agent-independent event schemas, path normalization, storage, scans, reconciliation, compaction and retention |
+| `src/harness/` | One module per agent harness: identity, session variables, setup, decoding its hooks into lifecycle observations, tool and transcript adapters, private directories |
 | `src/setup.rs`, `src/record.rs` | Agent hook configuration; recording observations as turns, file events and registry entries |
 | `src/registry.rs`, `src/lifecycle.rs` | Live sessions, terminal identity, lifecycle locks and end markers |
 | `src/capture.rs`, `src/capture_jobs.rs`, `src/activity.rs`, `src/discovery.rs` | Capture policy and retry jobs, JSON queries, Markdown filtering |

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
+use session_activity::{FileEvent, Outcome, Source};
 
 use super::Harness;
 use crate::record::{Event, Observation, Place, Start};
@@ -12,24 +13,52 @@ use crate::record::{Event, Observation, Place, Start};
 /// `None` only for a payload that names no valid session or an event
 /// Peekback does not follow. A payload without a usable place still decodes,
 /// so its turn boundary is not lost.
-pub fn decode(harness: Harness, input: &Value, now: i64) -> Result<Option<Observation>> {
-    let Some(session_id) = input["session_id"].as_str().filter(|id| session_activity::valid_id(id)) else {
-        return Ok(None);
-    };
+pub fn decode(harness: Harness, input: &Value, now: i64) -> Option<Observation> {
+    let session_id = input["session_id"].as_str().filter(|id| session_activity::valid_id(id))?;
     let place = place(input);
-    let event = match input["hook_event_name"].as_str() {
-        Some("SessionStart") if input["source"] == "compact" => Event::SessionStarted(Start::Compaction),
-        Some("SessionStart") => Event::SessionStarted(Start::New),
-        Some("UserPromptSubmit") => Event::PromptSubmitted,
-        Some("PostToolUse" | "PostToolUseFailure") if place.is_some() => {
-            Event::ToolUsed(session_activity::hook_events(harness.into(), input, now)?)
-        }
-        Some("PostToolUse" | "PostToolUseFailure") => Event::ToolUsed(Vec::new()),
-        Some("Stop") => Event::TurnEnded,
-        Some("SessionEnd") => Event::SessionEnded,
-        _ => return Ok(None),
+    let event = match input["hook_event_name"].as_str()? {
+        "SessionStart" if input["source"] == "compact" => Event::SessionStarted(Start::Compaction),
+        "SessionStart" => Event::SessionStarted(Start::New),
+        "UserPromptSubmit" => Event::PromptSubmitted,
+        "PostToolUse" | "PostToolUseFailure" => Event::ToolUsed(
+            place.as_ref().map_or_else(Vec::new, |place| tool_events(harness, session_id, &place.cwd, input, now)),
+        ),
+        "Stop" => Event::TurnEnded,
+        "SessionEnd" => Event::SessionEnded,
+        _ => return None,
     };
-    Ok(Some(Observation { harness, session_id: session_id.into(), event, place }))
+    Some(Observation { harness, session_id: session_id.into(), event, place })
+}
+
+/// Tools the harness does not map, including arbitrary shell commands, yield
+/// no file events.
+fn tool_events(harness: Harness, session_id: &str, cwd: &Path, input: &Value, now: i64) -> Vec<FileEvent> {
+    let key = harness.key(session_id);
+    let tool = input["tool_name"].as_str().unwrap_or_default();
+    let failed = input["hook_event_name"] == "PostToolUseFailure";
+    let mut events = harness.tool_events(&key, cwd, tool, &input["tool_input"], now, Source::Hook);
+    for event in &mut events {
+        event.tool_call_id = input["tool_use_id"].as_str().map(str::to_owned);
+        event.outcome = if failed { Outcome::Failed } else { outcome(&input["tool_response"]) };
+    }
+    events
+}
+
+fn outcome(response: &Value) -> Outcome {
+    let flags = [
+        response["is_error"].as_bool().map(|v| !v),
+        response["isError"].as_bool().map(|v| !v),
+        response["success"].as_bool(),
+    ];
+    if flags.contains(&Some(false)) {
+        return Outcome::Failed;
+    }
+    if flags.contains(&Some(true)) {
+        return Outcome::Succeeded;
+    }
+    // Output formats vary between agent versions; absence of an explicit
+    // success indicator is not proof that an attempted edit succeeded.
+    Outcome::Unknown
 }
 
 /// Merge the template's hook entries into a harness's settings, running
@@ -97,7 +126,7 @@ mod tests {
             "transcript_path": "/work/t.jsonl",
         });
         input.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
-        decode(harness, &input, 100).unwrap()
+        decode(harness, &input, 100)
     }
 
     fn event(extra: Value) -> Option<Event> {
@@ -160,6 +189,23 @@ mod tests {
         assert_eq!(event(bash), Some(Event::ToolUsed(Vec::new())));
         let unplaced = json!({"hook_event_name": "PostToolUse", "tool_name": "Write", "cwd": "relative"});
         assert_eq!(event(unplaced), Some(Event::ToolUsed(Vec::new())));
+    }
+
+    fn edit_outcome(extra: Value) -> Outcome {
+        let mut edit =
+            json!({"hook_event_name": "PostToolUse", "tool_name": "Edit", "tool_input": {"file_path": "a.md"}});
+        edit.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let Some(Event::ToolUsed(events)) = event(edit) else { panic!("not a tool event") };
+        events[0].outcome
+    }
+
+    #[test]
+    fn explicit_results_decide_outcomes_and_failure_wins() {
+        assert_eq!(edit_outcome(json!({"tool_response": {"is_error": true}})), Outcome::Failed);
+        assert_eq!(edit_outcome(json!({"tool_response": {"success": true}})), Outcome::Succeeded);
+        assert_eq!(edit_outcome(json!({"tool_response": "unrecognized result text"})), Outcome::Unknown);
+        assert_eq!(edit_outcome(json!({"tool_response": {"is_error": false, "success": false}})), Outcome::Failed);
+        assert_eq!(edit_outcome(json!({"hook_event_name": "PostToolUseFailure"})), Outcome::Failed);
     }
 
     #[test]

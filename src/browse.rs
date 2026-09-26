@@ -75,7 +75,7 @@ impl Snapshot {
     fn title(&self) -> String {
         self.key
             .as_ref()
-            .map(|key| format!("{} / {}", key.agent.name(), key.session_id))
+            .map(|key| format!("{} / {}", Harness::label(&key.agent), key.session_id))
             .unwrap_or_else(|| "All sessions / retained history".into())
     }
 
@@ -298,7 +298,7 @@ impl Browser {
                                     "{}  {:?} / {:?} / {:?}",
                                     event.timestamp, event.source, event.operation, event.outcome
                                 ),
-                                format!("  {} / {}", event.session.agent.name(), event.session.session_id),
+                                format!("  {} / {}", Harness::label(&event.session.agent), event.session.session_id),
                                 format!("  {}", event.path.display()),
                             ];
                             if let Some(from) = &event.previous_path {
@@ -439,7 +439,7 @@ fn evidence(file: &FileActivity) -> &'static str {
 fn provenance(file: &FileActivity) -> String {
     let mut sessions = Vec::new();
     for event in file.events.iter().rev() {
-        let label = format!("{} / {}", event.session.agent.name(), event.session.session_id);
+        let label = format!("{} / {}", Harness::label(&event.session.agent), event.session.session_id);
         if !sessions.contains(&label) {
             sessions.push(label);
         }
