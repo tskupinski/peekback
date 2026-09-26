@@ -48,6 +48,7 @@
     question: null, // { text, yes, no, shown }: the one question, about a clipboard send
     pendingJump: null, // { fileIdentity, line }: where to go once that document renders
     pendingEdit: null, // a comment id to edit once its document renders
+    undo: null, // { comment } removed, or { what, note } a discarded note: what u brings back
     pendingJump: null, // { path, line } to apply once that document renders
   };
 
@@ -534,8 +535,8 @@
     closeCmdline();
     composing = what;
     const { quote, note } = what.editing ?? { quote: what.target.quote, note: "" };
+    composerInput.value = what.draft ?? note;
     composerQuote.textContent = firstLine(quote);
-    composerInput.value = note;
     composerEl.hidden = false;
     setMode("comment");
     fitComposer();
@@ -565,17 +566,31 @@
     toast("note saved with its document");
   }
 
+  // An empty note is no comment: a new one is not added, and emptying an
+  // existing one removes it (u brings it back).
   function saveComposer() {
     const what = composing;
-    const note = composerInput.value;
+    const note = composerInput.value.trim();
     closeComposer();
     if (what?.editing) {
-      what.editing.note = note.trim();
+      if (!note) return removeComment(what.editing.id);
+      what.editing.note = note;
       renderComments();
       setMessage("comment updated");
-    } else if (what?.target) {
+    } else if (what?.target && note) {
       addComment(what.target, note);
     }
+  }
+
+  // Esc on a note with writing in it keeps the writing for u.
+  function discardComposer() {
+    const what = composing;
+    const note = composerInput.value.trim();
+    closeComposer();
+    const unchanged = what?.editing ? note === what.editing.note : !note;
+    if (unchanged) return;
+    state.undo = { what: { target: what.target, editing: what.editing }, note };
+    toast("note discarded · u restores");
   }
 
   // Under the last block the note is about, where the eye already is.
@@ -616,7 +631,7 @@
     if (event.isComposing) return;
     if (event.key === "Escape") {
       event.preventDefault();
-      closeComposer();
+      discardComposer();
     } else if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       saveComposer();
@@ -655,9 +670,28 @@
     setMessage("comment added"); // The status line already counts them.
   }
 
+  // Removing is one key away, so it can always be taken back once with u.
   function removeComment(id) {
+    const comment = state.comments.find((c) => c.id === id);
+    if (!comment) return;
     state.comments = state.comments.filter((c) => c.id !== id);
+    state.undo = { comment };
     renderComments();
+    toast("comment removed · u restores");
+  }
+
+  function undo() {
+    const last = state.undo;
+    const owner = last?.comment?.owner ?? last?.what?.target?.owner ?? last?.what?.editing?.owner;
+    if (!last || owner !== commentOwner()) return setMessage("nothing to undo");
+    state.undo = null;
+    if (last.comment) {
+      state.comments.push(last.comment);
+      renderComments();
+      setMessage("comment restored");
+    } else {
+      openComposer({ ...last.what, draft: last.note });
+    }
   }
 
   // Relative to the session's cwd when under it, otherwise absolute, since
@@ -1552,7 +1586,7 @@
         case "j": moveCursor(state.cursor + takeCount()); break;
         case "k": moveCursor(state.cursor - takeCount()); break;
         case "d": halfPage(1); break;
-        case "u": halfPage(-1); break;
+        case "u": undo(); break;
         case "G": moveCursor(state.count ? takeCount() - 1 : state.blocks.length - 1); break;
         case "g": case "]": case "[": case "z": case " ": setPending(key); break;
         case "v":

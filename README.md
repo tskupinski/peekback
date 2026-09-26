@@ -164,7 +164,8 @@ pane and press the hotkey, or run `peekback show --session ID`.
 | Key | Action |
 | --- | --- |
 | `j` / `k` | move the block cursor, with counts like `5j` |
-| `Ctrl-D` / `Ctrl-U` | half page down / up (also `d` / `u`) |
+| `Ctrl-D` / `Ctrl-U` | half page down / up (also `d`) |
+| `u` | undo removing a comment or discarding a note |
 | `Ctrl-F` / `Ctrl-B` | full page down / up |
 | `gg` / `G` | top / bottom |
 | `zz` / `zt` / `zb` | scroll the cursor block to center / top / bottom |
@@ -175,7 +176,7 @@ pane and press the hotkey, or run `peekback show --session ID`.
 | `y` | copy the block or selection as Markdown |
 | `s` | send the block or selection to the prompt as a blockquote, with the comments inside it |
 | `c` | comment on the block or selection: a note box opens under it; `Enter` saves, `Shift-Enter` adds a line, `Esc` cancels |
-| `C` | edit the comment on the cursor's block |
+| `C` | edit the comment on the cursor's block; saving it empty removes it |
 | `S` | review all pending comments, then `Enter` sends them as one prompt |
 | `/` | search, then `n` / `N` |
 | `Space d` or `Ctrl-P` | document picker |

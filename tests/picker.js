@@ -267,6 +267,34 @@ async function main() {
   input.dispatch("keydown", { key: "e", ctrlKey: true });
   assert.equal(composer.value, "Reworded");
   composer.dispatch("keydown", { key: "Escape" });
+  // Nothing is lost by one wrong key: u takes back a removal or a discarded
+  // note, and an empty note is no comment at all.
+  key("u"); // The "Never mind" note discarded with Esc above comes back.
+  assert.equal(element("composer").hidden, false);
+  assert.equal(composer.value, "Never mind");
+  composer.value = ""; composer.dispatch("keydown", { key: "Escape" }); // Nothing written: nothing kept.
+  key("u");
+  assert.match(element("status-msg").textContent, /nothing to undo/);
+  key("g"); key("g"); key("c"); composer.value = ""; composer.dispatch("keydown", { key: "Enter" });
+  assert.equal(element("comments").children.length, 1); // Still only "Reworded".
+  key("c"); composer.value = "Half a thought"; composer.dispatch("keydown", { key: "Escape" });
+  assert.match(element("toast").textContent, /note discarded · u restores/);
+  key("u");
+  assert.equal(element("composer").hidden, false);
+  assert.equal(composer.value, "Half a thought");
+  composer.dispatch("keydown", { key: "Enter" });
+  assert.equal(element("comments").children.length, 2);
+  key("g"); key("g"); key("C"); composer.value = ""; composer.dispatch("keydown", { key: "Enter" });
+  assert.equal(element("comments").children.length, 1); // Emptied: removed.
+  assert.match(element("toast").textContent, /comment removed · u restores/);
+  key("u");
+  assert.equal(element("comments").children.length, 2);
+  element("comments").children[1].children[3].dispatch("click"); // The sidebar's ×.
+  assert.equal(element("comments").children.length, 1);
+  key("u");
+  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent).sort(), ["Half a thought", "Reworded"]);
+  element("comments").children.find(li => li.children[2].textContent === "Half a thought").children[3].dispatch("click");
+
   // What the agent gets: where each quote is, as a line reference.
   sendAll();
   assert.match(messages.at(-1).text, /Comments on `\/comments\.md`:\n\n`\/comments\.md#L3`\n> Second paragraph\.\nReworded$/);

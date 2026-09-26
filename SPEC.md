@@ -418,7 +418,11 @@ outside the rendered document so a live reload while typing keeps the draft;
 after every render its target is found again like a saved comment's, and the
 box is placed under it. A reload never ends a note being written. Opening
 another document or session saves a non-empty note with its own document and
-closes the box. `Enter` saves, `Shift-Enter` adds a line, `Esc` cancels. `C` edits the latest comment on the cursor's block, and
+closes the box. `Enter` saves, `Shift-Enter` adds a line, `Esc` cancels. An
+empty new note adds nothing, and saving an existing comment empty removes it.
+`u` takes back the last removal (the sidebar's ×, `Ctrl-D` in the comments
+picker, or an emptied note) or the last note discarded with `Esc`, once, in
+the session it belongs to; each says so in a toast. `C` edits the latest comment on the cursor's block, and
 `Ctrl-E` in the comments picker edits the chosen one, opening its document
 first when it is another. `:c note` still adds a one-line note directly.
 
