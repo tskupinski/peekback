@@ -506,37 +506,29 @@ impl App {
             UserEvent::Refreshed { context, sessions, documents } => {
                 self.refresh_pending = false;
                 self.sessions = sessions;
-                // The documents belong to the view they were computed for. A
-                // show in flight has already advanced the generation, and
-                // after it lands the view is another session's.
-                match (&mut self.current, &context) {
-                    (Some(doc), Some(context)) if doc.context.accepts(self.generation, context) => {
-                        if let Some(started) =
-                            doc.awaiting.as_ref().and_then(|a| self.sessions.iter().find(|s| a.started_in(s)))
-                        {
-                            let target = Target::Session(Some(started.session_id.clone()));
-                            self.show(target, None, Presentation::Keep, None)?;
-                            return Ok(());
-                        }
+                let decision =
+                    after_refresh(self.current.as_ref(), self.generation, context.as_ref(), &self.sessions, &documents);
+                match decision {
+                    AfterRefresh::Ignore => {}
+                    AfterRefresh::Retry => self.refresh_at = Some(Instant::now()),
+                    AfterRefresh::Start(session_id) => {
+                        self.show(Target::Session(Some(session_id)), None, Presentation::Keep, None)?
+                    }
+                    AfterRefresh::Update { open_first } => {
+                        let Some(doc) = &mut self.current else { return Ok(()) };
                         doc.documents = documents;
-                        if let Some(session) = &doc.session {
-                            if self.page_ready {
-                                self.view.push(&DaemonMessage::Documents {
-                                    context: &doc.context,
-                                    session_id: &session.session_id,
-                                    documents: &doc.documents,
-                                });
-                            }
+                        if let (Some(session), true) = (&doc.session, self.page_ready) {
+                            self.view.push(&DaemonMessage::Documents {
+                                context: &doc.context,
+                                session_id: &session.session_id,
+                                documents: &doc.documents,
+                            });
                         }
-                        if doc.path.is_none() {
-                            if let Some(path) = doc.documents.first().map(|d| d.path.clone()) {
-                                let target = Target::SessionIfLive(self.session_id());
-                                self.show(target, Some(path), Presentation::Keep, None)?;
-                            }
+                        if let Some(path) = open_first {
+                            let target = Target::SessionIfLive(self.session_id());
+                            self.show(target, Some(path), Presentation::Keep, None)?;
                         }
                     }
-                    (None, None) => {}
-                    _ => self.refresh_at = Some(Instant::now()),
                 }
             }
             UserEvent::Listed { context, request_id, scratchpad, listing, available } => {
@@ -604,6 +596,42 @@ impl App {
     }
 }
 
+/// What a registry refresh means for the view on screen.
+#[derive(Debug, PartialEq)]
+enum AfterRefresh {
+    /// Computed for a view a show in flight replaces; that show refreshes
+    /// once it lands, so computing again now would only repeat the work.
+    Ignore,
+    /// The view changed under it without a show, as a live reload does.
+    Retry,
+    /// The pane the view waited on has registered its session: open it.
+    Start(String),
+    /// New documents for the view, and the first to open when it shows none.
+    Update { open_first: Option<PathBuf> },
+}
+
+fn after_refresh(
+    current: Option<&Current>,
+    generation: u64,
+    refreshed: Option<&ViewContext>,
+    sessions: &[Session],
+    documents: &[Document],
+) -> AfterRefresh {
+    match (current, refreshed) {
+        (None, None) => AfterRefresh::Ignore,
+        (Some(doc), Some(context)) if doc.context.accepts(generation, context) => {
+            match doc.awaiting.as_ref().and_then(|a| sessions.iter().find(|s| a.started_in(s))) {
+                Some(started) => AfterRefresh::Start(started.session_id.clone()),
+                None => AfterRefresh::Update {
+                    open_first: doc.path.is_none().then(|| documents.first().map(|d| d.path.clone())).flatten(),
+                },
+            }
+        }
+        (Some(doc), _) if doc.context.generation != generation => AfterRefresh::Ignore,
+        _ => AfterRefresh::Retry,
+    }
+}
+
 fn open(
     generation: u64,
     session_id: Option<String>,
@@ -627,4 +655,74 @@ fn open(
     };
     let context = ViewContext { generation, session: session.as_ref().map(Into::into) };
     Ok(Current { context, session, awaiting, documents, path, file_identity, source, missing: false })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mux::{Mux, Pane};
+
+    fn session(id: &str, pane: &str) -> Session {
+        serde_json::from_value(serde_json::json!({
+            "session_id": id, "incarnation": "i", "cwd": "/tmp", "started_at": 1, "last_active_at": 1,
+            "terminal": { "panes": [{ "mux": "tmux", "server": "/tmp/tmux", "id": pane }] }
+        }))
+        .unwrap()
+    }
+
+    fn view(generation: u64, session: Option<&Session>, path: Option<&str>) -> Current {
+        Current {
+            context: ViewContext { generation, session: session.map(Into::into) },
+            session: session.cloned(),
+            awaiting: None,
+            documents: Vec::new(),
+            path: path.map(PathBuf::from),
+            file_identity: None,
+            source: String::new(),
+            missing: false,
+        }
+    }
+
+    fn document(path: &str) -> Document {
+        Document { path: path.into(), touched_at: 1, label: path.into(), scanned: false, shared: false }
+    }
+
+    #[test]
+    fn a_refresh_for_the_view_on_screen_updates_it_and_opens_a_first_document() {
+        let a = session("a", "%1");
+        let docs = [document("/tmp/plan.md")];
+        let shown = view(3, Some(&a), Some("/tmp/old.md"));
+        assert_eq!(
+            after_refresh(Some(&shown), 3, Some(&shown.context), &[], &docs),
+            AfterRefresh::Update { open_first: None }
+        );
+        let empty = view(3, Some(&a), None);
+        assert_eq!(
+            after_refresh(Some(&empty), 3, Some(&empty.context), &[], &docs),
+            AfterRefresh::Update { open_first: Some("/tmp/plan.md".into()) }
+        );
+    }
+
+    #[test]
+    fn a_refresh_during_a_show_is_dropped_and_one_outrun_by_a_reload_is_retried() {
+        let a = session("a", "%1");
+        let shown = view(3, Some(&a), Some("/tmp/plan.md"));
+        let stale = ViewContext { generation: 2, ..shown.context.clone() };
+        // A show has advanced the generation; it refreshes when it lands.
+        assert_eq!(after_refresh(Some(&shown), 4, Some(&shown.context), &[], &[]), AfterRefresh::Ignore);
+        assert_eq!(after_refresh(Some(&shown), 3, Some(&stale), &[], &[]), AfterRefresh::Retry);
+        assert_eq!(after_refresh(None, 0, None, &[], &[]), AfterRefresh::Ignore);
+    }
+
+    #[test]
+    fn a_pane_waiting_for_its_agent_opens_the_session_that_registers_there() {
+        let mut waiting = view(3, None, None);
+        let pane = Pane { mux: Mux::Tmux, server: Some("/tmp/tmux".into()), id: "%7".into() };
+        waiting.awaiting = Some(Awaiting { harness: Harness::Claude, pane });
+        let sessions = [session("elsewhere", "%1"), session("started", "%7")];
+        assert_eq!(
+            after_refresh(Some(&waiting), 3, Some(&waiting.context), &sessions, &[]),
+            AfterRefresh::Start("started".into())
+        );
+    }
 }

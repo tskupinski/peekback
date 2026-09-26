@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- End the line reference of a list's last item at its text; it included the
+  blank line after the list.
+- Stop re-reading the session registry over and over while a document is
+  opening.
 - Keep the keyboard on an open review sheet or note after a click elsewhere;
   the review sheet ignored every key, `Esc` included.
 - Stop losing notes around a send: an edit made while a send is waiting

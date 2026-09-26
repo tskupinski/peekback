@@ -28,13 +28,31 @@ class Element {
     const event = { preventDefault() {}, stopPropagation() {}, ...values };
     for (const fn of this.listeners[name] ?? []) fn(event);
   }
-  replaceChildren(...children) { this.children = children; }
-  append(...children) { this.children.push(...children); }
+  replaceChildren(...children) { this.children = adopt(this, children); }
+  append(...children) { this.children.push(...adopt(this, children)); }
+  prepend(...children) { this.children.unshift(...adopt(this, children)); }
+  replaceWith(other) {
+    const siblings = this.parentElement.children;
+    siblings[siblings.indexOf(this)] = adopt(this.parentElement, [other])[0];
+  }
   setAttribute(name, value) { this.attributes[name] = value; }
   removeAttribute(name) { delete this.attributes[name]; }
-  matches() { return false; }
+  matches(selector) { return matchesSelector(this, selector); }
+  closest(selector) {
+    for (let node = this; node; node = node.parentElement) if (node.matches(selector)) return node;
+    return null;
+  }
+  contains(other) {
+    for (let node = other; node; node = node.parentElement) if (node === this) return true;
+    return false;
+  }
   querySelector(selector) { return selector === ".active" ? this.children.find(c => c.className.includes(" active")) : null; }
-  querySelectorAll() { return []; }
+  querySelectorAll(selector) {
+    const found = [];
+    const walk = node => node.children.forEach(child => { if (matchesSelector(child, selector, this)) found.push(child); walk(child); });
+    walk(this);
+    return found;
+  }
   focus() {}
   blur() {}
   scrollIntoView() {}
@@ -52,7 +70,9 @@ const marks = [
 ];
 
 // A fresh page, and the keys, messages and renders a scenario drives it with.
-function boot() {
+// With markdown, documents go through the real markdown-it the page ships;
+// otherwise each paragraph of the source is one block.
+function boot({ markdown = false } = {}) {
   const nodes = new Map();
   const element = id => {
     if (!nodes.has(id)) nodes.set(id, new Element());
@@ -66,6 +86,10 @@ function boot() {
   // Paragraph-only rendering fixture. Exercise comment handlers against source
   // ranges without depending on a browser's Markdown/layout implementation.
   Object.defineProperty(element("doc"), "innerHTML", { set(source) {
+    if (markdown) {
+      this.children = adopt(this, parseHtml(source));
+      return;
+    }
     let line = 0;
     this.children = source ? source.split("\n\n").map(text => {
       const block = new Element();
@@ -80,14 +104,17 @@ function boot() {
   const env = { systemDark: false, mermaidInits: 0, mermaidOptions: null, themeTokens: {} };
   const window = Object.assign(new Element(), {
     matchMedia: () => ({ get matches() { return env.systemDark; }, addEventListener(_, fn) { schemeListeners.push(fn); } }),
-    markdownit: () => ({ use() { return this; }, render(source) { return source; } }),
+    markdownit: markdown ? require("../assets/vendor/markdown-it.min.js")
+      : () => ({ use() { return this; }, render(source) { return source; } }),
+    markdownitFootnote: require("../assets/vendor/markdown-it-footnote.min.js"),
+    markdownitTaskLists: require("../assets/vendor/markdown-it-task-lists.min.js"),
     ipc: { postMessage: text => messages.push(JSON.parse(text)) },
     scrollTo() {},
     scrollBy() {},
   });
   element("no-documents").textContent = "This session has not written any Markdown yet. Its first document opens here.";
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../assets/app.js"), "utf8"), {
-    window, document, console, CSS: {}, TextEncoder,
+    window, document, console, CSS: {}, TextEncoder, hljs: { getLanguage: () => null },
     mermaid: { initialize(options) { env.mermaidInits += 1; env.mermaidOptions = options; } }, renderMathInElement() {},
     localStorage: { getItem() { return null; }, setItem() {} },
     setInterval() {}, setTimeout() {}, clearTimeout() {}, requestAnimationFrame() {},
@@ -140,7 +167,7 @@ function boot() {
 }
 
 const scenarios = [];
-const scenario = (name, run) => scenarios.push({ name, run });
+const scenario = (name, run, options) => scenarios.push({ name, run, options });
 
 scenario("Picker: scopes, scratchpad listing, filtering, caps, >30 results, opening, refresh, bookmarks", async page => {
   const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
@@ -490,6 +517,24 @@ scenario("Leaving a document: the note is saved with it, a reload keeps it open"
   assert.deepEqual(marked(), [{ line: 2, endLine: 5, note: "Written during a reload" }]); // Followed its text.
 });
 
+scenario("Real Markdown: frontmatter, headings, list items, fences and quotes each map to their own lines", async page => {
+  const { messages, receive, key, command, render, sendAll, marked } = page;
+  const plan = [
+    "---", "title: Plan", "---", "# Phase 1", "",
+    "- First item", "  continued", "- Second item", "  - nested", "",
+    "```js", "const x = 1;", "```", "", "> Quoted", "", "Closing paragraph.",
+  ].join("\n");
+  await render("/plan.md", plan);
+  for (let i = 0; i < 7; i++) { command(`c Note ${i}`); key("j"); }
+  assert.deepEqual(marked().map(m => [m.line, m.endLine]), [[0, 3], [3, 4], [5, 7], [7, 10], [10, 13], [14, 15], [16, 17]]);
+  sendAll();
+  const refs = [...messages.at(-1).text.matchAll(/`\/plan\.md#(L[\d-]+)`/g)].map(m => m[1]);
+  // The last list item ends at its text, not at the blank line markdown-it gives it.
+  assert.deepEqual(refs, ["L1-3", "L4", "L6-7", "L8-9", "L11-13", "L15", "L17"]);
+  assert.match(messages.at(-1).text, /`\/plan\.md#L6-7`\n> - First item\n>   continued\n\nNote 2/);
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
+}, { markdown: true });
+
 scenario("Keyboard after a stray click: the review sheet keeps the keys, Esc still closes it", async page => {
   const { element, key, command, render } = page;
   await render();
@@ -834,9 +879,60 @@ scenario("Themes: auto follows the system, pinned themes stay, font overrides, d
   for (const value of Object.values(env.mermaidOptions.themeVariables)) assert.doesNotMatch(String(value), /color-mix/);
 });
 
+const adopt = (parent, children) => children.map(child => Object.assign(child, { parentElement: parent }));
+
+// Just the selectors app.js uses: tags, classes and attributes, joined by
+// the child combinator, with :scope for the element searched from.
+function matchesSelector(el, selector, scope) {
+  return selector.split(",").some(alternative => {
+    const parts = alternative.trim().split(/\s*>\s*/);
+    let node = el;
+    for (let i = parts.length - 1; i >= 0; i--, node = node?.parentElement) {
+      if (!node || !(parts[i] === ":scope" ? node === scope : matchesSimple(node, parts[i]))) return false;
+    }
+    return true;
+  });
+}
+
+function matchesSimple(el, simple) {
+  const [, tag, classes, attributes] = simple.match(/^([a-z0-9]*)((?:\.[\w-]+)*)((?:\[[\w-]+\])*)$/)
+    ?? assert.fail(`the test DOM does not support the selector ${simple}`);
+  const dataKey = name => name.slice(5).replace(/-(\w)/g, (_, c) => c.toUpperCase());
+  return (!tag || el.tagName === tag.toUpperCase())
+    && classes.split(".").filter(Boolean).every(c => el.className.split(" ").includes(c))
+    && [...attributes.matchAll(/\[([\w-]+)\]/g)].every(([, name]) =>
+      (name.startsWith("data-") ? el.dataset[dataKey(name)] : el.attributes[name]) !== undefined);
+}
+
+// Enough of an HTML parser for markdown-it's output, which is well formed.
+function parseHtml(html) {
+  const root = new Element();
+  const stack = [root];
+  const voids = new Set(["br", "hr", "img", "input"]);
+  for (const [, closing, tag, attributes, text] of html.matchAll(/<(\/?)([a-z0-9]+)([^>]*)>|([^<]+)/g)) {
+    const top = stack.at(-1);
+    if (text !== undefined) {
+      for (const node of stack) node.textContent = (node.textContent ?? "") + text;
+    } else if (closing) {
+      stack.pop();
+    } else {
+      const el = new Element();
+      el.tagName = tag.toUpperCase();
+      for (const [, name, value = ""] of attributes.matchAll(/([\w-]+)(?:="([^"]*)")?/g)) {
+        if (name === "class") el.className = value;
+        else if (name.startsWith("data-")) el.dataset[name.slice(5).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = value;
+        else el.attributes[name] = value;
+      }
+      top.append(el);
+      if (!voids.has(tag)) stack.push(el);
+    }
+  }
+  return root.children;
+}
+
 async function main() {
-  for (const { name, run } of scenarios) {
-    await run(boot());
+  for (const { name, run, options } of scenarios) {
+    await run(boot(options));
     console.log(`Passed ${name}.`);
   }
 }

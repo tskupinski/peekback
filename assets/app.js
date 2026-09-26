@@ -44,7 +44,7 @@
     pendingKey: null,
     count: "",
     search: { query: "", matches: [], index: -1 },
-    comments: [], // { id, owner, path, fileIdentity, label, quote, note, line, endLine, anchorSource, anchorCount, anchorIndex, changed }
+    comments: [], // { id, owner, path, fileIdentity, quote, note, line, endLine, anchorSource, anchorCount, anchorIndex, changed }
     question: null, // { text, yes, no, shown }: the one question, about a clipboard send
     pendingJump: null, // { fileIdentity, line }: where to go once that document renders
     pendingEdit: null, // a comment id to edit once its document renders
@@ -488,6 +488,7 @@
 
   function perform(action, text, line, endLine) {
     if (rendering || state.question?.shown || !text) return;
+    endLine = lastTextLine(line, endLine);
     if (action === "copy") post({ type: "copy", text });
     if (action === "send") {
       const quoted = [lineRef(state.doc?.fileIdentity, line, endLine), blockquote(text)].filter(Boolean).join("\n");
@@ -509,13 +510,22 @@
   // request to restore it.
   const CHANGED_NOTE = "(This text has since changed or been removed.)";
 
+  // markdown-it counts the blank line after a list as part of its last item;
+  // a line reference and an anchor end where the text does.
+  function lastTextLine(line, endLine) {
+    if (!Number.isInteger(line) || !Number.isInteger(endLine)) return endLine;
+    const lines = state.doc.source.split("\n");
+    while (endLine > line + 1 && !lines[endLine - 1]?.trim()) endLine--;
+    return endLine;
+  }
+
   function commentTarget(quote, line, endLine) {
     if (!state.doc) return null;
+    endLine = lastTextLine(line, endLine);
     return {
       path: state.doc.path,
       fileIdentity: state.doc.fileIdentity,
       owner: commentOwner(),
-      label: promptPathFor(state.doc.path),
       quote,
       line,
       endLine,
@@ -1078,7 +1088,7 @@
   function commentCandidates() {
     return activeComments().map((c) => ({
       label: `${c.quote.split("\n")[0].slice(0, 60)}${c.note ? "  ·  " + c.note : ""}`,
-      meta: c.changed ? `${c.label} · text changed or removed` : c.label,
+      meta: `${promptPathFor(c.path)}${c.changed ? " · text changed or removed" : ""}`,
       id: c.id,
       run: () => jumpToComment(c),
     }));

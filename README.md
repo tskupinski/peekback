@@ -182,7 +182,7 @@ pane and press the hotkey, or run `peekback show --session ID`.
 | `Space d` or `Ctrl-P` | document picker |
 | `Tab` / `Shift-Tab` in document picker | cycle Current session, Scratchpad, and Bookmarks |
 | `Space c` | pending comments (`Enter` jumps, `Ctrl-E` edits, `Ctrl-S` sends one, `Ctrl-D` removes) |
-| `:` | command line: `:doc`, `:send`, `:c note`, `:sendall`, `:sidebar`, `:q`, `:help` |
+| `:` | command line: `:doc`, `:send`, `:copy`, `:c note`, `:sendall`, `:comments`, `:sidebar`, `:q`, `:help` |
 | `Tab` | toggle the sidebar |
 | `?` | key overlay |
 | `Esc` | cancel, clear search, or leave the viewer |
