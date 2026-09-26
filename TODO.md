@@ -34,3 +34,28 @@ From the viewer UI review (findings A1 and A2).
   set `outline: 0` and buttons have no focus style (WCAG 2.4.7).
 - Check focus by hand in the native window; the page tests can cover the
   attributes.
+
+## Decision: what a clipboard send does with its comments
+
+Parked until the current send flow has been used for a while. Today a paste
+that falls back to the clipboard asks "Pasted? y marks sent · n keeps", which
+puts the viewer in CONFIRM mode and blocks sending until answered. `Esc`
+means "keep them" there but "leave" everywhere else, and outside tmux every
+send falls back, so the question comes every time.
+
+Proposal from the product review: a clipboard copy counts as sent. Toast
+"Copied N comments · Cmd-V in the terminal · u brings them back", hide the
+viewer, and let `u` restore the whole batch as pending. That removes the
+question, CONFIRM mode and the send lock.
+
+Settled while discussing it:
+
+- Sending removes comments. They are a draft of one message to the agent; the
+  terminal keeps what was sent. Keeping them would need a sent status or a
+  manual clear, and pulls toward a review system (threads, resolved states).
+- If checking a revision against the comments you sent turns out to matter,
+  the smallest answer is the last sent batch, read-only, until the next send.
+- Changed text stays tracked so the prompt never points at lines that now hold
+  something else, but the viewer can show it in fewer places: keep the `]c`
+  label and the note in the sent text, and drop the status-line count and the
+  sidebar and picker labels.
