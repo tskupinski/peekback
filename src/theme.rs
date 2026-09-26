@@ -55,15 +55,6 @@ mod tests {
     }
 
     #[test]
-    fn every_built_in_theme_has_a_stylesheet() {
-        for (name, _) in THEMES {
-            let path = format!("{}/assets/themes/{name}.css", env!("CARGO_MANIFEST_DIR"));
-            let css = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("missing {path}"));
-            assert!(css.contains(&format!(":root[data-theme=\"{name}\"]")), "{path} must scope its tokens");
-        }
-    }
-
-    #[test]
     fn font_overrides_come_from_the_config() {
         let config = Config { font: Some("My Font".into()), font_size: Some(17.0), ..Default::default() };
         let theme = Theme::from_config(&config);

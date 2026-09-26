@@ -388,10 +388,14 @@ impl App {
                         }
                         None => self.watcher.clear(),
                     }
-                    self.theme = loaded.theme;
                     self.current = Some(loaded.current);
-                    self.view.set_appearance(self.theme.as_ref().and_then(Theme::appearance));
-                    self.view.push(&DaemonMessage::Theme { theme: self.theme.as_ref() });
+                    // The theme comes from the config, so it rarely changes;
+                    // pushing it re-renders the page.
+                    if loaded.theme != self.theme {
+                        self.theme = loaded.theme;
+                        self.view.set_appearance(self.theme.as_ref().and_then(Theme::appearance));
+                        self.view.push(&DaemonMessage::Theme { theme: self.theme.as_ref() });
+                    }
                     self.render();
                     self.refresh_at = Some(Instant::now());
                     self.place();

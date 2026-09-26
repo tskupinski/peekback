@@ -495,7 +495,8 @@ to the resumed process the viewer now shows.
 
 The config file is `~/.config/peekback/config.toml`. Window placement and hotkeys
 are read at daemon startup; bookmarks refresh their configuration on request,
-themes on opening a view, and delivery preferences on sending.
+themes on opening a view (the page is told only when the theme changed), and
+delivery preferences on sending.
 Themes are built in. Each is a stylesheet in `assets/themes/` defining the
 same color tokens for the interface, syntax highlighting and comment markers,
 scoped to `:root[data-theme="<name>"]`, plus an entry in `src/theme.rs` that
@@ -504,8 +505,9 @@ says whether it is light or dark. `theme = "auto"` resolves to `light` or
 a named theme stays, and also pins the native window's appearance. Diagrams
 take their colors from the active theme's tokens. An unknown name is
 reported and replaced by `auto`; the earlier `system` means `auto`.
-`tests/themes.js` requires every theme to define the full token set and to
-meet 4.5:1 for text and 3:1 for the cursor and comment markers. The `font` and
+`tests/themes.js` requires every entry in `src/theme.rs` to have a stylesheet
+and every stylesheet an entry, every theme to define the full token set, and
+every theme to meet 4.5:1 for text and 3:1 for the cursor and comment markers. The `font` and
 `font_size` settings style code and chrome; body text keeps the system font.
 Colors are not read from the terminal.
 

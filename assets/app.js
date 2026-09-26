@@ -44,7 +44,7 @@
     pendingKey: null,
     count: "",
     search: { query: "", matches: [], index: -1 },
-    comments: [], // { id, path, label, quote, note, line, endLine, anchorSource, anchorCount, anchorIndex, changed }
+    comments: [], // { id, owner, path, fileIdentity, label, quote, note, line, endLine, anchorSource, anchorCount, anchorIndex, changed }
     question: null, // { text, yes, no, shown }: the one question, about a clipboard send
     pendingJump: null, // { fileIdentity, line }: where to go once that document renders
     pendingEdit: null, // a comment id to edit once its document renders
@@ -247,8 +247,6 @@
     }
   }
 
-  // The terminal's palette and font, when the daemon could read them. Body
-  // text keeps the system font; the terminal font goes on code and chrome.
   // The daemon names a built-in theme, or "auto" to follow the system
   // between light and dark; every color comes from that theme's stylesheet.
   let themeName = "auto";
@@ -623,11 +621,17 @@
 
   // Bars follow the text when the layout changes: a resize, an image loading.
   if (typeof ResizeObserver === "function") {
-    new ResizeObserver(() => { if (!rendering) { drawGutter(attachedComments()); placeComposer(); } }).observe(docEl);
+    new ResizeObserver(() => { if (!rendering) { drawGutter(attachedHere()); placeComposer(); } }).observe(docEl);
   }
 
-  function attachedComments() {
-    return activeComments().filter((c) => !c.changed && c.fileIdentity === state.doc?.fileIdentity);
+  // This document's comments, and those whose text is still where they say
+  // (a comment from a mouse selection without source lines has no place).
+  function commentsHere() {
+    return activeComments().filter((c) => c.fileIdentity === state.doc?.fileIdentity);
+  }
+
+  function attachedHere() {
+    return commentsHere().filter((c) => !c.changed && c.anchorSource !== null);
   }
   composerInput.addEventListener("keydown", (event) => {
     event.stopPropagation();
@@ -647,8 +651,7 @@
     if (!block) return;
     const start = Number(block.dataset.sourceLine);
     const end = Number(block.dataset.sourceEnd);
-    const here = activeComments().filter((c) => !c.changed && c.fileIdentity === state.doc?.fileIdentity
-      && c.line < end && c.endLine > start);
+    const here = attachedHere().filter((c) => c.line < end && c.endLine > start);
     if (here.length === 0) return setMessage("no comment on this block · c adds one");
     openComposer({ editing: here.at(-1) });
     if (here.length > 1) setMessage(`${here.length} comments here · Space c lists them`);
@@ -859,8 +862,7 @@
   // reaching beyond it was about more than you chose to send.
   function commentsWithin(line, endLine) {
     if (!Number.isInteger(line) || !Number.isInteger(endLine)) return [];
-    return activeComments().filter((c) => !c.changed && c.fileIdentity === state.doc?.fileIdentity
-      && c.line >= line && c.endLine <= endLine);
+    return attachedHere().filter((c) => c.line >= line && c.endLine <= endLine);
   }
 
   // A one-key question in the status line, y or n, where Escape means n.
@@ -935,26 +937,11 @@
     renderStatus();
   }
 
-  // The daemon asks before a session switch would drop these.
+  // Finds where each comment on this document is now, then draws its bar.
   function paintComments() {
     const lines = state.doc?.source.split("\n") ?? [];
-    const here = activeComments().filter((c) => c.fileIdentity === state.doc?.fileIdentity && c.anchorSource !== null);
-    for (const c of here) c.changed = !locate(c, lines);
-    const comments = here.filter((c) => !c.changed);
-    for (const block of state.blocks) {
-      const start = Number(block.dataset.sourceLine);
-      const end = Number(block.dataset.sourceEnd);
-      const attached = comments.filter((c) => c.line < end && c.endLine > start);
-      block.classList.toggle("commented", attached.length > 0);
-      if (attached.length) {
-        block.dataset.commentLabel = `${attached.length} comment${attached.length === 1 ? "" : "s"}`;
-        block.setAttribute("title", attached.map((c) => c.note || "(no note)").join("\n\n"));
-      } else {
-        delete block.dataset.commentLabel;
-        block.removeAttribute("title");
-      }
-    }
-    drawGutter(comments);
+    for (const c of commentsHere()) c.changed = c.anchorSource !== null && !locate(c, lines);
+    drawGutter(attachedHere());
   }
 
   // One bar per comment beside the blocks it covers, laid out from their
@@ -1002,9 +989,7 @@
   // Reads notes without the mouse: steps through this document's comments in
   // order and shows each one's note.
   function nextComment(direction) {
-    const here = activeComments()
-      .filter((c) => c.fileIdentity === state.doc?.fileIdentity)
-      .sort((a, b) => a.line - b.line || a.id - b.id);
+    const here = commentsHere().sort((a, b) => a.line - b.line || a.id - b.id);
     if (here.length === 0) return setMessage("no comments in this document");
     const at = Number(state.blocks[state.cursor]?.dataset.sourceLine ?? -1);
     const current = here.findIndex((c) => c.id === state.currentComment);

@@ -1,5 +1,6 @@
 // Exercise the real frontend event handlers/IPC with a minimal DOM adapter.
-// Layout and native WebView rendering remain manual acceptance checks.
+// Layout and native WebView rendering remain manual acceptance checks. Each
+// scenario boots its own page, so one can fail or change without the others.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -37,10 +38,21 @@ class Element {
   focus() {}
   blur() {}
   scrollIntoView() {}
-  getBoundingClientRect() { return { top: 0, bottom: 20, left: 10, right: 600 }; }
+  // Blocks are laid out 20px per source line, so a bar's place says which
+  // lines it marks.
+  getBoundingClientRect() {
+    return { top: Number(this.dataset.sourceLine ?? 0) * 20, bottom: Number(this.dataset.sourceEnd ?? 1) * 20, left: 10, right: 600 };
+  }
 }
 
-async function main() {
+const source = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
+const marks = [
+  { path: "/home/.claude/CLAUDE.md", label: "~/.claude/CLAUDE.md", touched_at: 1 },
+  { path: "/project/CLAUDE.md", label: "CLAUDE.md", touched_at: 2 },
+];
+
+// A fresh page, and the keys, messages and renders a scenario drives it with.
+function boot() {
   const nodes = new Map();
   const element = id => {
     if (!nodes.has(id)) nodes.set(id, new Element());
@@ -65,12 +77,9 @@ async function main() {
   } });
   const messages = [];
   const schemeListeners = [];
-  let systemDark = false;
-  let mermaidInits = 0;
-  let mermaidOptions = null;
-  let themeTokens = {};
+  const env = { systemDark: false, mermaidInits: 0, mermaidOptions: null, themeTokens: {} };
   const window = Object.assign(new Element(), {
-    matchMedia: () => ({ get matches() { return systemDark; }, addEventListener(_, fn) { schemeListeners.push(fn); } }),
+    matchMedia: () => ({ get matches() { return env.systemDark; }, addEventListener(_, fn) { schemeListeners.push(fn); } }),
     markdownit: () => ({ use() { return this; }, render(source) { return source; } }),
     ipc: { postMessage: text => messages.push(JSON.parse(text)) },
     scrollTo() {},
@@ -78,10 +87,11 @@ async function main() {
   });
   element("no-documents").textContent = "This session has not written any Markdown yet. Its first document opens here.";
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../assets/app.js"), "utf8"), {
-    window, document, console, CSS: {}, TextEncoder, mermaid: { initialize(options) { mermaidInits += 1; mermaidOptions = options; } }, renderMathInElement() {},
+    window, document, console, CSS: {}, TextEncoder,
+    mermaid: { initialize(options) { env.mermaidInits += 1; env.mermaidOptions = options; } }, renderMathInElement() {},
     localStorage: { getItem() { return null; }, setItem() {} },
     setInterval() {}, setTimeout() {}, clearTimeout() {}, requestAnimationFrame() {},
-    getComputedStyle: () => ({ getPropertyValue: k => themeTokens[k.slice(2)] ?? "", colorScheme: systemDark ? "dark" : "light" }),
+    getComputedStyle: () => ({ getPropertyValue: k => env.themeTokens[k.slice(2)] ?? "", colorScheme: env.systemDark ? "dark" : "light" }),
   });
   let context = { generation: 0, session: null };
   const receive = message => {
@@ -99,13 +109,47 @@ async function main() {
     assert.equal(typeof messages.at(-1).request_id, "number");
     assert.deepEqual(messages.at(-1), { context, request_id: messages.at(-1).request_id, ...expected });
   };
+  const key = key => window.dispatch("keydown", { key });
+  const command = value => {
+    key(":");
+    element("cmd-input").value = value;
+    element("cmd-input").dispatch("keydown", { key: "Enter" });
+  };
+  const render = async (path = "/comments.md", text = source) => {
+    receive({ type: "render", path, source: text, session: { session_id: "reviewer" }, documents: [] });
+    await new Promise(setImmediate);
+  };
+  // S opens the review sheet; Enter in it sends. An empty opening line keeps
+  // these tests' prompts to the comments themselves.
+  const sendAll = () => {
+    command("sendall");
+    element("review-intro").value = "";
+    element("review-intro").dispatch("input");
+    element("review-intro").dispatch("keydown", { key: "Enter" });
+  };
+  const bars = () => element("doc").children.find(el => el.className === "comment-gutter")?.children ?? [];
+  // The comments drawn in the margin: the source lines each bar spans, and its note.
+  const marked = () => bars().map(bar => {
+    const top = parseFloat(bar.style.top);
+    return { line: top / 20, endLine: (top + parseFloat(bar.style.height)) / 20, note: bar.title };
+  });
+  return {
+    element, document, window, messages, schemeListeners, env, receive, expectRequest,
+    key, command, render, sendAll, bars, marked, context: () => context, input: element("picker-input"),
+  };
+}
+
+const scenarios = [];
+const scenario = (name, run) => scenarios.push({ name, run });
+
+scenario("Picker: scopes, scratchpad listing, filtering, caps, >30 results, opening, refresh, bookmarks", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
   receive({ type: "render", path: "/current.md", source: "", session: { session_id: "live" },
     documents: [{ path: "/current.md", label: "current.md", touched_at: 1 }] });
   await new Promise(setImmediate);
   window.dispatch("keydown", { key: "p", ctrlKey: true });
   assert.equal(element("picker-current").attributes["aria-pressed"], "true");
   assert.equal(element("picker-list").children[0].children[0].textContent, "current.md");
-  const input = element("picker-input");
   input.dispatch("keydown", { key: "Tab" });
   expectRequest({ type: "list-scratchpad" });
   assert.equal(element("picker-scratchpad").attributes["aria-pressed"], "true");
@@ -143,7 +187,6 @@ async function main() {
   assert.match(element("picker-note").textContent, /has ended, or it is not a Claude Code session/);
   input.dispatch("keydown", { key: "r", ctrlKey: true });
   assert.match(element("picker-note").textContent, /Loading/);
-  console.log("Picker passed: scopes, scratchpad listing, filtering, caps, >30 results, opening, refresh, no scratchpad.");
 
   element("picker-bookmarks").dispatch("click");
   expectRequest({ type: "list-bookmarks" });
@@ -151,10 +194,6 @@ async function main() {
   assert.match(element("picker-note").textContent, /Loading bookmarks/);
   receive({ type: "bookmarks", documents: [], found: 0, warnings: [] });
   assert.match(element("picker-list").children[0].textContent, /No bookmarked Markdown files\. Add bookmarks = /);
-  const marks = [
-    { path: "/home/.claude/CLAUDE.md", label: "~/.claude/CLAUDE.md", touched_at: 1 },
-    { path: "/project/CLAUDE.md", label: "CLAUDE.md", touched_at: 2 },
-  ];
   input.dispatch("keydown", { key: "r", ctrlKey: true });
   expectRequest({ type: "list-bookmarks" }); // Ctrl-R rereads the config.
   receive({ type: "bookmarks", documents: marks, found: 250, warnings: ["docs/[.md: unclosed character class"] });
@@ -177,46 +216,23 @@ async function main() {
   window.dispatch("keydown", { key: "p", ctrlKey: true });
   expectRequest({ type: "list-bookmarks" }); // Reopening keeps the scope and refreshes.
   input.dispatch("keydown", { key: "Escape" });
-  console.log("Bookmarks passed: scope cycling, config hint, cap and warnings, refresh, opening.");
+});
 
-  input.dispatch("keydown", { key: "Escape" });
-  const key = key => window.dispatch("keydown", { key });
-  const command = value => {
-    key(":");
-    element("cmd-input").value = value;
-    element("cmd-input").dispatch("keydown", { key: "Enter" });
-  };
-  const source = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
-  const render = async (path = "/comments.md", text = source) => {
-    receive({ type: "render", path, source: text, session: { session_id: "reviewer" }, documents: [] });
-    await new Promise(setImmediate);
-  };
-  // S opens the review sheet; Enter in it sends. An empty opening line keeps
-  // these tests' prompts to the comments themselves.
-  const sendAll = () => {
-    command("sendall");
-    element("review-intro").value = "";
-    element("review-intro").dispatch("input");
-    element("review-intro").dispatch("keydown", { key: "Enter" });
-  };
-  const marked = () => element("doc").children.filter(el => el.classList.contains("commented"));
+scenario("Comment anchoring: ranges, document switches, moved and changed text, send lifecycle", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
   await render();
   key("v"); key("j"); command("c Review both paragraphs");
-  assert.equal(marked().length, 2);
-  assert.equal(marked()[0].dataset.commentLabel, "1 comment");
-  assert.equal(marked()[0].attributes.title, "Review both paragraphs");
+  assert.deepEqual(marked(), [{ line: 0, endLine: 3, note: "Review both paragraphs" }]); // One bar for the range.
   command("c Another note");
-  assert.equal(marked()[1].dataset.commentLabel, "2 comments");
+  assert.deepEqual(marked().map(m => m.note), ["Review both paragraphs", "Another note"]);
   await render("/other.md");
   assert.equal(marked().length, 0);
   await render();
   assert.equal(marked().length, 2);
   await render("/comments.md", "New paragraph.\n\n" + source);
-  assert.equal(marked().length, 2); // Moved text keeps its comments.
-  assert.equal(marked()[0].dataset.sourceLine, "2");
+  assert.deepEqual(marked().map(m => m.line), [2, 4]); // Moved text keeps its comments.
   await render("/comments.md", source.replace("First paragraph.", "First, rewritten."));
-  assert.equal(marked().length, 1); // Changed text is reported, never guessed at.
-  assert.equal(marked()[0].attributes.title, "Another note");
+  assert.deepEqual(marked().map(m => m.note), ["Another note"]); // Changed text is reported, never guessed at.
   assert.equal(element("comments").children[0].children[1].hidden, false);
   assert.match(element("comments").children[0].children[1].textContent, /text changed or removed/);
   assert.equal(element("status-pending").textContent, "2 pending · 1 changed · S send");
@@ -234,12 +250,26 @@ async function main() {
   sendAll();
   command("c Added while sending");
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
-  assert.equal(marked().length, 1); // Only the acknowledged batch disappears.
-  assert.equal(marked()[0].attributes.title, "Added while sending");
+  assert.deepEqual(marked().map(m => m.note), ["Added while sending"]); // Only the acknowledged batch disappears.
   element("comments").children[0].children[3].dispatch("click");
   assert.equal(marked().length, 0);
-  assert.equal(element("doc").children[1].attributes.title, undefined);
 
+  // With one of two identical blocks deleted, there is no telling which was
+  // yours: the comment is reported, not moved to the other.
+  const repeated = "Same.\n\nMiddle.\n\nSame.";
+  await render("/repeated.md", repeated);
+  key("G"); command("c On the second Same");
+  await render("/repeated.md", "Same.\n\nMiddle.");
+  assert.equal(marked().length, 0);
+  assert.equal(element("comments").children[0].children[1].hidden, false);
+  await render("/repeated.md", "Intro.\n\n" + repeated);
+  assert.deepEqual(marked().map(m => m.line), [6]); // Both copies back: it follows the move.
+  element("comments").children[0].children[3].dispatch("click");
+});
+
+scenario("Composer: writing, editing, undo, the prompt's line references", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  await render();
   // Writing a note happens in a box under the block, all from the keyboard.
   key("g"); key("g"); key("j"); key("c");
   assert.equal(element("mode").textContent, "COMMENT");
@@ -253,7 +283,7 @@ async function main() {
   composer.dispatch("keydown", { key: "Enter" });
   assert.equal(element("composer").hidden, true);
   assert.equal(element("mode").textContent, "NORMAL");
-  assert.equal(marked()[0].attributes.title, "First line\nsecond line");
+  assert.equal(marked()[0].note, "First line\nsecond line");
   key("c"); composer.value = "Never mind"; composer.dispatch("keydown", { key: "Escape" });
   assert.equal(element("composer").hidden, true);
   assert.equal(element("comments").children.length, 1); // Esc adds nothing.
@@ -262,7 +292,7 @@ async function main() {
   assert.equal(composer.value, "First line\nsecond line");
   composer.value = "Reworded";
   composer.dispatch("keydown", { key: "Enter" });
-  assert.equal(marked()[0].attributes.title, "Reworded");
+  assert.equal(marked()[0].note, "Reworded");
   assert.equal(element("comments").children.length, 1);
   key("g"); key("g"); key("C");
   assert.match(element("status-msg").textContent, /no comment on this block · c adds one/);
@@ -303,7 +333,11 @@ async function main() {
   assert.match(messages.at(-1).text, /Comments on `\/comments\.md`:\n\n`\/comments\.md#L3`\n> Second paragraph\.\n\nReworded$/);
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
   assert.equal(element("comments").children.length, 0);
+});
 
+scenario("Review sheet: preview, opening line, one comment, no session", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  await render();
   // Send all reviews first: the sheet shows the target and exactly what will
   // be pasted, with an opening line you can change.
   command("c Review this");
@@ -313,7 +347,7 @@ async function main() {
   assert.equal(element("mode").textContent, "REVIEW");
   assert.equal(element("review").hidden, false);
   assert.equal(element("review-target").textContent, "Send 1 comment to / · Claude Code");
-  assert.equal(intro.value, "");  // The line last sent with; these tests sent without one.
+  assert.equal(intro.value, "Address these review comments."); // Until you send with another.
   intro.value = "Address these review comments.";
   intro.dispatch("input");
   assert.match(element("review-preview").textContent, /^Address these review comments\.\n\nComments on `\/comments\.md`:\n\n`\/comments\.md#L1`\n> First paragraph\.\n\nReview this$/);
@@ -356,11 +390,13 @@ async function main() {
   assert.equal(messages.length, beforeStandalone);
   intro.dispatch("keydown", { key: "Escape" });
   element("comments").children[0].children[3].dispatch("click");
-  await render();
+});
 
+scenario("Margin bars: one per comment, lanes, stepping with ]c and [c", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  await render();
   // One bar per comment beside its blocks: a range is one mark, not three, and
   // overlapping comments sit in lanes side by side.
-  const bars = () => element("doc").children.find(el => el.className === "comment-gutter")?.children ?? [];
   key("g"); key("g"); key("v"); key("j"); key("j"); command("c Whole section");
   key("g"); key("g"); key("j"); command("c Just the second");
   assert.equal(bars().length, 2);
@@ -382,7 +418,11 @@ async function main() {
   assert.equal(element("status-pending").hidden, true);
   key("]"); key("c");
   assert.match(element("status-msg").textContent, /no comments in this document/);
+});
 
+scenario("Selection sends: comments inside go along, those reaching beyond stay", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  await render();
   // Sending a selection takes the comments inside it along, and sends them.
   key("g"); key("g"); command("c On the first");
   key("G"); command("c On the last");
@@ -404,20 +444,10 @@ async function main() {
   assert.doesNotMatch(messages.at(-1).text, /On both/);
   receive({ type: "send-result", purpose: "selection", ok: true, text: "sent" });
   element("comments").children[0].children[3].dispatch("click");
-  // With one of two identical blocks deleted, there is no telling which was
-  // yours: the comment is reported, not moved to the other.
-  const repeated = "Same.\n\nMiddle.\n\nSame.";
-  await render("/repeated.md", repeated);
-  key("G"); command("c On the second Same");
-  await render("/repeated.md", "Same.\n\nMiddle.");
-  assert.equal(marked().length, 0);
-  assert.equal(element("comments").children[0].children[1].hidden, false);
-  await render("/repeated.md", "Intro.\n\n" + repeated);
-  assert.equal(marked().length, 1); // Both copies back: it follows the move.
-  assert.equal(marked()[0].dataset.sourceLine, "6");
-  element("comments").children[0].children[3].dispatch("click");
-  await render();
+});
 
+scenario("Size limit: refused in the page, not left in flight", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
   // Too large for the daemon: refused in the page, and not left "in flight".
   const huge = "x".repeat(4.5 * 1024 * 1024);
   await render("/huge.md", huge);
@@ -429,8 +459,11 @@ async function main() {
   sendAll();
   assert.match(element("toast").textContent, /Too large to send/); // Not "still sending".
   element("comments").children[0].children[3].dispatch("click");
-  await render();
+});
 
+scenario("Leaving a document: the note is saved with it, a reload keeps it open", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
+  await render();
   // Leaving the document saves the note with it; the box does not follow.
   key("g"); key("g"); key("c");
   element("composer-input").value = "Keep the original target";
@@ -439,7 +472,7 @@ async function main() {
   assert.match(element("toast").textContent, /note saved with its document/);
   assert.equal(marked().length, 0);
   await render();
-  assert.equal(marked()[0].attributes.title, "Keep the original target");
+  assert.equal(marked()[0].note, "Keep the original target");
   key("g"); key("g"); key("c"); // An empty note is just closed.
   await render("/other.md");
   assert.equal(element("composer").hidden, true);
@@ -454,11 +487,11 @@ async function main() {
   assert.equal(element("mode").textContent, "COMMENT");
   assert.equal(element("composer").hidden, false);
   element("composer-input").dispatch("keydown", { key: "Enter" });
-  assert.deepEqual(marked().map(b => b.dataset.sourceLine), ["2", "4"]); // Followed its text.
-  element("comments").children.forEach(() => element("comments").children[0].children[3].dispatch("click"));
-  await render();
-  console.log("Comments passed: ranges, overlapping notes, document switches, stale anchors, removal, send lifecycle, captured targets.");
+  assert.deepEqual(marked(), [{ line: 2, endLine: 5, note: "Written during a reload" }]); // Followed its text.
+});
 
+scenario("Links: HTML and SVG anchors never navigate the webview", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
   const anchor = (attributes, xlink = {}) => ({
     getAttribute: name => attributes[name] ?? null,
     getAttributeNS: (ns, name) => ns === "http://www.w3.org/1999/xlink" ? xlink[name] ?? null : null,
@@ -476,8 +509,10 @@ async function main() {
   assert.equal(messages.length, sent + 1);
   assert.equal(click(anchor({ href: "#section" })), false);
   assert.equal(click(anchor({})), false);
-  console.log("Links passed: HTML and SVG anchors never navigate the webview.");
+});
 
+scenario("Empty session: placeholder, inert actions, picker hint, first document, scan notes", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
   // A focused Codex pane before its first prompt: no session exists yet.
   receive({ type: "render", path: null, source: "", session: null, documents: [], unstarted: "Codex" });
   await new Promise(setImmediate);
@@ -508,15 +543,17 @@ async function main() {
   assert.match(metas[1], /· found by scan$/);
   assert.match(metas[2], /maybe another session's$/);
   input.dispatch("keydown", { key: "Escape" });
-  console.log("Empty session passed: placeholder, inert actions, picker hint, first document replaces it, scan notes.");
+});
 
+scenario("Session isolation: drafts, delivery identity, acknowledgments, copied drafts, stale listings", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
   const project = async (id, text, file = "README.md") => {
     receive({ type: "render", path: `/${id}/${file}`, file_identity: `/${id}/${file}`, source: text,
       session: { session_id: id, cwd: `/${id}` }, documents: [] });
     await new Promise(setImmediate);
   };
   await project("a", "Project A"); command("c Fix A");
-  const aContext = context;
+  const aContext = context();
   // A resume is the same session: its comments stay.
   receive({ type: "render", path: "/a/README.md", file_identity: "/a/README.md", source: "Project A",
     session: { session_id: "a", cwd: "/a" }, documents: [],
@@ -645,7 +682,10 @@ async function main() {
   key("s"); key("c");
   assert.equal(messages.length, beforeRender); // No action may use the previous render's block ranges.
   await new Promise(setImmediate);
+});
 
+scenario("Themes: auto follows the system, pinned themes stay, font overrides, diagram colors", async page => {
+  const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
   // Auto follows the system between the light and dark themes, and diagrams
   // follow along; a pinned theme ignores the system.
   const root = document.documentElement;
@@ -653,29 +693,33 @@ async function main() {
   assert.equal(root.dataset.theme, "light");
   assert.equal(root.style.get("--mono"), '"My Mono", ui-monospace, Menlo, monospace');
   assert.equal(root.style.get("--mono-size"), "14px");
-  const initsBefore = mermaidInits;
-  systemDark = true;
+  const initsBefore = env.mermaidInits;
+  env.systemDark = true;
   for (const fn of schemeListeners) fn({ matches: true });
   assert.equal(root.dataset.theme, "dark");
-  assert.equal(mermaidInits, initsBefore + 1);
+  assert.equal(env.mermaidInits, initsBefore + 1);
   receive({ type: "theme", theme: { name: "light", font_family: null, font_size: null } });
   assert.equal(root.dataset.theme, "light");
   assert.equal(root.style.get("--mono"), undefined);
-  const pinnedInits = mermaidInits;
+  const pinnedInits = env.mermaidInits;
   for (const fn of schemeListeners) fn({ matches: true });
   assert.equal(root.dataset.theme, "light");
-  assert.equal(mermaidInits, pinnedInits);
-  systemDark = false;
+  assert.equal(env.mermaidInits, pinnedInits);
+  env.systemDark = false;
   // Diagrams get plain colors: Mermaid cannot parse CSS color-mix().
-  themeTokens = { bg: "#ffffff", fg: "#000000", accent: "#0000ff", annotate: "#ff0000", muted: "#555555", "code-bg": "#eeeeee" };
+  env.themeTokens = { bg: "#ffffff", fg: "#000000", accent: "#0000ff", annotate: "#ff0000", muted: "#555555", "code-bg": "#eeeeee" };
   receive({ type: "theme", theme: { name: "light", font_family: null, font_size: null } });
-  assert.equal(mermaidOptions.theme, "base");
-  assert.equal(mermaidOptions.themeVariables.primaryColor, "#d6d6ff");
-  assert.equal(mermaidOptions.themeVariables.secondaryColor, "#ffd6d6");
-  for (const value of Object.values(mermaidOptions.themeVariables)) assert.doesNotMatch(String(value), /color-mix/);
-  themeTokens = {};
-  console.log("Session isolation passed: drafts, delivery identity, acknowledgments, copied drafts, stale listings, rendering actions.");
-  console.log("Themes applied: auto follows the system, pinned themes stay, font overrides.");
+  assert.equal(env.mermaidOptions.theme, "base");
+  assert.equal(env.mermaidOptions.themeVariables.primaryColor, "#d6d6ff");
+  assert.equal(env.mermaidOptions.themeVariables.secondaryColor, "#ffd6d6");
+  for (const value of Object.values(env.mermaidOptions.themeVariables)) assert.doesNotMatch(String(value), /color-mix/);
+});
+
+async function main() {
+  for (const { name, run } of scenarios) {
+    await run(boot());
+    console.log(`Passed ${name}.`);
+  }
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });
