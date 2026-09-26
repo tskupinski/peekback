@@ -1,11 +1,14 @@
+//! Recording what a harness reports about a session: turn boundaries, file
+//! events, and the live registry entry used for sending. Harnesses decode
+//! their own payloads into an `Observation`; nothing here reads them.
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Result;
 use serde_json::Value;
-use session_activity::Store;
+use session_activity::{FileEvent, Store};
 
 use crate::capture::{self, Turn};
 use crate::capture_jobs::Retry;
@@ -26,16 +29,58 @@ pub fn terminal() -> Terminal {
     }
 }
 
-pub(crate) fn register(root: &Path, harness: Harness, input: &Value, now: i64, terminal: Terminal) -> Result<()> {
-    let Some(id) = input["session_id"].as_str().filter(|id| session_activity::valid_id(id)) else { return Ok(()) };
-    let Some(event) = input["hook_event_name"].as_str() else { return Ok(()) };
-    let supported = matches!(event, "SessionStart" | "UserPromptSubmit" | "PostToolUse" | "Stop" | "SessionEnd")
-        || (harness == Harness::Claude && event == "PostToolUseFailure");
-    if !supported {
-        return Ok(());
+/// One lifecycle event of a session, decoded from whatever its harness sends.
+#[derive(Debug, PartialEq)]
+pub struct Observation {
+    pub harness: Harness,
+    pub session_id: String,
+    pub event: Event,
+    /// `None` when the harness sent no usable place: the turn still closes,
+    /// but the registry entry is not rewritten.
+    pub place: Option<Place>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Place {
+    pub cwd: PathBuf,
+    pub transcript: Option<PathBuf>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Event {
+    SessionStarted(Start),
+    PromptSubmitted,
+    ToolUsed(Vec<FileEvent>),
+    TurnEnded,
+    SessionEnded,
+}
+
+/// Compaction continues the open turn; any other start means the process
+/// that owned it is gone.
+#[derive(Debug, PartialEq)]
+pub enum Start {
+    New,
+    Compaction,
+}
+
+/// One hook invocation: the harness's own payload, decoded, then recorded.
+pub(crate) fn hook(
+    root: &Path,
+    harness: Harness,
+    input: &Value,
+    now: i64,
+    terminal: impl FnOnce() -> Terminal,
+) -> Result<()> {
+    match harness.decode(input, now)? {
+        Some(observation) => record(root, observation, now, terminal()),
+        None => Ok(()),
     }
-    let _lock = crate::lifecycle::lock(root, id)?;
-    let key = harness.key(id);
+}
+
+pub(crate) fn record(root: &Path, observation: Observation, now: i64, terminal: Terminal) -> Result<()> {
+    let Observation { harness, session_id: id, event, place } = observation;
+    let _lock = crate::lifecycle::lock(root, &id)?;
+    let key = harness.key(id.as_str());
     let dir = root.join("sessions");
     let file = dir.join(format!("{id}.json"));
     let previous: Option<Session> = fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok());
@@ -45,22 +90,21 @@ pub(crate) fn register(root: &Path, harness: Harness, input: &Value, now: i64, t
     );
     let store = Store::new(root.join("activity"));
     let open_turn = previous.as_ref().and_then(|s| s.turn_started_at);
-    // Compaction can happen inside a turn; any other start means the process
-    // that owned the open turn is gone.
-    let compacting = event == "SessionStart" && input["source"] == "compact";
-    let closed = match (event, open_turn, previous.as_ref()) {
-        ("Stop", Some(started_at), _) => Some(Turn { started_at, ended_at: now.max(started_at) }),
-        // No Stop came: interrupted with Esc, quit mid-turn, or the agent died.
-        ("UserPromptSubmit" | "SessionStart" | "SessionEnd", Some(started_at), Some(previous)) if !compacting => {
-            Some(capture::abandoned(previous, started_at))
-        }
+    let closed = match (&event, open_turn, previous.as_ref()) {
+        (Event::TurnEnded, Some(started_at), _) => Some(Turn { started_at, ended_at: now.max(started_at) }),
+        // No turn end came: interrupted with Esc, quit mid-turn, or the agent died.
+        (
+            Event::PromptSubmitted | Event::SessionStarted(Start::New) | Event::SessionEnded,
+            Some(started_at),
+            Some(previous),
+        ) => Some(capture::abandoned(previous, started_at)),
         _ => None,
     };
-    let closing = closed.is_some() || event == "SessionEnd" || event == "Stop";
+    let closing = closed.is_some() || matches!(event, Event::SessionEnded | Event::TurnEnded);
     let capture_context = previous.as_ref().filter(|_| closing).map(|s| {
         let mut context = s.clone();
-        if event == "Stop" && context.transcript_path.is_none() {
-            context.transcript_path = input["transcript_path"].as_str().filter(|p| !p.is_empty()).map(Into::into);
+        if event == Event::TurnEnded && context.transcript_path.is_none() {
+            context.transcript_path = place.as_ref().and_then(|place| place.transcript.clone());
         }
         context
     });
@@ -76,12 +120,12 @@ pub(crate) fn register(root: &Path, harness: Harness, input: &Value, now: i64, t
             }
         }
     };
-    let retained = if closed.is_some() || event == "SessionEnd" {
+    let retained = if closed.is_some() || event == Event::SessionEnded {
         previous.as_ref().map_or(Ok(()), |s| crate::turn_history::record(root, s, closed))
     } else {
         Ok(())
     };
-    if event == "SessionEnd" {
+    if event == Event::SessionEnded {
         // Closing the session must survive an interrupted capture.
         crate::lifecycle::mark_ended(root, &key)?;
         let captured = crate::capture_jobs::retry(root, &key, Retry::Automatic);
@@ -89,17 +133,13 @@ pub(crate) fn register(root: &Path, harness: Harness, input: &Value, now: i64, t
         without_job();
         return queued.and(retained).and(captured);
     }
-    let Some(cwd) = input["cwd"].as_str().map(Path::new).filter(|p| p.is_absolute()) else {
+    let Some(place) = place else {
         without_job();
         return queued;
     };
-    if !input["transcript_path"].is_null() && !input["transcript_path"].is_string() {
-        without_job();
-        return queued;
-    }
     let mut session = Session {
-        session_id: id.into(),
-        incarnation: if event == "SessionStart" && !compacting || previous.is_none() {
+        session_id: id.clone(),
+        incarnation: if event == Event::SessionStarted(Start::New) || previous.is_none() {
             format!(
                 "{}-{}",
                 std::process::id(),
@@ -109,20 +149,15 @@ pub(crate) fn register(root: &Path, harness: Harness, input: &Value, now: i64, t
             previous.as_ref().map(|s| s.incarnation.clone()).unwrap_or_default()
         },
         harness,
-        cwd: cwd.to_owned(),
+        cwd: place.cwd,
         terminal,
-        transcript_path: input["transcript_path"]
-            .as_str()
-            .filter(|p| !p.is_empty())
-            .map(Into::into)
-            .or_else(|| previous.as_ref().and_then(|s| s.transcript_path.clone())),
+        transcript_path: place.transcript.or_else(|| previous.as_ref().and_then(|s| s.transcript_path.clone())),
         started_at: previous.as_ref().map_or(now, |s| s.started_at),
         last_active_at: previous.as_ref().map_or(now, |s| now.max(s.last_active_at)),
         written_files: previous.as_ref().map_or_else(Vec::new, |s| s.written_files.clone()),
         turn_started_at: match event {
-            "UserPromptSubmit" => Some(now),
-            "Stop" => None,
-            "SessionStart" if !compacting => None,
+            Event::PromptSubmitted => Some(now),
+            Event::TurnEnded | Event::SessionStarted(Start::New) => None,
             _ => open_turn,
         },
         recent_turns: previous.as_ref().map_or_else(Vec::new, |s| s.recent_turns.clone()),
@@ -130,16 +165,19 @@ pub(crate) fn register(root: &Path, harness: Harness, input: &Value, now: i64, t
     if let Some(turn) = closed {
         capture::remember(&mut session.recent_turns, turn);
     }
-    store.append(&session.activity_key(), &session_activity::hook_events(harness.into(), input, now)?)?;
-    // Late tools may contribute useful history, but only SessionStart can
+    if let Event::ToolUsed(events) = &event {
+        store.append(&session.activity_key(), events)?;
+    }
+    // Late tools may contribute useful history, but only a session start can
     // explicitly reopen a session after an end marker has been published.
-    if event != "SessionStart" && crate::lifecycle::ended(root, &key) {
+    let starting = matches!(event, Event::SessionStarted(_));
+    if !starting && crate::lifecycle::ended(root, &key) {
         without_job();
         return queued;
     }
     // A failed capture must still record the new turn state, so its error is
     // reported after the registry write.
-    if event == "Stop" && previous.is_none() {
+    if event == Event::TurnEnded && previous.is_none() {
         crate::capture_jobs::enqueue(root, &session, None)?;
     }
     crate::lifecycle::ensure_dir(&dir)?;
@@ -163,7 +201,7 @@ pub(crate) fn register(root: &Path, harness: Harness, input: &Value, now: i64, t
         fs::rename(&tmp, &file)?;
         #[cfg(unix)]
         fs::File::open(&dir)?.sync_all()?;
-        if event == "SessionStart" {
+        if starting {
             crate::lifecycle::resume(root, &key)?;
         }
         Ok(())
@@ -174,7 +212,7 @@ pub(crate) fn register(root: &Path, harness: Harness, input: &Value, now: i64, t
     result?;
     without_job();
     // Tool hooks come many times a turn; boundaries are enough to retry at.
-    if matches!(event, "PostToolUse" | "PostToolUseFailure") {
+    if matches!(event, Event::ToolUsed(_)) {
         return queued.and(retained);
     }
     let captured = crate::capture_jobs::retry(root, &key, Retry::Automatic);

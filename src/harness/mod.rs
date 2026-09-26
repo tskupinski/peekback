@@ -5,10 +5,15 @@
 
 mod claude;
 mod codex;
+mod hook_json;
 
+use anyhow::Result;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use session_activity::SessionKey;
+
+use crate::record::Observation;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -52,6 +57,13 @@ impl Harness {
         match self {
             Harness::Claude => claude::SESSION_ENV,
             Harness::Codex => codex::SESSION_ENV,
+        }
+    }
+
+    /// What one invocation of the harness's integration reports.
+    pub fn decode(self, input: &Value, now: i64) -> Result<Option<Observation>> {
+        match self {
+            Harness::Claude | Harness::Codex => hook_json::decode(self, input, now),
         }
     }
 

@@ -55,7 +55,7 @@ impl Fixture {
             }],
             ..Default::default()
         };
-        crate::hooks::register(&self.0.join("state"), agent, &input, crate::registry::now_unix(), terminal).unwrap();
+        crate::record::hook(&self.0.join("state"), agent, &input, crate::registry::now_unix(), || terminal).unwrap();
     }
 }
 
@@ -92,7 +92,7 @@ fn hook_at(f: &Fixture, event: &str, now: i64, extra: Value) {
     let mut input =
         json!({"session_id":"test-session", "hook_event_name":event, "cwd":f.project(), "transcript_path":null});
     input.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
-    crate::hooks::register(&f.0.join("state"), Harness::Claude, &input, now, Default::default()).unwrap();
+    crate::record::hook(&f.0.join("state"), Harness::Claude, &input, now, Default::default).unwrap();
 }
 
 fn store(f: &Fixture) -> session_activity::Store {
@@ -368,10 +368,10 @@ fn delayed_hooks_do_not_move_activity_backwards_or_erase_transcript() {
     let f = Fixture::new();
     let input = json!({"session_id":"test-session", "cwd":f.project(), "transcript_path":"/tmp/history.jsonl",
         "hook_event_name":"SessionStart"});
-    crate::hooks::register(&f.0.join("state"), Harness::Codex, &input, 200, Default::default()).unwrap();
+    crate::record::hook(&f.0.join("state"), Harness::Codex, &input, 200, Default::default).unwrap();
     let input = json!({"session_id":"test-session", "cwd":f.project(), "transcript_path":null,
         "hook_event_name":"Stop"});
-    crate::hooks::register(&f.0.join("state"), Harness::Codex, &input, 100, Default::default()).unwrap();
+    crate::record::hook(&f.0.join("state"), Harness::Codex, &input, 100, Default::default).unwrap();
     let session = f.session();
     assert_eq!(session.last_active_at, 200);
     assert_eq!(session.transcript_path, Some("/tmp/history.jsonl".into()));
@@ -420,6 +420,54 @@ fn an_interrupted_turn_is_closed_by_the_next_prompt_and_compaction_keeps_it_open
     assert!(f.session().turn_started_at.is_some());
     f.hook(None, "SessionStart", json!({"source": "resume"}));
     assert!(f.session().turn_started_at.is_none()); // The process that owned it is gone.
+}
+
+#[test]
+fn the_lifecycle_is_recorded_from_observations_without_any_hook_payload() {
+    use crate::record::{Event, Observation, Place, Start};
+    use session_activity::{FileEvent, Operation, Source};
+
+    let f = Fixture::new();
+    let root = f.0.join("state");
+    let now = crate::registry::now_unix();
+    let observe = |event, at| {
+        let place = Some(Place { cwd: f.project(), transcript: None });
+        let observation = Observation { harness: Harness::Codex, session_id: "test-session".into(), event, place };
+        crate::record::record(&root, observation, at, Default::default()).unwrap();
+    };
+    let written = f.project().join("written.md");
+    let key = Harness::Codex.key("test-session");
+    observe(Event::SessionStarted(Start::New), now - 60);
+    observe(Event::PromptSubmitted, now - 50);
+    fs::write(&written, "# Written").unwrap();
+    let edit = FileEvent::new(&key, &f.project(), &written, now - 40, Operation::Write, Source::Hook);
+    observe(Event::ToolUsed(vec![edit]), now - 40);
+    assert!(f.session().turn_started_at.is_some());
+    observe(Event::TurnEnded, now);
+    assert_eq!(f.session().harness, Harness::Codex);
+    assert!(f.session().turn_started_at.is_none());
+    assert_eq!(documents(&f), [written]);
+    let sources: Vec<_> = store(&f).read(&key).unwrap().events.into_iter().map(|e| e.source).collect();
+    assert!(sources.contains(&Source::Hook) && sources.contains(&Source::ProjectScan), "{sources:?}");
+    observe(Event::SessionEnded, now);
+    assert!(!f.record().exists());
+}
+
+#[test]
+fn a_hook_without_a_usable_place_still_closes_the_turn_but_keeps_the_record() {
+    for unusable in [json!({"cwd": "relative"}), json!({"transcript_path": 7})] {
+        let f = Fixture::new();
+        let written = f.project().join("written.md");
+        f.hook(None, "SessionStart", json!({}));
+        f.hook(None, "UserPromptSubmit", json!({}));
+        fs::write(&written, "# Written").unwrap();
+        f.hook(None, "Stop", unusable.clone());
+        let pending = f.0.join("state/pending-captures/claude/test-session");
+        assert_eq!(fs::read_dir(&pending).map(Iterator::count).unwrap_or(0), 1, "{unusable}");
+        assert!(f.session().turn_started_at.is_some(), "{unusable}");
+        f.hook(None, "UserPromptSubmit", json!({}));
+        assert_eq!(documents(&f), [written.clone()], "{unusable}");
+    }
 }
 
 #[test]
@@ -564,7 +612,7 @@ fn a_session_left_idle_after_an_interrupt_does_not_share_other_sessions_files() 
     let register = |id: &str, event: &str, at: i64, transcript: &std::path::Path| {
         let input =
             json!({"session_id": id, "hook_event_name": event, "cwd": f.project(), "transcript_path": transcript});
-        crate::hooks::register(&root, Harness::Claude, &input, at, Default::default()).unwrap();
+        crate::record::hook(&root, Harness::Claude, &input, at, Default::default).unwrap();
     };
     let (idle, busy) = (f.0.join("idle.jsonl"), f.0.join("busy.jsonl"));
     register("idle", "SessionStart", now - 7_200, &idle);
@@ -649,8 +697,7 @@ fn an_unwritable_turn_history_does_not_keep_an_ended_session_live() {
     fs::write(root.join("turns"), "not a directory").unwrap();
     let input = json!({"session_id":"test-session", "hook_event_name":"SessionEnd", "cwd":f.project()});
     assert!(
-        crate::hooks::register(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default())
-            .is_err()
+        crate::record::hook(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default).is_err()
     );
     assert!(!f.record().exists());
     assert!(crate::registry::load_all_in(&root).is_empty());
@@ -665,7 +712,7 @@ fn an_unsavable_capture_job_still_closes_the_turn_and_the_session() {
     fs::write(f.project().join("new.md"), "# New").unwrap();
     let hook = |event: &str| {
         let input = json!({"session_id":"test-session", "hook_event_name":event, "cwd":f.project()});
-        crate::hooks::register(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default())
+        crate::record::hook(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default)
     };
     assert!(hook("Stop").is_err());
     assert!(f.session().turn_started_at.is_none());
@@ -684,8 +731,7 @@ fn damaged_turn_history_does_not_block_captures_or_turn_transitions() {
         fs::write(root.join("turns").join(damaged), "{").unwrap();
         fs::write(f.project().join("new.md"), "# New").unwrap();
         let input = json!({"session_id":"test-session", "hook_event_name":"Stop", "cwd":f.project()});
-        let result =
-            crate::hooks::register(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default());
+        let result = crate::record::hook(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default);
         if damaged == "claude.test-session.json" {
             assert!(result.is_err());
         } else {
@@ -745,14 +791,8 @@ fn failed_capture_can_be_retried_after_the_turn_closes() {
     fs::write(dir.join(".checkpoint"), "{").unwrap();
     let input = json!({"session_id":"test-session", "hook_event_name":"Stop", "cwd":f.project()});
     assert!(
-        crate::hooks::register(
-            &f.0.join("state"),
-            Harness::Claude,
-            &input,
-            crate::registry::now_unix(),
-            Default::default()
-        )
-        .is_err()
+        crate::record::hook(&f.0.join("state"), Harness::Claude, &input, crate::registry::now_unix(), Default::default)
+            .is_err()
     );
     fs::remove_file(dir.join(".checkpoint")).unwrap();
     f.hook(None, "Stop", json!({}));
@@ -771,8 +811,7 @@ fn failed_exit_capture_is_retryable_without_a_live_session() {
     fs::write(dir.join(".checkpoint"), "{").unwrap();
     let input = json!({"session_id":"test-session", "hook_event_name":"SessionEnd", "cwd":f.project()});
     assert!(
-        crate::hooks::register(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default())
-            .is_err()
+        crate::record::hook(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default).is_err()
     );
     assert!(!f.record().exists());
     fs::remove_file(dir.join(".checkpoint")).unwrap();
@@ -815,7 +854,7 @@ fn a_capture_that_keeps_failing_stops_being_retried_automatically() {
     fs::write(&damaged, "{").unwrap();
     let hook = |event: &str| {
         let input = json!({"session_id":"test-session", "hook_event_name":event, "cwd":f.project()});
-        crate::hooks::register(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default())
+        crate::record::hook(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default)
     };
     let jobs = root.join("pending-captures/claude/test-session");
     let attempts = || -> Vec<u64> {
@@ -881,7 +920,7 @@ fn the_lifecycle_change_lands_before_a_capture_without_a_job_waits_on_the_store(
         let (root, cwd) = (root.clone(), f.project());
         std::thread::spawn(move || {
             let input = json!({"session_id":"test-session", "hook_event_name":event, "cwd":cwd});
-            crate::hooks::register(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default())
+            crate::record::hook(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default)
         })
     };
     let settled = |check: &dyn Fn() -> bool| {

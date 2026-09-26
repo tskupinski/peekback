@@ -84,7 +84,7 @@ pub fn run(command: Command) -> Result<()> {
                 Ok(input) => input,
                 Err(_) => return Ok(()),
             };
-            crate::hooks::register(&paths::state_dir(), agent, &input, registry::now_unix(), crate::hooks::terminal())
+            crate::record::hook(&paths::state_dir(), agent, &input, registry::now_unix(), crate::record::terminal)
         }
         Command::Events { agent, session } => {
             let key = agent.key(session);
