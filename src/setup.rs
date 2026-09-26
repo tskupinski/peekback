@@ -9,7 +9,7 @@ use anyhow::{Context, Result, ensure};
 use clap::Args as ClapArgs;
 use serde_json::{Value, json};
 
-use crate::harness::Harness;
+use crate::harness::{Harness, hook_json};
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -46,8 +46,13 @@ pub fn run(args: Args) -> Result<()> {
                 .transpose()
                 .with_context(|| format!("invalid JSON in {}; file left unchanged", path.display()))?
                 .unwrap_or_else(|| json!({}));
-            let updated = merge(value.clone(), agent, &binary)
-                .with_context(|| format!("cannot configure {}; file left unchanged", path.display()))?;
+            let updated = hook_json::merge(
+                value.clone(),
+                agent.config().template,
+                &hook_command(agent, &binary)?,
+                &marker(agent),
+            )
+            .with_context(|| format!("cannot configure {}; file left unchanged", path.display()))?;
             plans.push((agent, path, original, updated, value));
         }
     }
@@ -68,12 +73,7 @@ pub fn run(args: Args) -> Result<()> {
             }
         }
         if !args.dry_run {
-            match agent {
-                Harness::Codex => {
-                    println!("  Start or resume Codex, then use /hooks to review and trust the Peekback hooks.")
-                }
-                Harness::Claude => println!("  Start or resume Claude Code; review /hooks if prompted."),
-            }
+            println!("  {}", agent.config().after_setup);
         }
     }
     if !args.dry_run {
@@ -83,15 +83,12 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn config_path(agent: Harness) -> Result<PathBuf> {
-    let (variable, default, filename) = match agent {
-        Harness::Claude => ("CLAUDE_CONFIG_DIR", ".claude", "settings.json"),
-        Harness::Codex => ("CODEX_HOME", ".codex", "hooks.json"),
-    };
-    let dir = match std::env::var_os(variable).filter(|s| !s.is_empty()) {
+    let config = agent.config();
+    let dir = match std::env::var_os(config.dir_env).filter(|s| !s.is_empty()) {
         Some(dir) => PathBuf::from(dir),
-        None => dirs::home_dir().context("cannot determine home directory")?.join(default),
+        None => dirs::home_dir().context("cannot determine home directory")?.join(config.default_dir),
     };
-    Ok(std::path::absolute(dir)?.join(filename))
+    Ok(std::path::absolute(dir)?.join(config.file))
 }
 
 fn marker(agent: Harness) -> String {
@@ -103,47 +100,6 @@ fn hook_command(agent: Harness, binary: &Path) -> Result<String> {
     // POSIX single-quote escaping also handles $, backticks, and newlines.
     let quoted = format!("'{}'", path.replace('\'', "'\"'\"'"));
     Ok(format!("{}{quoted} activity record --agent {} || true", marker(agent), agent.slug()))
-}
-
-fn merge(mut value: Value, agent: Harness, binary: &Path) -> Result<Value> {
-    let object = value.as_object_mut().context("settings must be a JSON object")?;
-    let hooks =
-        object.entry("hooks").or_insert_with(|| json!({})).as_object_mut().context("hooks must be a JSON object")?;
-    let template = match agent {
-        Harness::Claude => include_str!("../hooks/settings-snippet.json"),
-        Harness::Codex => include_str!("../hooks/codex-snippet.json"),
-    };
-    let mut template: Value = serde_json::from_str(template)?;
-    let command = hook_command(agent, binary)?;
-    for (event, desired) in template["hooks"].as_object_mut().context("invalid embedded hook template")? {
-        for group in desired.as_array_mut().context("invalid embedded hook groups")? {
-            for hook in group["hooks"].as_array_mut().context("invalid embedded hook handlers")? {
-                hook["command"] = json!(command);
-            }
-        }
-        let groups = hooks
-            .entry(event.clone())
-            .or_insert_with(|| json!([]))
-            .as_array_mut()
-            .with_context(|| format!("hooks.{event} must be an array"))?;
-        // Only replace handlers bearing our exact marker. Preserve other handlers,
-        // matchers, event types, and all unrelated settings.
-        let mut kept = Vec::new();
-        for mut group in std::mem::take(groups) {
-            let handlers = group
-                .get_mut("hooks")
-                .and_then(Value::as_array_mut)
-                .with_context(|| format!("hooks.{event} group must contain a hooks array"))?;
-            let before = handlers.len();
-            handlers.retain(|hook| !hook["command"].as_str().is_some_and(|s| s.starts_with(&marker(agent))));
-            if !handlers.is_empty() || before == 0 {
-                kept.push(group);
-            }
-        }
-        kept.extend(desired.as_array().unwrap().iter().cloned());
-        *groups = kept;
-    }
-    Ok(value)
 }
 
 fn read_config(path: &Path) -> Result<Option<Vec<u8>>> {

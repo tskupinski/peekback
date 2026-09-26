@@ -116,12 +116,8 @@ pub fn capture(root: &Path, session: &Session, store: &Store, turn: Option<Turn>
 }
 
 fn transcripts(session: &Session) -> Vec<FileEvent> {
-    let Some(main) = &session.transcript_path else { return Vec::new() };
-    let key = session.activity_key();
-    std::iter::once(main.clone())
-        .chain(session_activity::subagent_transcripts(main))
-        .flat_map(|transcript| session_activity::transcript_events(&key, &session.cwd, &transcript))
-        .collect()
+    let Some(transcript) = &session.transcript_path else { return Vec::new() };
+    session.harness.transcript_events(&session.activity_key(), &session.cwd, transcript)
 }
 
 fn scan_roots(session: &Session, turn: Option<Turn>) -> Vec<ScanRoot> {

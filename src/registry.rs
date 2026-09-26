@@ -51,16 +51,8 @@ impl Session {
         self.harness.key(self.session_id.clone())
     }
 
-    /// `~/.claude/projects/<slug>/`, the directory holding the transcript.
-    pub fn project_dir(&self) -> Option<&Path> {
-        if self.harness != Harness::Claude {
-            return None;
-        }
-        self.transcript_path.as_deref()?.parent()
-    }
-
     pub fn memory_dir(&self) -> Option<PathBuf> {
-        self.project_dir().map(|d| d.join("memory"))
+        self.harness.memory_dir(self)
     }
 
     /// An agent killed without SessionEnd leaves its entry behind; the process
@@ -72,14 +64,12 @@ impl Session {
     /// When the agent last did something: its newest transcript record, else
     /// its last hook.
     pub fn last_agent_activity(&self) -> i64 {
-        let transcript = self.transcript_path.as_deref().and_then(session_activity::transcript_last_activity);
+        let transcript = self.transcript_path.as_deref().and_then(|path| self.harness.last_activity(path));
         transcript.map_or(self.last_active_at, |at| at.max(self.last_active_at))
     }
 
     pub fn scratchpad_dir(&self) -> Option<PathBuf> {
-        let slug = self.project_dir()?.file_name()?;
-        let uid = unsafe { libc::getuid() };
-        Some(PathBuf::from(format!("/private/tmp/claude-{uid}")).join(slug).join(&self.session_id).join("scratchpad"))
+        self.harness.scratchpad_dir(self)
     }
 }
 

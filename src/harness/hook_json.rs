@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
-use serde_json::Value;
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
 
 use super::Harness;
 use crate::record::{Event, Observation, Place, Start};
@@ -30,6 +30,45 @@ pub fn decode(harness: Harness, input: &Value, now: i64) -> Result<Option<Observ
         _ => return Ok(None),
     };
     Ok(Some(Observation { harness, session_id: session_id.into(), event, place }))
+}
+
+/// Merge the template's hook entries into a harness's settings, running
+/// `command`. Earlier entries are recognized by the `ours` prefix of their
+/// command and replaced; everything else is kept.
+pub fn merge(mut value: Value, template: &str, command: &str, ours: &str) -> Result<Value> {
+    let object = value.as_object_mut().context("settings must be a JSON object")?;
+    let hooks =
+        object.entry("hooks").or_insert_with(|| json!({})).as_object_mut().context("hooks must be a JSON object")?;
+    let mut template: Value = serde_json::from_str(template)?;
+    for (event, desired) in template["hooks"].as_object_mut().context("invalid embedded hook template")? {
+        for group in desired.as_array_mut().context("invalid embedded hook groups")? {
+            for hook in group["hooks"].as_array_mut().context("invalid embedded hook handlers")? {
+                hook["command"] = json!(command);
+            }
+        }
+        let groups = hooks
+            .entry(event.clone())
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .with_context(|| format!("hooks.{event} must be an array"))?;
+        // Only replace handlers bearing our exact marker. Preserve other handlers,
+        // matchers, event types, and all unrelated settings.
+        let mut kept = Vec::new();
+        for mut group in std::mem::take(groups) {
+            let handlers = group
+                .get_mut("hooks")
+                .and_then(Value::as_array_mut)
+                .with_context(|| format!("hooks.{event} group must contain a hooks array"))?;
+            let before = handlers.len();
+            handlers.retain(|hook| !hook["command"].as_str().is_some_and(|s| s.starts_with(ours)));
+            if !handlers.is_empty() || before == 0 {
+                kept.push(group);
+            }
+        }
+        kept.extend(desired.as_array().unwrap().iter().cloned());
+        *groups = kept;
+    }
+    Ok(value)
 }
 
 fn place(input: &Value) -> Option<Place> {
