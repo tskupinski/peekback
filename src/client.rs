@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, ensure};
 
+use crate::harness::Harness;
 use crate::paths;
 use crate::protocol::{Outgoing, Request, Response, unix_ms};
 
@@ -94,8 +95,9 @@ fn spawn_daemon() -> Result<()> {
     let mut command = Command::new(std::env::current_exe()?);
     // The daemon serves every session and pane; it must not inherit the ones
     // this shell happens to run inside.
-    for key in ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID"]
+    for key in Harness::ALL
         .into_iter()
+        .flat_map(|harness| harness.session_env().iter().copied())
         .chain(crate::mux::Mux::ALL.into_iter().flat_map(|mux| mux.ambient_env().iter().copied()))
     {
         command.env_remove(key);

@@ -4,9 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::harness::Harness;
 use crate::paths;
 
-pub use session_activity::{Agent, SessionKey};
+pub use session_activity::SessionKey;
 
 /// One live agent session, as written by `peekback activity record`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -14,8 +15,8 @@ pub struct Session {
     pub session_id: String,
     #[serde(default)]
     pub incarnation: String,
-    #[serde(default)]
-    pub agent: Agent,
+    #[serde(rename = "agent", default = "Harness::before_harness_tracking")]
+    pub harness: Harness,
     pub transcript_path: Option<PathBuf>,
     /// Paths from older registry versions; new observations live in the activity store.
     #[serde(default)]
@@ -47,12 +48,12 @@ pub struct Terminal {
 
 impl Session {
     pub fn activity_key(&self) -> SessionKey {
-        SessionKey { agent: self.agent, session_id: self.session_id.clone() }
+        self.harness.key(self.session_id.clone())
     }
 
     /// `~/.claude/projects/<slug>/`, the directory holding the transcript.
     pub fn project_dir(&self) -> Option<&Path> {
-        if self.agent != Agent::Claude {
+        if self.harness != Harness::Claude {
             return None;
         }
         self.transcript_path.as_deref()?.parent()

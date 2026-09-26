@@ -9,6 +9,7 @@ mod config;
 mod daemon;
 mod discovery;
 mod document;
+mod harness;
 mod hooks;
 mod lifecycle;
 mod mux;
@@ -169,7 +170,7 @@ fn status(prune: bool) -> Result<()> {
             println!(
                 "  {}  {}  {}  active {}  {}  send via {}",
                 s.session_id,
-                s.agent.name(),
+                s.harness.name(),
                 s.cwd.display(),
                 ago(now - s.last_active_at),
                 terminal,

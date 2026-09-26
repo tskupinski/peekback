@@ -5,10 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Result;
 use serde_json::Value;
-use session_activity::{Agent, Store};
+use session_activity::Store;
 
 use crate::capture::{self, Turn};
 use crate::capture_jobs::Retry;
+use crate::harness::Harness;
 use crate::registry::{Session, Terminal};
 
 static NEXT_WRITE: AtomicU64 = AtomicU64::new(0);
@@ -25,21 +26,21 @@ pub fn terminal() -> Terminal {
     }
 }
 
-pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, terminal: Terminal) -> Result<()> {
+pub(crate) fn register(root: &Path, harness: Harness, input: &Value, now: i64, terminal: Terminal) -> Result<()> {
     let Some(id) = input["session_id"].as_str().filter(|id| session_activity::valid_id(id)) else { return Ok(()) };
     let Some(event) = input["hook_event_name"].as_str() else { return Ok(()) };
     let supported = matches!(event, "SessionStart" | "UserPromptSubmit" | "PostToolUse" | "Stop" | "SessionEnd")
-        || (agent == Agent::Claude && event == "PostToolUseFailure");
+        || (harness == Harness::Claude && event == "PostToolUseFailure");
     if !supported {
         return Ok(());
     }
     let _lock = crate::lifecycle::lock(root, id)?;
-    let key = session_activity::SessionKey { agent, session_id: id.into() };
+    let key = harness.key(id);
     let dir = root.join("sessions");
     let file = dir.join(format!("{id}.json"));
     let previous: Option<Session> = fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok());
     anyhow::ensure!(
-        previous.as_ref().is_none_or(|s| s.agent == agent),
+        previous.as_ref().is_none_or(|s| s.harness == harness),
         "session ID is already registered to a different agent"
     );
     let store = Store::new(root.join("activity"));
@@ -107,7 +108,7 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
         } else {
             previous.as_ref().map(|s| s.incarnation.clone()).unwrap_or_default()
         },
-        agent,
+        harness,
         cwd: cwd.to_owned(),
         terminal,
         transcript_path: input["transcript_path"]
@@ -129,7 +130,7 @@ pub(crate) fn register(root: &Path, agent: Agent, input: &Value, now: i64, termi
     if let Some(turn) = closed {
         capture::remember(&mut session.recent_turns, turn);
     }
-    store.append(&session.activity_key(), &session_activity::hook_events(agent, input, now)?)?;
+    store.append(&session.activity_key(), &session_activity::hook_events(harness.into(), input, now)?)?;
     // Late tools may contribute useful history, but only SessionStart can
     // explicitly reopen a session after an end marker has been published.
     if event != "SessionStart" && crate::lifecycle::ended(root, &key) {

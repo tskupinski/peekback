@@ -71,6 +71,21 @@ pub enum PageMessage {
     OpenExternal { url: String },
 }
 
+/// A session as the page shows it, named by the daemon so the page never
+/// decides what a harness is called.
+#[derive(Serialize)]
+pub struct PageSession<'a> {
+    #[serde(flatten)]
+    session: &'a Session,
+    agent_name: &'static str,
+}
+
+impl<'a> From<&'a Session> for PageSession<'a> {
+    fn from(session: &'a Session) -> Self {
+        Self { session, agent_name: session.harness.name() }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum DaemonMessage<'a> {
@@ -79,13 +94,13 @@ pub enum DaemonMessage<'a> {
         path: Option<&'a Path>,
         file_identity: Option<&'a Path>,
         source: &'a str,
-        session: Option<&'a Session>,
+        session: Option<PageSession<'a>>,
         documents: &'a [Document],
         /// The agent in the focused pane, when it has not started a session.
         unstarted: Option<&'static str>,
     },
     Sessions {
-        sessions: &'a [Session],
+        sessions: Vec<PageSession<'a>>,
         current: Option<&'a str>,
     },
     Documents {

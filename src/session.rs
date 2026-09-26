@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, anyhow, bail};
 
+use crate::harness::Harness;
 use crate::mux::{self, Focused, Mux, Pane};
 use crate::registry::{self, Session};
 
@@ -64,7 +65,7 @@ pub enum Focus {
     /// An agent runs in the focused pane but has not registered a session:
     /// Codex creates one only at its first prompt.
     Unstarted {
-        agent: registry::Agent,
+        harness: Harness,
         pane: Pane,
     },
     Nothing,
@@ -83,7 +84,7 @@ fn resolve_focus(
     sessions: Vec<Session>,
     extra_servers: impl IntoIterator<Item = (Mux, Option<String>)>,
     mut focused: impl FnMut(Mux, Option<&str>) -> Option<Focused>,
-    agent_in: impl Fn(u32) -> Option<registry::Agent>,
+    harness_in: impl Fn(u32) -> Option<Harness>,
 ) -> Focus {
     let mut active = HashMap::new();
     let mut ask = |mux: Mux, server: &Option<String>| {
@@ -95,8 +96,8 @@ fn resolve_focus(
     let servers = sessions.iter().flat_map(|s| s.terminal.panes.iter().map(|p| (p.mux, p.server.clone())));
     for (mux, server) in servers.chain(extra_servers) {
         if let Some(Focused { pane, pid: Some(pid) }) = ask(mux, &server) {
-            if let Some(agent) = agent_in(pid) {
-                return Focus::Unstarted { agent, pane: Pane { mux, server, id: pane } };
+            if let Some(harness) = harness_in(pid) {
+                return Focus::Unstarted { harness, pane: Pane { mux, server, id: pane } };
             }
         }
     }
@@ -129,9 +130,7 @@ fn in_active_pane(
 }
 
 fn current_id(mut get: impl FnMut(&str) -> Option<String>) -> Option<String> {
-    ["CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_CODE_SESSION_ID"]
-        .into_iter()
-        .find_map(|key| get(key).filter(|id| !id.is_empty()))
+    Harness::session_env_by_precedence().find_map(|key| get(key).filter(|id| !id.is_empty()))
 }
 
 #[cfg(test)]
@@ -147,10 +146,10 @@ mod tests {
     const CLAUDE: u32 = 2;
     const CODEX: u32 = 3;
 
-    fn agent_in(pid: u32) -> Option<registry::Agent> {
+    fn agent_in(pid: u32) -> Option<Harness> {
         match pid {
-            CLAUDE => Some(registry::Agent::Claude),
-            CODEX => Some(registry::Agent::Codex),
+            CLAUDE => Some(Harness::Claude),
+            CODEX => Some(Harness::Codex),
             _ => None,
         }
     }
@@ -158,7 +157,7 @@ mod tests {
     fn focus_id(focus: Focus) -> String {
         match focus {
             Focus::Session(s) => s.session_id,
-            Focus::Unstarted { agent, pane } => format!("unstarted {} in {}", agent.slug(), pane.id),
+            Focus::Unstarted { harness, pane } => format!("unstarted {} in {}", harness.slug(), pane.id),
             Focus::Nothing => "nothing".into(),
         }
     }

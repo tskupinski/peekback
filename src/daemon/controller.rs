@@ -2,6 +2,7 @@ use super::{DaemonMessage, PageMessage, UserEvent, state::ViewContext, watcher, 
 use crate::{
     bookmarks, config,
     discovery::{self, Document},
+    harness::Harness,
     protocol::{Request, Response},
     registry::{self, Session},
     send, session, terminal,
@@ -30,13 +31,13 @@ pub struct Current {
 }
 
 pub struct Awaiting {
-    agent: registry::Agent,
+    harness: Harness,
     pane: crate::mux::Pane,
 }
 
 impl Awaiting {
     fn started_in(&self, session: &Session) -> bool {
-        session.agent == self.agent && session.terminal.panes.contains(&self.pane)
+        session.harness == self.harness && session.terminal.panes.contains(&self.pane)
     }
 }
 
@@ -166,7 +167,7 @@ impl App {
                     Target::SessionIfLive(id) => (id.filter(|id| registry::find(id).is_some()), None),
                     Target::Focused => match session::focused() {
                         session::Focus::Session(s) => (Some(s.session_id), None),
-                        session::Focus::Unstarted { agent, pane } => (None, Some(Awaiting { agent, pane })),
+                        session::Focus::Unstarted { harness, pane } => (None, Some(Awaiting { harness, pane })),
                         session::Focus::Nothing => (None, None),
                     },
                 };
@@ -195,9 +196,9 @@ impl App {
                 path: doc.path.as_deref(),
                 file_identity: doc.file_identity.as_deref(),
                 source: &doc.source,
-                session: doc.session.as_ref(),
+                session: doc.session.as_ref().map(Into::into),
                 documents: &doc.documents,
-                unstarted: doc.awaiting.as_ref().map(|a| a.agent.name()),
+                unstarted: doc.awaiting.as_ref().map(|a| a.harness.name()),
             });
             if doc.missing {
                 self.view.push(&DaemonMessage::Banner { text: DELETED_BANNER });
@@ -208,7 +209,8 @@ impl App {
     fn push_sessions(&self) {
         if self.page_ready {
             let current = self.session_id();
-            self.view.push(&DaemonMessage::Sessions { sessions: &self.sessions, current: current.as_deref() });
+            let sessions = self.sessions.iter().map(Into::into).collect();
+            self.view.push(&DaemonMessage::Sessions { sessions, current: current.as_deref() });
         }
     }
 

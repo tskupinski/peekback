@@ -26,6 +26,7 @@
   A config naming `wezterm` or `kitty` reports that and uses `auto`.
 - Sessions recorded by an earlier version send through keystroke or the
   clipboard until their next prompt or tool call re-records the pane.
+- `peekback setup --all` replaces `--agent all`.
 
 ## 0.2.0 - 2026-09-25
 

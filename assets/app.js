@@ -402,7 +402,7 @@
 
   function sessionName(s) {
     const project = s.cwd.split("/").pop() || s.cwd;
-    return `${project} · ${s.agent === "codex" ? "Codex" : "Claude Code"}`;
+    return `${project} · ${s.agent_name}`;
   }
 
   function currentSession() {

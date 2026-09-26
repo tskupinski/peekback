@@ -63,7 +63,7 @@ Maintainer instructions are in [RELEASING.md](RELEASING.md).
 ### Setup details
 
 `peekback setup --dry-run` shows the target files and hook commands without
-writing. `--agent all` configures both agents even before they are detected.
+writing. `--all` configures both agents even before they are detected.
 
 Setup merges hooks into `~/.claude/settings.json` and `~/.codex/hooks.json`,
 respecting `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. It preserves unrelated settings
@@ -222,7 +222,7 @@ until fresh hook activity records an identity that can be verified.
 ### Commands
 
 ```
-peekback setup [--agent claude|codex|all] [--dry-run]  configure hooks
+peekback setup [--agent claude|codex | --all] [--dry-run]  configure hooks
 peekback show [FILE] [--session ID] [--pane %N] [--no-focus]  show a document
 peekback browse [--session ID]                       browse session files
 peekback browse --all-sessions [--list]              browse retained history

@@ -8,13 +8,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, ensure};
 use clap::Args as ClapArgs;
 use serde_json::{Value, json};
-use session_activity::Agent;
+
+use crate::harness::Harness;
 
 #[derive(ClapArgs)]
 pub struct Args {
     /// Agent to configure (default: detect config directories or executables)
-    #[arg(long, value_parser = ["claude", "codex", "all"])]
-    agent: Option<String>,
+    #[arg(long, conflicts_with = "all")]
+    agent: Option<Harness>,
+    /// Configure every supported agent
+    #[arg(long)]
+    all: bool,
     /// Show hook commands and target files without writing anything
     #[arg(long)]
     dry_run: bool,
@@ -24,12 +28,15 @@ pub fn run(args: Args) -> Result<()> {
     let binary = std::env::current_exe().context("cannot locate the installed Peekback binary")?;
     let mut plans = Vec::new();
     // Validate every selected file before changing any of them.
-    for agent in [Agent::Claude, Agent::Codex] {
+    for agent in Harness::ALL {
         let path = config_path(agent)?;
-        let selected = match args.agent.as_deref() {
-            Some("all") => true,
-            Some(name) => name == agent.slug(),
-            None => path.parent().is_some_and(Path::is_dir) || crate::send::on_path(agent.slug()),
+        let selected = match args.agent {
+            _ if args.all => true,
+            Some(only) => only == agent,
+            None => {
+                path.parent().is_some_and(Path::is_dir)
+                    || agent.executables().iter().any(|executable| crate::send::on_path(executable))
+            }
         };
         if selected {
             let original = read_config(&path)?;
@@ -44,7 +51,7 @@ pub fn run(args: Args) -> Result<()> {
             plans.push((agent, path, original, updated, value));
         }
     }
-    ensure!(!plans.is_empty(), "no agents detected; use peekback setup --agent claude or --agent codex");
+    ensure!(!plans.is_empty(), "no agents detected; use peekback setup --agent AGENT or --all");
     for (agent, path, original, updated, previous) in plans {
         if updated == previous {
             println!("{}: already configured ({})", agent.name(), path.display());
@@ -62,10 +69,10 @@ pub fn run(args: Args) -> Result<()> {
         }
         if !args.dry_run {
             match agent {
-                Agent::Codex => {
+                Harness::Codex => {
                     println!("  Start or resume Codex, then use /hooks to review and trust the Peekback hooks.")
                 }
-                Agent::Claude => println!("  Start or resume Claude Code; review /hooks if prompted."),
+                Harness::Claude => println!("  Start or resume Claude Code; review /hooks if prompted."),
             }
         }
     }
@@ -75,10 +82,10 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn config_path(agent: Agent) -> Result<PathBuf> {
+fn config_path(agent: Harness) -> Result<PathBuf> {
     let (variable, default, filename) = match agent {
-        Agent::Claude => ("CLAUDE_CONFIG_DIR", ".claude", "settings.json"),
-        Agent::Codex => ("CODEX_HOME", ".codex", "hooks.json"),
+        Harness::Claude => ("CLAUDE_CONFIG_DIR", ".claude", "settings.json"),
+        Harness::Codex => ("CODEX_HOME", ".codex", "hooks.json"),
     };
     let dir = match std::env::var_os(variable).filter(|s| !s.is_empty()) {
         Some(dir) => PathBuf::from(dir),
@@ -87,24 +94,24 @@ fn config_path(agent: Agent) -> Result<PathBuf> {
     Ok(std::path::absolute(dir)?.join(filename))
 }
 
-fn marker(agent: Agent) -> String {
+fn marker(agent: Harness) -> String {
     format!(": peekback-setup-{}; ", agent.slug())
 }
 
-fn hook_command(agent: Agent, binary: &Path) -> Result<String> {
+fn hook_command(agent: Harness, binary: &Path) -> Result<String> {
     let path = binary.to_str().context("hook executable path must be valid UTF-8")?;
     // POSIX single-quote escaping also handles $, backticks, and newlines.
     let quoted = format!("'{}'", path.replace('\'', "'\"'\"'"));
     Ok(format!("{}{quoted} activity record --agent {} || true", marker(agent), agent.slug()))
 }
 
-fn merge(mut value: Value, agent: Agent, binary: &Path) -> Result<Value> {
+fn merge(mut value: Value, agent: Harness, binary: &Path) -> Result<Value> {
     let object = value.as_object_mut().context("settings must be a JSON object")?;
     let hooks =
         object.entry("hooks").or_insert_with(|| json!({})).as_object_mut().context("hooks must be a JSON object")?;
     let template = match agent {
-        Agent::Claude => include_str!("../hooks/settings-snippet.json"),
-        Agent::Codex => include_str!("../hooks/codex-snippet.json"),
+        Harness::Claude => include_str!("../hooks/settings-snippet.json"),
+        Harness::Codex => include_str!("../hooks/codex-snippet.json"),
     };
     let mut template: Value = serde_json::from_str(template)?;
     let command = hook_command(agent, binary)?;
