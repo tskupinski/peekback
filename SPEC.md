@@ -311,7 +311,12 @@ only finishes filter editing.
 
 One daemon per state directory holds one native window and an exclusive lock
 on daemon.lock. `show` connects over a Unix socket and starts the daemon if
-needed. Stale sockets are replaced by the lock owner. The spawned daemon keeps
+needed. So does the `SessionStart` hook of a new or resumed session, without
+waiting for it, so the hotkey works from a session's first moment, after a
+reboot included; a compaction's restart and other hooks do not, so `peekback
+quit` holds until the next session. Hooks never start one for a state
+directory chosen with `PEEKBACK_STATE_DIR`, which would compete with the
+everyday daemon for the hotkey. Stale sockets are replaced by the lock owner. The spawned daemon keeps
 the caller's PATH but removes session-selection environment variables.
 
 CLI IPC is newline-delimited JSON with one request and response per connection:

@@ -40,6 +40,8 @@ fn wrapper_and_queries_retain_history_after_session_end() {
     let mut input =
         json!({"session_id":"integration", "cwd":root, "transcript_path":null, "hook_event_name":"SessionStart"});
     hook(&root, input.clone());
+    // A session start brings up the everyday daemon, never one for an isolated state directory.
+    assert!(!root.join("daemon.log").exists() && !root.join("daemon.sock").exists());
     input["hook_event_name"] = json!("PostToolUse");
     input["tool_name"] = json!("apply_patch");
     input["tool_input"] = json!({"command":"*** Begin Patch\n*** Delete File: removed.rs\n*** End Patch"});

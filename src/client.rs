@@ -85,6 +85,20 @@ pub fn request_starting_daemon(request: &Request) -> Result<Response> {
     }
 }
 
+/// Starts the daemon when it is not running, without waiting for it, so the
+/// hotkey works from the moment a session starts. Only for the everyday state
+/// directory: a daemon for an isolated one would compete for the hotkey.
+pub fn start_daemon_in_background() {
+    if paths::isolated_state_dir().is_some() {
+        return;
+    }
+    if let Err(error) = UnixStream::connect(paths::socket_path()) {
+        if unavailable(&error) {
+            let _ = spawn_daemon();
+        }
+    }
+}
+
 fn unavailable(error: &std::io::Error) -> bool {
     matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)
 }

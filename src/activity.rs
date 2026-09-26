@@ -78,7 +78,14 @@ pub fn run(command: Command) -> Result<()> {
                 Ok(input) => input,
                 Err(_) => return Ok(()),
             };
-            crate::record::hook(&paths::state_dir(), agent, &input, registry::now_unix(), crate::record::terminal)
+            let recorded =
+                crate::record::hook(&paths::state_dir(), agent, &input, registry::now_unix(), crate::record::terminal);
+            // A session starting (after a reboot, say) is when the hotkey will
+            // be wanted next; a prompt is not, so `peekback quit` sticks until then.
+            if matches!(recorded, Ok(true)) {
+                crate::client::start_daemon_in_background();
+            }
+            recorded.map(|_| ())
         }
         Command::Retry { agent, session } => {
             let key = agent.key(session);

@@ -942,3 +942,19 @@ fn the_lifecycle_change_lands_before_a_capture_without_a_job_waits_on_the_store(
         fs::remove_file(root.join("pending-captures")).unwrap();
     }
 }
+
+#[test]
+fn only_a_session_start_reports_one_for_the_daemon_to_follow() {
+    let f = Fixture::new();
+    let root = f.0.join("state");
+    let hook = |event: &str, extra: Value| {
+        let mut input = json!({"session_id":"test-session", "hook_event_name":event, "cwd":f.project()});
+        input.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        crate::record::hook(&root, Harness::Claude, &input, crate::registry::now_unix(), Default::default).unwrap()
+    };
+    assert!(hook("SessionStart", json!({})));
+    assert!(hook("SessionStart", json!({"source": "resume"})));
+    assert!(!hook("SessionStart", json!({"source": "compact"})));
+    assert!(!hook("UserPromptSubmit", json!({})));
+    assert!(!hook("NotAnEvent", json!({})));
+}

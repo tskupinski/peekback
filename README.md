@@ -37,9 +37,8 @@ peekback setup --agent claude
 ```
 
 Start or resume your agent. **In Codex, open `/hooks` and review and trust the
-Peekback hooks.** Then send a prompt, run `peekback show` once to start the
-viewer, and from then on press `Cmd+Shift+M` from anywhere to see what the
-session wrote.
+Peekback hooks.** Starting the session starts Peekback; from then on press
+`Cmd+Shift+M` from anywhere to see what the session wrote.
 
 ### Install from a checkout
 
@@ -122,9 +121,11 @@ archive using [RELEASING.md](RELEASING.md).
 
 ## Use
 
-After a session appears in `peekback status`, run `peekback show` once. This
-starts the daemon and registers the global hotkey; installing hooks or running
-`status` alone does not start it. A session that has not produced Markdown yet
+Starting or resuming a session starts the daemon, which registers the
+global hotkey, so after a reboot it is back with your first session.
+`peekback quit` stops it until the next session starts; `peekback show` starts
+it at any time. With `PEEKBACK_STATE_DIR` set, sessions do not start it, since
+that daemon would compete with the everyday one for the hotkey. A session that has not produced Markdown yet
 shows an empty viewer that opens its first document when one appears; use
 `peekback show README.md` to open a specific document meanwhile.
 

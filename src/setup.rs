@@ -77,7 +77,10 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
     if !args.dry_run {
-        println!("Send a prompt, then run peekback browse. Press p on a Markdown file to preview it.");
+        println!(
+            "Start or resume your agent, then press {} to read the Markdown it writes.",
+            crate::config::load().hotkey
+        );
     }
     Ok(())
 }

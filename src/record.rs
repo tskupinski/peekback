@@ -64,17 +64,17 @@ pub enum Start {
 }
 
 /// One hook invocation: the harness's own payload, decoded, then recorded.
+/// Returns whether it started a session (not a compaction's restart).
 pub(crate) fn hook(
     root: &Path,
     harness: Harness,
     input: &Value,
     now: i64,
     terminal: impl FnOnce() -> Terminal,
-) -> Result<()> {
-    match harness.decode(input, now) {
-        Some(observation) => record(root, observation, now, terminal()),
-        None => Ok(()),
-    }
+) -> Result<bool> {
+    let Some(observation) = harness.decode(input, now) else { return Ok(false) };
+    let started = observation.event == Event::SessionStarted(Start::New);
+    record(root, observation, now, terminal()).map(|()| started)
 }
 
 pub(crate) fn record(root: &Path, observation: Observation, now: i64, terminal: Terminal) -> Result<()> {

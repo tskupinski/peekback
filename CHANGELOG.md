@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Start the viewer when a session starts or resumes, so the hotkey works
+  after install and after a reboot without running `peekback show` first.
+  `peekback quit` stops it until the next session starts. `setup` now ends
+  by pointing at the hotkey.
 - Move the terminal browser and the activity queries under `peekback debug`
   (`debug browse`, `debug files`, `debug events`, `debug compact`,
   `debug retain`), for finding out why a file is or is not listed. The
