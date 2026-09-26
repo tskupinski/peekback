@@ -36,6 +36,8 @@ class Element {
     siblings[siblings.indexOf(this)] = adopt(this.parentElement, [other])[0];
   }
   setAttribute(name, value) { this.attributes[name] = value; }
+  getAttribute(name) { return this.attributes[name] ?? null; }
+  getAttributeNS() { return null; }
   removeAttribute(name) { delete this.attributes[name]; }
   matches(selector) { return matchesSelector(this, selector); }
   closest(selector) {
@@ -540,6 +542,24 @@ scenario("Real Markdown: frontmatter, headings, list items, fences and quotes ea
   assert.deepEqual(refs, ["L1-3", "L4", "L6-7", "L8-9", "L11-13", "L15", "L17"]);
   assert.match(messages.at(-1).text, /`\/plan\.md#L6-7`\n> - First item\n>   continued\n\nNote 2/);
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
+}, { markdown: true });
+
+scenario("Links from the keyboard: gx follows the one in the block, or lists several", async page => {
+  const { element, messages, receive, key, notes, context, input } = page;
+  const doc = "Read [the spec](spec.md).\n\nSee [the site](https://example.com/) and [the plan](plan.md).\n\nNo links here.";
+  receive({ type: "render", path: "/repo/notes.md", source: doc, session: { session_id: "s" },
+    documents: [{ path: "/repo/notes.md", label: "notes.md", touched_at: 2 }, { path: "/repo/spec.md", label: "spec.md", touched_at: 1 }] });
+  await new Promise(setImmediate);
+  key("g"); key("x");
+  assert.deepEqual(messages.at(-1), { type: "switch", session_id: "s", path: "/repo/spec.md",
+    context: messages.at(-1).context, request_id: messages.at(-1).request_id });
+  key("j"); key("g"); key("x");
+  assert.equal(element("mode").textContent, "PICKER");
+  assert.deepEqual(element("picker-list").children.map(li => li.children[0].textContent), ["the site", "the plan"]);
+  input.dispatch("keydown", { key: "Enter" });
+  assert.deepEqual(messages.at(-1), { type: "open-external", url: "https://example.com/" });
+  key("j"); key("g"); key("x");
+  assert.match(element("status-msg").textContent, /no link in this block/);
 }, { markdown: true });
 
 scenario("Keyboard after a stray click: the review sheet and the note keep the keys, Esc still closes them", async page => {

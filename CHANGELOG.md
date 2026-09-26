@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Follow links from the keyboard with `gx`: the one in the cursor's block, or
+  a list to pick from when the block has several. Links were mouse-only.
 - Remove the sidebar, `Tab` and `:sidebar`. It was off by default, and the
   document and comments pickers list the same things from the keyboard.
 - End the line reference of a list's last item at its text; it included the

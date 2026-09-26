@@ -178,6 +178,7 @@ pane and press the hotkey, or run `peekback show --session ID`.
 | `c` | comment on the block or selection: a note box opens under it; `Enter` saves, `Shift-Enter` adds a line, `Esc` cancels |
 | `C` / `x` | edit / remove the comment on the cursor's block; `u` brings a removed one back |
 | `S` | review all pending comments, then `Enter` sends them as one prompt |
+| `gx` | follow the link in the block; several are listed to pick from |
 | `/` | search, then `n` / `N` |
 | `Space d` or `Ctrl-P` | document picker |
 | `Tab` / `Shift-Tab` in document picker | cycle Current session, Scratchpad, and Bookmarks |

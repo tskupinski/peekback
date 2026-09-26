@@ -348,7 +348,9 @@ Wry hosts the embedded page at `peekback://app/`. The page sends messages throug
 Rendered documents are untrusted: the webview may not navigate away from
 `peekback://app/`, open windows, or load dropped items, and page messages from
 any other origin are ignored. Links, including Mermaid's SVG links, go through
-the page's click handler, which opens web links externally.
+the page's link handler, which opens web links externally and Markdown links
+to the session's documents in the viewer. `gx` follows the link in the
+cursor's block, or lists the block's links in a picker when it has several.
 There is no HTTP server or async runtime. Embedded rendering assets work offline.
 
 ## Viewer behavior

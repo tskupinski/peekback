@@ -1275,7 +1275,7 @@
 
   // An fzf-style overlay: type to filter, Enter to open. The one list of
   // documents and of comments.
-  const picker = { kind: null, scope: "current", items: [], filtered: [], index: 0 };
+  const picker = { kind: null, scope: "current", items: [], filtered: [], index: 0, links: [] };
   const scratchpad = { documents: [], found: 0, warnings: [], loading: false, available: true };
   const bookmarks = { documents: [], found: 0, warnings: [], loading: false };
   const SCOPES = ["current", "scratchpad", "bookmarks"];
@@ -1302,7 +1302,7 @@
   }
 
   function updatePickerItems() {
-    picker.items = picker.kind === "documents" ? documentCandidates() : commentCandidates();
+    picker.items = { documents: documentCandidates, comments: commentCandidates, links: () => picker.links }[picker.kind]();
     filterPicker();
   }
 
@@ -1323,7 +1323,7 @@
     if (kind === "documents" && picker.scope !== "bookmarks" && !state.doc?.sessionId) picker.scope = "bookmarks";
     if (kind === "documents") refreshScope();
     pickerInput.value = "";
-    pickerInput.placeholder = { documents: "open document", comments: "pending comments, Ctrl-E edits, Ctrl-S sends one, Ctrl-D removes" }[kind];
+    pickerInput.placeholder = { documents: "open document", comments: "pending comments, Ctrl-D removes", links: "follow link" }[kind];
     pickerEl.hidden = false;
     setMode("picker");
     updatePickerItems();
@@ -1526,6 +1526,7 @@
 
     if (pending === "g") {
       if (key === "g") moveCursor(state.count ? takeCount() - 1 : 0);
+      else if (key === "x") followLinkAtCursor();
       else handled = false;
     } else if (pending === "z") {
       if (key === "z") scrollCursorTo("center");
@@ -1649,10 +1650,26 @@
     const href = link && linkTarget(link);
     if (href === null || href.startsWith("#")) return;
     event.preventDefault();
+    followLink(href);
+  });
+
+  function followLink(href) {
     if (/^https?:\/\//.test(href)) post({ type: "open-external", url: href });
     else if (/\.(md|markdown)$/i.test(href)) openRelativeLink(href);
     else setMessage("only web links and Markdown files open from here");
-  });
+  }
+
+  // gx, as in vim: the link in the cursor's block, or a list of them to pick
+  // from when it has several.
+  function followLinkAtCursor() {
+    const links = [...(state.blocks[state.cursor]?.querySelectorAll("a") ?? [])]
+      .map((a) => ({ text: a.textContent.trim(), href: linkTarget(a) }))
+      .filter(({ href }) => href && !href.startsWith("#"));
+    if (links.length === 0) return setMessage("no link in this block");
+    if (links.length === 1) return followLink(links[0].href);
+    picker.links = links.map(({ text, href }) => ({ label: text || href, meta: href, search: `${text} ${href}`, run: () => followLink(href) }));
+    openPicker("links");
+  }
 
   // Mermaid draws its links as SVG anchors, which carry xlink:href instead
   // of href. Either kind must go through the handler above, never the webview.
