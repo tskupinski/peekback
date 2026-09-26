@@ -1,15 +1,14 @@
 # peekback
 
-Browse files touched by Claude Code and Codex CLI sessions in your terminal,
-then open Markdown in a native preview. Select text in the viewer and copy it,
-send it to the session's prompt, or attach a note and send that.
+Press a hotkey and read the Markdown your Claude Code or Codex session just
+wrote: a plan, a spec, notes. Read it with vim keys, comment on it or select
+from it, and send that straight back into the same session's prompt.
 
 You peek at what the agent wrote. What you mark up goes back.
 
-The terminal browser covers all file types and keeps observed history after
-sessions end. The Markdown viewer adds Mermaid, KaTeX, syntax highlighting,
-live reload, and vim-style navigation. It comes with light and dark themes
-that follow your system, and uses normal window stacking. The app supports Apple Silicon macOS;
+The viewer renders Mermaid, KaTeX and syntax highlighting, reloads live as
+the agent edits, and comes with light and dark themes that follow your
+system. It uses normal window stacking. The app supports Apple Silicon macOS;
 the separately published [session-activity library](https://crates.io/crates/session-activity)
 also supports Linux.
 
@@ -38,14 +37,9 @@ peekback setup --agent claude
 ```
 
 Start or resume your agent. **In Codex, open `/hooks` and review and trust the
-Peekback hooks.** Then send a prompt and run:
-
-```sh
-peekback browse
-```
-
-Press `p` on a Markdown file to open its rendered preview.
-Use `peekback browse --all-sessions` to browse retained files across sessions.
+Peekback hooks.** Then send a prompt, run `peekback show` once to start the
+viewer, and from then on press `Cmd+Shift+M` from anywhere to see what the
+session wrote.
 
 ### Install from a checkout
 
@@ -130,8 +124,7 @@ archive using [RELEASING.md](RELEASING.md).
 
 After a session appears in `peekback status`, run `peekback show` once. This
 starts the daemon and registers the global hotkey; installing hooks or running
-`status` alone does not start it. `peekback browse` also starts the viewer when
-you press `p` on a Markdown file. A session that has not produced Markdown yet
+`status` alone does not start it. A session that has not produced Markdown yet
 shows an empty viewer that opens its first document when one appears; use
 `peekback show README.md` to open a specific document meanwhile.
 
@@ -249,19 +242,18 @@ until fresh hook activity records an identity that can be verified.
 ```
 peekback setup [--agent claude|codex | --all] [--dry-run]  configure hooks
 peekback show [FILE] [--session ID] [--pane %N] [--no-focus]  show a document
-peekback browse [--session ID]                       browse session files
-peekback browse --all-sessions [--list]              browse retained history
 peekback send [--session ID] [--pane %N] < text       paste text into a prompt
 peekback hide                                       hide the viewer
 peekback status [--prune]                            sessions, backends, daemon
 peekback quit                                       stop the daemon
+peekback debug browse|files|events|compact|retain    inspect recorded file activity
 ```
 
 `peekback --help` and `peekback COMMAND --help` list all options.
 `:q` inside the viewer hides its window; `peekback quit` stops the daemon
 and unregisters the global hotkey.
 
-Session resolution for `show`, `send`, and `browse`: `--session`, else the session in
+Session resolution for `show`, `send`, and `debug browse`: `--session`, else the session in
 the given tmux pane on the current tmux server, else the session this shell runs inside, else the most
 recently active one.
 
@@ -269,15 +261,18 @@ recently active one.
 consistently for both the agent hooks and Peekback when using an isolated
 registry and daemon.
 
-### Browse files in the terminal
+## Debugging file activity
+
+When a file you expected is missing from the viewer, or one you did not
+expect is there, `peekback debug` shows what the hooks recorded and why.
+
+### Browse a session's files in the terminal
 
 ```sh
-peekback browse
-peekback browse --session SESSION_ID
-peekback browse --agent codex --session ENDED_SESSION_ID
-peekback browse --list
-peekback browse --all-sessions
-peekback browse --all-sessions --list
+peekback debug browse
+peekback debug browse --session SESSION_ID
+peekback debug browse --agent codex --session ENDED_SESSION_ID
+peekback debug browse --list
 ```
 
 The interactive browser shows all file types, including reads, failed operations,
@@ -287,17 +282,8 @@ between the list and preview in either layout. It uses the
 same `session-activity` library as the Markdown viewer. Browsing does not start
 the viewer daemon; press `p` on a Markdown file to open its rendered preview.
 Live sessions keep the connection for sending selections back. Files from ended
-sessions open as standalone documents. With `--all-sessions`, previews stay in
-the live session the browser runs inside, if any, and are standalone otherwise.
-
-`--all-sessions` browses retained history without requiring any live session.
-It merges paths across Claude Code and Codex, preserves session provenance in
-the evidence view (`e`) and plain listing, and supports filtering by session ID.
-`r` reloads stored history. Previews keep the browser's originating live session
-as their send-back target when one is available. It cannot be combined with
-session/pane selectors. Every view reads the same stored history, so a file
-listed for a session is also listed in `--all-sessions`. Installing hooks does not
-automatically import every past session.
+sessions open as standalone documents. Installing hooks does not import past
+sessions.
 
 | Key | Action |
 | --- | --- |
@@ -320,17 +306,17 @@ explanation instead. Refresh is manual with `r`.
 
 Use `--agent claude|codex --session ID` to browse retained history after a session
 ends. `--list`, or piping the command, produces a plain table without terminal
-controls. For structured output, use `peekback activity files` below.
+controls. For structured output, use `peekback debug files` below.
 
 ### Query session file activity
 
-The collector also works without opening the viewer. Queries return JSON and
+Queries return JSON and
 include all file types, deleted paths, rename origins and destinations, and
 the evidence behind each file:
 
 ```sh
-peekback activity files --agent codex --session SESSION_ID
-peekback activity events --agent claude --session SESSION_ID
+peekback debug files --agent codex --session SESSION_ID
+peekback debug events --agent claude --session SESSION_ID
 ```
 
 `events` returns the retained event history. Damaged batches are skipped with
@@ -361,8 +347,8 @@ cannot always be distinguished from one belonging to a resumed session.
 Preview compaction or retention for one session:
 
 ```sh
-peekback activity compact --agent codex --session SESSION_ID
-peekback activity retain --agent codex --session SESSION_ID --before UNIX_SECONDS
+peekback debug compact --agent codex --session SESSION_ID
+peekback debug retain --agent codex --session SESSION_ID --before UNIX_SECONDS
 ```
 
 Both commands return a JSON report; add `--apply` to commit. Compaction packs

@@ -118,7 +118,7 @@ fn setup_preserves_settings_is_repeatable_and_hooks_work_without_scripts_or_path
             assert!(out.stdout.is_empty() && out.stderr.is_empty(), "{out:?}");
         }
         let out = Command::new(&installed)
-            .args(["activity", "files", "--agent", agent, "--session", &format!("{agent}-session")])
+            .args(["debug", "files", "--agent", agent, "--session", &format!("{agent}-session")])
             .env("PEEKBACK_STATE_DIR", f.0.join("state"))
             .output()
             .unwrap();

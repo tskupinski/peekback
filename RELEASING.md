@@ -209,7 +209,8 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
 - [ ] Register a real Claude session and a real Codex CLI session using the
       generated hook commands. Confirm both appear in `peekback status`.
 - [ ] Create/edit a Markdown file in each session. Confirm it appears in
-      `peekback browse`; use `p` to render it in the native viewer.
+      the viewer with `Cmd+Shift+M`, and in `peekback debug browse`, where `p`
+      renders it in the native viewer.
 - [ ] Have each agent write a Markdown file through a shell command. Confirm it
       appears as `scan` after the turn ends, not before; stays listed after you
       edit it by hand; and is still listed after ending and resuming the session.
@@ -221,9 +222,6 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
       hotkey switch the viewer to it with an empty state, and that its first
       document opens as soon as it is written. With several tmux panes, confirm
       the hotkey picks the session in the pane you last used.
-- [ ] Browse `--all-sessions`. Check provenance and filtering. Previews should
-      preserve the originating live session, or open standalone when there is
-      none.
 - [ ] Check the viewer's Scratchpad picker (`Ctrl-P`, then `Tab`) in a Claude
       Code session: it lists the scratchpad's Markdown newest first, including
       files written mid-turn, and opening one keeps the session. In a Codex

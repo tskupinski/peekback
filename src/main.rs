@@ -39,7 +39,7 @@ const PRUNE_AFTER_SECS: i64 = 24 * 60 * 60;
 #[command(
     name = "peekback",
     version,
-    about = "Browse Claude Code and Codex session files, with a native Markdown preview"
+    about = "Read the Markdown a Claude Code or Codex session just wrote, and send feedback back to its prompt"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -50,9 +50,8 @@ struct Cli {
 enum Command {
     /// Configure hooks for detected agents, preserving existing settings
     Setup(setup::Args),
-    /// Browse session files in the terminal; open Markdown in Peekback with p
-    Browse(browse::Args),
-    /// Collect and query session file activity independently of the viewer
+    /// Hook plumbing: records what the agent does
+    #[command(hide = true)]
     Activity {
         #[command(subcommand)]
         command: activity::Command,
@@ -90,13 +89,19 @@ enum Command {
     Hide,
     /// Stop the daemon
     Quit,
+    /// Inspect the recorded file activity behind the viewer, to find out why a
+    /// file is or is not listed
+    Debug {
+        #[command(subcommand)]
+        command: activity::Debug,
+    },
 }
 
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Setup(args) => setup::run(args),
-        Command::Browse(args) => browse::run(args),
         Command::Activity { command } => activity::run(command),
+        Command::Debug { command } => activity::debug(command),
         Command::Show { file, session, pane, no_focus } => show(file, session, pane, !no_focus),
         Command::Send { session, pane } => send(session, pane),
         Command::Daemon => daemon::run(),

@@ -54,7 +54,7 @@ def main():
                        "tool_input": {"file_path": "note.md", "command": "*** Begin Patch\n*** Add File: note.md\n+# Note\n*** End Patch"}}
             subprocess.run(["/bin/sh", "-c", command], input=json.dumps(payload), text=True,
                            env=env, cwd=root, check=True)
-            files = json.loads(run("activity", "files", "--agent", agent, "--session", f"{agent}-install"))
+            files = json.loads(run("debug", "files", "--agent", agent, "--session", f"{agent}-install"))
             assert len(files) == 1 and files[0]["path"] == str(root / "note.md")
         assert not (root / "state/daemon.log").exists()
     print("Cargo source install passed: package file list, isolated install, setup, both agents, no helper scripts.")

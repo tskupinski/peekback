@@ -26,9 +26,6 @@ const PREVIEW_BYTES: u64 = 256 * 1024;
 
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Browse retained file activity from every stored session
-    #[arg(long, conflicts_with_all = ["session", "agent", "pane"])]
-    all_sessions: bool,
     /// Session id (default: current session, else most recently active)
     #[arg(long, conflicts_with = "pane")]
     session: Option<String>,
@@ -44,7 +41,7 @@ pub struct Args {
 }
 
 struct Snapshot {
-    key: Option<SessionKey>,
+    key: SessionKey,
     cwd: Option<PathBuf>,
     active: bool,
     files: Vec<FileActivity>,
@@ -52,31 +49,18 @@ struct Snapshot {
 }
 
 impl Snapshot {
-    fn load(key: Option<SessionKey>) -> Result<Self> {
-        let Some(key) = key else {
-            let report = activity::store().read_all();
-            return Ok(Self {
-                key: None,
-                cwd: None,
-                active: false,
-                files: session_activity::files(report.events),
-                warnings: report.warnings.into_iter().map(|w| format!("{}: {}", w.path.display(), w.message)).collect(),
-            });
-        };
+    fn load(key: SessionKey) -> Result<Self> {
         key.validate()?;
         let active = registry::find(&key.session_id).filter(|s| s.activity_key() == key);
         let report = activity::store().read(&key)?;
         let events = report.events;
         let warnings = report.warnings.into_iter().map(|w| format!("{}: {}", w.path.display(), w.message)).collect();
         let cwd = active.as_ref().map(|s| s.cwd.clone());
-        Ok(Self { key: Some(key), cwd, active: active.is_some(), files: session_activity::files(events), warnings })
+        Ok(Self { key, cwd, active: active.is_some(), files: session_activity::files(events), warnings })
     }
 
     fn title(&self) -> String {
-        self.key
-            .as_ref()
-            .map(|key| format!("{} / {}", Harness::label(&key.agent), key.session_id))
-            .unwrap_or_else(|| "All sessions / retained history".into())
+        format!("{} / {}", Harness::label(&self.key.agent), self.key.session_id)
     }
 
     fn label(&self, file: &FileActivity) -> String {
@@ -85,22 +69,15 @@ impl Snapshot {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let key = if args.all_sessions {
-        None
-    } else {
-        Some(match (&args.agent, &args.session) {
-            (Some(harness), Some(id)) => harness.key(id.clone()),
-            _ => session::resolve(args.session.as_deref(), args.pane.as_deref())?.activity_key(),
-        })
+    let key = match (&args.agent, &args.session) {
+        (Some(harness), Some(id)) => harness.key(id.clone()),
+        _ => session::resolve(args.session.as_deref(), args.pane.as_deref())?.activity_key(),
     };
     let snapshot = Snapshot::load(key)?;
     if args.list || !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return print_list(&snapshot);
     }
     let mut browser = Browser::new(snapshot);
-    if args.all_sessions {
-        browser.origin = session::inside().map(|s| s.activity_key());
-    }
     let _terminal = Terminal::enter()?;
     loop {
         browser.draw()?;
@@ -169,11 +146,7 @@ fn print_list(snapshot: &Snapshot) -> Result<()> {
                 "{:<10} {:<10} {}",
                 evidence(file),
                 if file.exists { "present" } else { "missing" },
-                clean(&if snapshot.key.is_none() {
-                    format!("{}  [{}]", snapshot.label(file), provenance(file))
-                } else {
-                    snapshot.label(file)
-                })
+                clean(&snapshot.label(file))
             )?;
         }
         if snapshot.files.is_empty() {
@@ -208,9 +181,6 @@ struct Browser {
     mode: Mode,
     content: Vec<String>,
     message: String,
-    /// The session previews stay in when browsing all sessions: the one this
-    /// browser runs inside. A file's own sessions never choose it.
-    origin: Option<SessionKey>,
 }
 
 impl Browser {
@@ -226,7 +196,6 @@ impl Browser {
             mode: Mode::Text,
             content: Vec::new(),
             message: String::new(),
-            origin: None,
         };
         browser.filter(None);
         browser
@@ -327,7 +296,7 @@ impl Browser {
     fn open_preview(&mut self) {
         let result = (|| {
             let file = self.current().context("Select a file first")?;
-            let request = preview_request(self.snapshot.key.as_ref().or(self.origin.as_ref()), &file.path)?;
+            let request = preview_request(&self.snapshot.key, &file.path)?;
             match client::request_starting_daemon(&request)? {
                 Response::Ok => Ok(()),
                 Response::Error { message } => anyhow::bail!("{message}"),
@@ -447,13 +416,12 @@ fn provenance(file: &FileActivity) -> String {
     sessions.join(", ")
 }
 
-fn preview_request(key: Option<&SessionKey>, path: &Path) -> Result<Request> {
+fn preview_request(key: &SessionKey, path: &Path) -> Result<Request> {
     ensure!(discovery::is_markdown(path), "Select a .md or .markdown file to open the rendered preview.");
     ensure!(path.is_file(), "File is missing or is not a regular file.");
     let path = path.canonicalize().context("Cannot open selected file")?;
     // Ended sessions still have history, but cannot receive selections back.
-    let session_id =
-        key.and_then(|key| registry::find(&key.session_id).filter(|s| s.activity_key() == *key)).map(|s| s.session_id);
+    let session_id = registry::find(&key.session_id).filter(|s| s.activity_key() == *key).map(|s| s.session_id);
     Ok(Request::Show { session_id, path: Some(path), focus: true })
 }
 
@@ -558,7 +526,7 @@ mod tests {
             ),
         ];
         Snapshot {
-            key: Some(key),
+            key,
             cwd: Some("/missing".into()),
             active: true,
             files: session_activity::files(events),
@@ -609,12 +577,9 @@ mod tests {
         let path = root.join("example.md");
         std::fs::write(&path, b"# Hello\nworld\n").unwrap();
         assert_eq!(text_preview(&path), vec!["# Hello", "world"]);
-        assert!(matches!(
-            preview_request(snapshot().key.as_ref(), &path).unwrap(),
-            Request::Show { session_id: None, .. }
-        ));
-        assert!(preview_request(snapshot().key.as_ref(), &root.join("missing.md")).is_err());
-        assert!(preview_request(snapshot().key.as_ref(), &root.join("code.rs")).is_err());
+        assert!(matches!(preview_request(&snapshot().key, &path).unwrap(), Request::Show { session_id: None, .. }));
+        assert!(preview_request(&snapshot().key, &root.join("missing.md")).is_err());
+        assert!(preview_request(&snapshot().key, &root.join("code.rs")).is_err());
         std::fs::write(&path, [0, 1, 2]).unwrap();
         assert!(text_preview(&path)[0].contains("Binary"));
         std::fs::write(&path, [255, 254]).unwrap();

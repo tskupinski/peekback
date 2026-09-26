@@ -25,47 +25,12 @@ fn hook(root: &Path, input: Value) {
 
 fn query(root: &Path, command: &str) -> Value {
     let output = Command::new(env!("CARGO_BIN_EXE_peekback"))
-        .args(["activity", command, "--agent", "codex", "--session", "integration"])
+        .args(["debug", command, "--agent", "codex", "--session", "integration"])
         .env("PEEKBACK_STATE_DIR", root)
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     serde_json::from_slice(&output.stdout).unwrap()
-}
-
-#[test]
-fn all_sessions_listing_works_without_live_sessions_and_exposes_provenance() {
-    let root = std::env::temp_dir().join(format!("peekback-all-cli-{}", std::process::id()));
-    fs::create_dir_all(&root).unwrap();
-    let store = session_activity::Store::new(root.join("activity"));
-    for agent in ["claude", "codex"] {
-        let agent = session_activity::AgentId::new(agent).unwrap();
-        let key = session_activity::SessionKey { agent, session_id: "same-id".into() };
-        let event = session_activity::FileEvent::new(
-            &key,
-            &root,
-            Path::new("shared.rs"),
-            1,
-            session_activity::Operation::Read,
-            session_activity::Source::Hook,
-        );
-        store.append(&key, &[event]).unwrap();
-    }
-    fs::write(root.join("activity/claude/same-id/broken.json"), "{").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_peekback"))
-        .args(["browse", "--all-sessions", "--list"])
-        .env("PEEKBACK_STATE_DIR", &root)
-        .env("CODEX_THREAD_ID", "unrelated-active-session")
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.contains("All sessions"));
-    assert_eq!(text.matches("shared.rs").count(), 1);
-    assert!(text.contains("Claude Code / same-id") && text.contains("Codex / same-id"));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("broken.json"));
-    assert!(!root.join("daemon.log").exists());
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -90,7 +55,7 @@ fn wrapper_and_queries_retain_history_after_session_end() {
     assert_eq!(files[0]["exists"], false);
     fs::write(root.join("activity/codex/integration/corrupt.json"), "{").unwrap();
     let partial = Command::new(env!("CARGO_BIN_EXE_peekback"))
-        .args(["activity", "events", "--agent", "codex", "--session", "integration"])
+        .args(["debug", "events", "--agent", "codex", "--session", "integration"])
         .env("PEEKBACK_STATE_DIR", &root)
         .output()
         .unwrap();
@@ -115,19 +80,19 @@ fn maintenance_commands_preview_then_apply_and_pruned_sessions_stay_closed() {
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         output
     };
-    let preview = run(&["activity", "compact", "--agent", "codex", "--session", "integration"]);
+    let preview = run(&["debug", "compact", "--agent", "codex", "--session", "integration"]);
     let report: Value = serde_json::from_slice(&preview.stdout).unwrap();
     assert_eq!(report["dry_run"], true);
     assert_eq!(report["batches_before"], 2);
     assert!(!root.join("activity/codex/integration/.checkpoint").exists());
-    run(&["activity", "compact", "--agent", "codex", "--session", "integration", "--apply"]);
+    run(&["debug", "compact", "--agent", "codex", "--session", "integration", "--apply"]);
     assert_eq!(query(&root, "events").as_array().unwrap().len(), 2);
     // Retention keeps events at the cutoff second and rejects future cutoffs.
     std::thread::sleep(std::time::Duration::from_millis(1100));
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs().to_string();
     let future = (now.parse::<u64>().unwrap() * 1000).to_string();
     let retain = |before: &str, apply: bool| {
-        let mut args = vec!["activity", "retain", "--agent", "codex", "--session", "integration", "--before", before];
+        let mut args = vec!["debug", "retain", "--agent", "codex", "--session", "integration", "--before", before];
         args.extend(apply.then_some("--apply"));
         Command::new(env!("CARGO_BIN_EXE_peekback")).args(args).env("PEEKBACK_STATE_DIR", &root).output().unwrap()
     };
@@ -168,7 +133,7 @@ fn terminal_listing_handles_live_and_retained_sessions_without_starting_viewer()
         assert!(!output.stdout.contains(&27), "piped output must not contain terminal escapes");
         output
     };
-    let live = run(&["browse"]);
+    let live = run(&["debug", "browse"]);
     let text = String::from_utf8(live.stdout).unwrap();
     assert!(text.contains("notes.md"));
     assert!(text.contains("old.rs"));
@@ -177,12 +142,12 @@ fn terminal_listing_handles_live_and_retained_sessions_without_starting_viewer()
     input["hook_event_name"] = json!("SessionEnd");
     hook(&root, input);
     fs::write(root.join("activity/codex/integration/broken.json"), "{").unwrap();
-    let ended = run(&["browse", "--agent", "codex", "--session", "integration", "--list"]);
+    let ended = run(&["debug", "browse", "--agent", "codex", "--session", "integration", "--list"]);
     assert!(String::from_utf8_lossy(&ended.stdout).contains("notes.md"));
     let warnings = String::from_utf8_lossy(&ended.stderr);
     assert!(warnings.contains("broken.json"));
     assert!(!root.join("daemon.log").exists());
-    let other = run(&["browse", "--agent", "claude", "--session", "integration"]);
+    let other = run(&["debug", "browse", "--agent", "claude", "--session", "integration"]);
     assert!(String::from_utf8_lossy(&other.stdout).contains("No observed files"));
     fs::remove_dir_all(root).unwrap();
 }

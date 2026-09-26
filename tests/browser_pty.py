@@ -38,7 +38,7 @@ def terminal(env, arguments=None):
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 28, 110, 0, 0))
     original = termios.tcgetattr(slave)
     process = subprocess.Popen(
-        [BINARY, "browse", *(arguments or ["--agent", "codex", "--session", "terminal-test"])],
+        [BINARY, "debug", "browse", *(arguments or ["--agent", "codex", "--session", "terminal-test"])],
         env=env, stdin=slave, stdout=slave, stderr=slave,
     )
     try:
@@ -85,7 +85,7 @@ def main():
             server.settimeout(10)
 
             def receive():
-                for index in range(5):
+                for index in range(3):
                     conn, _ = server.accept()
                     with conn, conn.makefile("rb") as reader:
                         request = json.loads(reader.readline())
@@ -93,7 +93,7 @@ def main():
                         expires = request.pop("expires_at_ms")
                         assert 0 < expires - time.time() * 1000 <= 3000, expires
                         requests.append(request)
-                        if index == 4:
+                        if index == 2:
                             # A connected but stalled daemon must not freeze the
                             # browser indefinitely or trigger a second daemon.
                             time.sleep(3.5)
@@ -121,35 +121,20 @@ def main():
                 os.write(master, b"c/main.rs\rp")
                 expect(master, "Select a .md or .markdown file")
                 os.write(master, b"q")
-            with terminal(env, ["--all-sessions"]) as (_, master, _):
-                expect(master, "All sessions")
-                os.write(master, b"/notes\re")
-                expect(master, "Codex / terminal-test")
-                os.write(master, b"p")
-                expect(master, "Opened Markdown in Peekback.")
-                assert requests[1] == dict(type="show", session_id=None, path=str(notes.resolve()), focus=True)
-                os.write(master, b"q")
-            # Run from inside a live session, previews stay in that session.
-            with terminal(dict(env, CODEX_THREAD_ID="terminal-test"), ["--all-sessions"]) as (_, master, _):
-                expect(master, "All sessions")
-                os.write(master, b"/notes\rp")
-                expect(master, "Opened Markdown in Peekback.")
-                assert requests[2] == dict(type="show", session_id="terminal-test", path=str(notes.resolve()), focus=True)
-                os.write(master, b"q")
             hook["hook_event_name"] = "SessionEnd"
             record()
             with terminal(env) as (_, master, _):
                 expect(master, "retained history")
                 os.write(master, b"/notes\rp")
                 expect(master, "Opened Markdown in Peekback.")
-                assert requests[3] == dict(type="show", session_id=None, path=str(notes.resolve()), focus=True)
+                assert requests[1] == dict(type="show", session_id=None, path=str(notes.resolve()), focus=True)
                 os.write(master, b"p")
                 expect(master, "waiting for daemon reply")
                 assert not Path(root, "daemon.log").exists()
                 os.write(master, b"\x03")
             thread.join(timeout=5)
             assert not thread.is_alive()
-    print("PTY smoke passed: filtering, evidence/text, resize, live/ended/all-session preview dispatch, q/Ctrl-C cleanup.")
+    print("PTY smoke passed: filtering, evidence/text, resize, live/ended preview dispatch, q/Ctrl-C cleanup.")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Move the terminal browser and the activity queries under `peekback debug`
+  (`debug browse`, `debug files`, `debug events`, `debug compact`,
+  `debug retain`), for finding out why a file is or is not listed. The
+  hooks' `peekback activity record` keeps working and is hidden from help.
+  `browse --all-sessions` is gone: it showed every session's files, which the
+  viewer never does.
 - Follow links from the keyboard with `gx`: the one in the cursor's block, or
   a list to pick from when the block has several. Links were mouse-only.
 - Remove the sidebar, `Tab` and `:sidebar`. It was off by default, and the

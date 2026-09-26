@@ -138,9 +138,8 @@ Session resolution prefers an explicit ID, then an explicit tmux pane (looked
 up on the tmux server in the caller's `TMUX`, else on any server when the id
 is unique), then
 `CODEX_THREAD_ID`, `CODEX_SESSION_ID`, or `CLAUDE_CODE_SESSION_ID` from the
-calling process, then the most recently active live session. Retained browsing
-can select an ended session by agent and ID, or all sessions without a live
-registry entry.
+calling process, then the most recently active live session. `debug browse`
+can also select an ended session by agent and ID.
 
 ## File evidence and capture
 
@@ -159,8 +158,7 @@ attributed writes.
 Ownership is decided once, when evidence is captured, and stored. Views only
 read the store: nothing is inferred from the filesystem at display time, so a
 session's files do not change when someone else edits them later, and a
-resumed session, the terminal browser and `browse --all-sessions` all show the
-same list. The viewer's Scratchpad scope is the one live listing,
+resumed session and the terminal browser show the same list. The viewer's Scratchpad scope is the one live listing,
 because only its own session writes there.
 
 ### Sources
@@ -260,12 +258,6 @@ existing `.md` or `.markdown` files, excluding reads and failed operations after
 reconciliation, and marks scan evidence. Both sort by latest observed activity
 and refresh from the store when the registry changes.
 
-The terminal browser's all-sessions mode reads the same stored history for
-every session, merging identical paths while keeping agent/session provenance.
-Its Markdown previews never infer a send-back target from the file: they stay
-in the session the browser runs inside, and are standalone when there is
-none.
-
 ## Storage and maintenance
 
 The store writes immutable JSON batches with validated session identity,
@@ -286,15 +278,22 @@ history after interrupted cleanup. Retention stores a monotonic cutoff so
 older observations cannot be reimported. Unix readers/appenders use shared
 advisory locks and maintenance uses an exclusive lock.
 
-There is no automatic retention limit. Reads still load retained history into
-memory; compaction reduces file count, not memory use. All-session reads lock
-each session separately and do not provide a globally atomic snapshot. See the
+There is no automatic retention limit: `peekback debug compact` and `retain`
+maintain one session by hand. Reads still load retained history into memory;
+compaction reduces file count, not memory use. The library's all-session
+reads lock each session separately and do not provide a globally atomic
+snapshot. See the
 [library guide](https://github.com/tskupinski/peekback/tree/main/crates/session-activity)
 for detailed API and storage compatibility guarantees.
 
 ## Terminal browser
 
-`peekback browse` uses crossterm for the file list, current-text preview, evidence,
+The CLI's everyday commands are the viewer's: `setup`, `show`, `send`,
+`status`, `hide`, `quit`. The recorded history behind the viewer is under
+`peekback debug`, for finding out why a file is or is not listed; the hooks'
+own `peekback activity record` and `retry` are hidden from help.
+
+`peekback debug browse` uses crossterm for the file list, current-text preview, evidence,
 and warning views. Wide terminals show two panes; narrow terminals show the
 focused pane. Filtering and refresh are local interactions. Piped output or
 `--list` produces a plain table. Preview text is current UTF-8 content capped at

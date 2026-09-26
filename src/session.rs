@@ -29,11 +29,6 @@ pub fn resolve(explicit: Option<&str>, pane: Option<&str>) -> Result<Session> {
     }
 }
 
-/// The live session this process runs inside, if any. Never guesses.
-pub fn inside() -> Option<Session> {
-    current_id(|key| std::env::var(key).ok()).and_then(|id| registry::find(&id))
-}
-
 /// Pane ids repeat across tmux servers, so the pane is looked up on the
 /// server the caller runs under, as a tmux binding's `run-shell` does. Without
 /// one, the id must name a pane on a single server. Sessions come newest

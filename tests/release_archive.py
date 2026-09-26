@@ -58,7 +58,7 @@ def check(archive):
                 result = subprocess.run(["bash", "-c", command], input=json.dumps(payload), text=True, env=env, capture_output=True, check=True)
                 assert not result.stderr, result.stderr
                 assert (state / "sessions" / f"{session_id}.json").exists() == (event != "SessionEnd")
-            files = json.loads(subprocess.check_output([binary, "activity", "files", "--agent", agent, "--session", session_id], env=env))
+            files = json.loads(subprocess.check_output([binary, "debug", "files", "--agent", agent, "--session", session_id], env=env))
             assert len(files) == 1 and files[0]["path"] == str(root / "note.md")
         assert not (state / "daemon.log").exists()
     print("Release archive passed: checksum, version, isolated install, spaced paths, both hook lifecycles, retained history.")
