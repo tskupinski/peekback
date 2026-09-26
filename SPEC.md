@@ -432,8 +432,10 @@ the text, so marking never changes the document's layout. Overlapping
 comments take the next of three lanes. Bars are redrawn after each render and
 when the document's size changes, as when an image loads. `]c` and `[c` move
 the cursor to the next or previous comment in source order, wrapping, and
-show its note in the status line; the chosen comment's bar is emphasized. The
-status line shows the session's pending count with the key that sends it.
+show its note in the status line, including comments whose text changed or
+was removed, which say so; the chosen comment's bar is emphasized. The status
+line shows the session's pending count, how many of them changed, and the key
+that sends them. When space is short the path gives way before the message.
 Nothing submits a prompt. Esc and `:q` hide
 the viewer; `peekback quit` stops the daemon and unregisters the hotkey.
 
@@ -479,10 +481,13 @@ the comments picker reviews and sends one comment; `s` on a selection sends
 at once. The sent text groups the session's comments by canonical file
 path, with labels relative to the delivery target. Each comment starts with
 a `path#L<start>-<end>` reference to its source lines, 1-based, before its
-quote; a comment whose text changed or was removed has none, since its lines
-no longer hold it. Sending a selection
-includes the unchanged comments wholly inside it after the quoted selection,
-and those count as sent too; a comment reaching beyond the selection stays. Only a matching paste result marks a batch sent. A
+quote, and its note follows after a blank line, so Markdown does not read the
+note as part of the quote; a comment whose text changed or was removed has no
+reference, since its lines no longer hold it. Sending a selection includes
+the unchanged comments wholly inside it after the quoted selection, with
+their references and notes but not their quotes, which the selection already
+holds; those count as sent too, and a comment reaching beyond the selection
+stays. Only a matching paste result marks a batch sent. A
 clipboard fallback asks whether it was pasted: yes marks the batch sent so it
 cannot go out twice, no keeps it. Delivery still checks the exact session
 incarnation and process, so a comment written before a resume is sent only

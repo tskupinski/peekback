@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Count comments whose text changed in the status line, and let `]c` / `[c`
+  stop on them. They used to vanish from the margin and `]c` while still
+  counting as pending.
+- Put a blank line between each quote and its note in what is sent, so the
+  note is not read as part of the quote, and stop repeating quotes a sent
+  selection already holds.
+- Keep the status message readable when space is short, with a shorter
+  "Pasted?" question.
+- Draw inactive comment bars in their own color that keeps 3:1 contrast
+  (it was 2.45:1 in the light theme), let the help overlay scroll, and clear
+  a search when the viewer changes session.
 - `u` undoes removing a comment or discarding a written note, which each say
   so; `u` was a second half-page-up key. An empty new note is no longer
   added as "(no note)", and emptying a comment in `C` removes it.

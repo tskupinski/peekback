@@ -129,6 +129,8 @@
     if (composing && (composing.target ?? composing.editing).fileIdentity !== state.doc.fileIdentity) settleComposer();
     // Another session's comments wait for it; coming back finds them.
     const restored = previousOwner !== commentOwner() ? activeComments().length : 0;
+    // A search belongs to what you were reading in that session.
+    if (previousOwner !== commentOwner() && state.search.query) clearSearch();
     previousOwner = commentOwner();
     if (restored) toast(`${restored} unsent comment${restored === 1 ? "" : "s"} restored`);
     // A live reload starts a new view too; an open listing is asked for again
@@ -441,8 +443,9 @@
     // Pending comments stay in view while the sidebar is closed, with the key
     // that sends them.
     const pending = activeComments().length;
+    const changed = activeComments().filter((c) => c.changed).length;
     statusPendingEl.hidden = pending === 0;
-    statusPendingEl.textContent = `${pending} pending · S send`;
+    statusPendingEl.textContent = `${pending} pending${changed ? ` · ${changed} changed` : ""} · S send`;
   }
 
   // The sidebar is off by default; the popup is narrow and the picker
@@ -490,7 +493,7 @@
     if (action === "send") {
       const quoted = [lineRef(state.doc?.fileIdentity, line, endLine), blockquote(text)].filter(Boolean).join("\n");
       const attached = commentsWithin(line, endLine);
-      if (attached.length) sendComments(attached, `${quoted}\n\n`);
+      if (attached.length) sendComments(attached, `${quoted}\n\n`, { quotes: false });
       else post({ type: "send", text: quoted, purpose: "selection" });
     }
     if (action === "comment") openComposer({ target: commentTarget(text, line, endLine) });
@@ -702,7 +705,10 @@
     return path;
   }
 
-  function commentsPrompt(comments) {
+  // Each comment: where it is, the quote, then the note after a blank line,
+  // so Markdown does not read the note as part of the quote. A selection
+  // sent with its comments already quotes their text, so they skip it.
+  function commentsPrompt(comments, { quotes = true } = {}) {
     const byPath = new Map();
     for (const c of comments) {
       if (!byPath.has(c.fileIdentity)) byPath.set(c.fileIdentity, []);
@@ -712,8 +718,11 @@
       .map(([path, group]) => {
         const label = promptPathFor(path);
         const body = group
-          .map((c) => [c.changed ? null : lineRef(path, c.line, c.endLine), blockquote(c.quote),
-            c.changed ? CHANGED_NOTE : null, c.note].filter(Boolean).join("\n"))
+          .map((c) => {
+            const head = [c.changed ? null : lineRef(path, c.line, c.endLine), quotes ? blockquote(c.quote) : null,
+              c.changed ? CHANGED_NOTE : null].filter(Boolean).join("\n");
+            return c.note ? `${head}\n\n${c.note}` : head;
+          })
           .join("\n\n");
         return `Comments on \`${label}\`:\n\n${body}`;
       })
@@ -735,10 +744,10 @@
 
   // Until "Pasted them?" is answered, those comments may already be in the
   // prompt; sending again could paste them twice.
-  function sendComments(comments, prefix) {
+  function sendComments(comments, prefix, format) {
     if (state.question) return setMessage("answer whether the last comments were pasted first");
     if (commentsInFlight) return setMessage("still sending the previous batch");
-    const request_id = post({ type: "send", text: prefix + commentsPrompt(comments), purpose: "comments" });
+    const request_id = post({ type: "send", text: prefix + commentsPrompt(comments, format), purpose: "comments" });
     if (request_id !== null) commentsInFlight = { request_id, ids: comments.map((c) => c.id) };
   }
 
@@ -994,7 +1003,7 @@
   // order and shows each one's note.
   function nextComment(direction) {
     const here = activeComments()
-      .filter((c) => !c.changed && c.fileIdentity === state.doc?.fileIdentity)
+      .filter((c) => c.fileIdentity === state.doc?.fileIdentity)
       .sort((a, b) => a.line - b.line || a.id - b.id);
     if (here.length === 0) return setMessage("no comments in this document");
     const at = Number(state.blocks[state.cursor]?.dataset.sourceLine ?? -1);
@@ -1007,7 +1016,8 @@
     state.currentComment = c.id;
     moveCursor(nearestBlock(c.line));
     paintComments();
-    setMessage(`comment ${i + 1} of ${here.length}: ${c.note || "(no note)"}`);
+    const stale = c.changed ? " (text changed or removed)" : "";
+    setMessage(`comment ${i + 1} of ${here.length}${stale}: ${c.note || "(no note)"}`);
   }
 
   // Follows text that moved, as when the agent adds a paragraph above it.

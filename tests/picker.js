@@ -219,9 +219,12 @@ async function main() {
   assert.equal(marked()[0].attributes.title, "Another note");
   assert.equal(element("comments").children[0].children[1].hidden, false);
   assert.match(element("comments").children[0].children[1].textContent, /text changed or removed/);
+  assert.equal(element("status-pending").textContent, "2 pending · 1 changed · S send");
+  key("G"); key("]"); key("c"); // ]c stops on it too, and says what happened.
+  assert.match(element("status-msg").textContent, /^comment 1 of 2 \(text changed or removed\): Review both paragraphs$/);
   sendAll();
   assert.match(messages.at(-1).text, /Review both paragraphs/);
-  assert.match(messages.at(-1).text, /\(This text has since changed or been removed\.\)\nReview both paragraphs/);
+  assert.match(messages.at(-1).text, /\(This text has since changed or been removed\.\)\n\nReview both paragraphs/);
   receive({ type: "send-result", purpose: "comments", ok: false, text: "failed" });
   await render();
   assert.equal(element("comments").children[0].children[1].hidden, true);
@@ -297,7 +300,7 @@ async function main() {
 
   // What the agent gets: where each quote is, as a line reference.
   sendAll();
-  assert.match(messages.at(-1).text, /Comments on `\/comments\.md`:\n\n`\/comments\.md#L3`\n> Second paragraph\.\nReworded$/);
+  assert.match(messages.at(-1).text, /Comments on `\/comments\.md`:\n\n`\/comments\.md#L3`\n> Second paragraph\.\n\nReworded$/);
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
   assert.equal(element("comments").children.length, 0);
 
@@ -313,7 +316,7 @@ async function main() {
   assert.equal(intro.value, "");  // The line last sent with; these tests sent without one.
   intro.value = "Address these review comments.";
   intro.dispatch("input");
-  assert.match(element("review-preview").textContent, /^Address these review comments\.\n\nComments on `\/comments\.md`:\n\n`\/comments\.md#L1`\n> First paragraph\.\nReview this$/);
+  assert.match(element("review-preview").textContent, /^Address these review comments\.\n\nComments on `\/comments\.md`:\n\n`\/comments\.md#L1`\n> First paragraph\.\n\nReview this$/);
   intro.dispatch("keydown", { key: "ArrowDown" }); // Scrolls the preview, nothing else.
   intro.dispatch("keydown", { key: "Escape" });
   assert.equal(element("review").hidden, true);
@@ -387,7 +390,7 @@ async function main() {
   const withComments = messages.at(-1);
   assert.equal(withComments.purpose, "comments");
   assert.match(withComments.text, /^`\/comments\.md#L1-3`\n> First paragraph\.\n>\n> Second paragraph\.\n\nComments on/);
-  assert.match(withComments.text, /`\/comments\.md#L1`\n> First paragraph\.\nOn the first/);
+  assert.match(withComments.text, /\n\n`\/comments\.md#L1`\n\nOn the first/); // Already quoted above: not again.
   assert.match(withComments.text, /On the first/);
   assert.doesNotMatch(withComments.text, /On the last/);
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });

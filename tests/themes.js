@@ -40,7 +40,7 @@ for (const name of names) {
     ["banner", t["banner-fg"], t["banner-bg"], 4.5], ["comment badge", t.annotate, t["annotate-bg"], 4.5],
     ["normal mode", t.bg, t.muted, 4.5], ["visual mode", t.bg, t["mode-visual"], 4.5], ["active mode", t.bg, t.accent, 4.5],
     ["search match", t["search-fg"], t["search-bg"], 4.5],
-    ["cursor", t.accent, t.bg, 3], ["comment marker", t.annotate, t.bg, 3],
+    ["cursor", t.accent, t.bg, 3], ["comment marker", t.annotate, t.bg, 3], ["dimmed comment marker", t["annotate-dim"], t.bg, 3],
     ...Object.keys(t).filter((k) => k.startsWith("syn-")).map((k) => [k, t[k], t["code-bg"], 4.5]),
   ];
   for (const [what, fg, bg, minimum] of pairs) {

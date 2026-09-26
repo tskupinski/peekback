@@ -193,8 +193,8 @@ and Comment actions.
 Each pending comment is a bar in the left margin beside the blocks it covers;
 overlapping comments sit side by side, and adding one never moves the text.
 `]c` and `[c` step through them and show each note in the status line, the
-status line shows how many are pending with `S` to send them, and `Space c`
-lists them all. Hovering a bar also shows its note.
+status line shows how many are pending (and how many changed) with `S` to send
+them, and `Space c` lists them all. Hovering a bar also shows its note.
 
 `S` opens a review sheet showing the session it will send to and exactly
 what will be pasted, starting with an opening line you can edit ("Address

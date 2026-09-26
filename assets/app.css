@@ -236,8 +236,9 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
 .statusline .mode[data-mode="visual"] { background: var(--mode-visual); }
 .statusline .mode[data-mode="command"], .statusline .mode[data-mode="search"], .statusline .mode[data-mode="picker"], .statusline .mode[data-mode="comment"] { background: var(--accent); }
 .statusline .mode[data-mode="confirm"] { background: var(--mode-visual); }
-.statusline .status-doc { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.statusline .status-msg { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.statusline .status-doc { flex: 0 1000 auto; min-width: 0; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The message gives way last: questions and notes are what you read now. */
+.statusline .status-msg { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .statusline .status-pending {
   flex: 0 0 auto;
   padding: 1px 8px;
@@ -308,6 +309,8 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
   position: fixed;
   right: 24px;
   top: 24px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
   z-index: 7;
   padding: 14px 18px;
   border: 1px solid var(--border);
@@ -432,11 +435,10 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
   position: absolute;
   width: 3px;
   border-radius: 2px;
-  background: var(--annotate);
-  opacity: 0.55;
+  background: var(--annotate-dim);
   pointer-events: auto;
 }
-.comment-bar.current { opacity: 1; width: 4px; }
+.comment-bar.current { background: var(--annotate); width: 4px; }
 
 .comment {
   position: relative;
