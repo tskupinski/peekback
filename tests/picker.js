@@ -37,6 +37,7 @@ class Element {
   focus() {}
   blur() {}
   scrollIntoView() {}
+  getBoundingClientRect() { return { top: 0, bottom: 20, left: 10, right: 600 }; }
 }
 
 async function main() {
@@ -228,13 +229,50 @@ async function main() {
   assert.equal(marked().length, 0);
   assert.equal(element("doc").children[1].attributes.title, undefined);
 
+  // Writing a note happens in a box under the block, all from the keyboard.
+  key("g"); key("g"); key("j"); key("c");
+  assert.equal(element("mode").textContent, "COMMENT");
+  assert.equal(element("composer").hidden, false);
+  assert.equal(element("composer-quote").textContent, "Second paragraph.");
+  const composer = element("composer-input");
+  composer.value = "First line";
+  composer.dispatch("keydown", { key: "Enter", shiftKey: true }); // Shift-Enter is a new line, not a save.
+  assert.equal(element("composer").hidden, false);
+  composer.value = "First line\nsecond line";
+  composer.dispatch("keydown", { key: "Enter" });
+  assert.equal(element("composer").hidden, true);
+  assert.equal(element("mode").textContent, "NORMAL");
+  assert.equal(marked()[0].attributes.title, "First line\nsecond line");
+  key("c"); composer.value = "Never mind"; composer.dispatch("keydown", { key: "Escape" });
+  assert.equal(element("composer").hidden, true);
+  assert.equal(element("comments").children.length, 1); // Esc adds nothing.
+  // C edits the comment on the cursor's block; Ctrl-E does it from the list.
+  key("C");
+  assert.equal(composer.value, "First line\nsecond line");
+  composer.value = "Reworded";
+  composer.dispatch("keydown", { key: "Enter" });
+  assert.equal(marked()[0].attributes.title, "Reworded");
+  assert.equal(element("comments").children.length, 1);
+  key("g"); key("g"); key("C");
+  assert.match(element("status-msg").textContent, /no comment on this block · c adds one/);
+  key(" "); key("c");
+  input.dispatch("keydown", { key: "e", ctrlKey: true });
+  assert.equal(composer.value, "Reworded");
+  composer.dispatch("keydown", { key: "Escape" });
+  // What the agent gets: where each quote is, as a line reference.
+  command("sendall");
+  assert.match(messages.at(-1).text, /Comments on `\/comments\.md`:\n\n`\/comments\.md#L3`\n> Second paragraph\.\nReworded$/);
+  receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
+  assert.equal(element("comments").children.length, 0);
+
   // Sending a selection takes the comments inside it along, and sends them.
   key("g"); key("g"); command("c On the first");
   key("G"); command("c On the last");
   key("g"); key("g"); key("v"); key("j"); key("s");
   const withComments = messages.at(-1);
   assert.equal(withComments.purpose, "comments");
-  assert.match(withComments.text, /^> First paragraph\.\n>\n> Second paragraph\.\n\nComments on/);
+  assert.match(withComments.text, /^`\/comments\.md#L1-3`\n> First paragraph\.\n>\n> Second paragraph\.\n\nComments on/);
+  assert.match(withComments.text, /`\/comments\.md#L1`\n> First paragraph\.\nOn the first/);
   assert.match(withComments.text, /On the first/);
   assert.doesNotMatch(withComments.text, /On the last/);
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
@@ -277,8 +315,8 @@ async function main() {
 
   key("g"); key("g"); key("c");
   await render("/other.md");
-  element("cmd-input").value = "Keep the original target";
-  element("cmd-input").dispatch("keydown", { key: "Enter" });
+  element("composer-input").value = "Keep the original target";
+  element("composer-input").dispatch("keydown", { key: "Enter" });
   assert.equal(marked().length, 0);
   await render();
   assert.equal(marked()[0].attributes.title, "Keep the original target");
@@ -388,10 +426,10 @@ async function main() {
   command("c Fix A again");
   command("sendall");
   key("c");
-  element("cmd-input").value = "Written while asked";
+  element("composer-input").value = "Written while asked";
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
   assert.equal(element("mode").textContent, "COMMENT");
-  element("cmd-input").dispatch("keydown", { key: "Enter" });
+  element("composer-input").dispatch("keydown", { key: "Enter" });
   await new Promise(setImmediate);
   assert.equal(element("mode").textContent, "CONFIRM");
   key("y");

@@ -409,8 +409,16 @@ non-Markdown files produce warnings. Opening a bookmark keeps the live session,
 like Scratchpad.
 
 Keyboard and mouse selections map back to Markdown. Copy writes to the
-clipboard; Send pastes a blockquote; Comment accumulates notes for a combined
+clipboard; Send pastes a blockquote, preceded by a `path#L<start>-<end>`
+reference to its source lines; Comment accumulates notes for a combined
 paste. Selection actions are disabled while block mappings are rendering.
+
+A note is written in a composer placed under the last block it is about,
+outside the rendered document so a live reload while typing keeps the draft;
+it is placed again after every render. `Enter` saves, `Shift-Enter` adds a
+line, `Esc` cancels. `C` edits the latest comment on the cursor's block, and
+`Ctrl-E` in the comments picker edits the chosen one, opening its document
+first when it is another. `:c note` still adds a one-line note directly.
 Nothing submits a prompt. Esc and `:q` hide
 the viewer; `peekback quit` stops the daemon and unregisters the hotkey.
 
@@ -447,7 +455,10 @@ mark. Only the document on screen is checked: a comment on another document
 of the session keeps the state it had when that document was last shown.
 
 Send all sends the session's comments as one prompt grouped by canonical file
-path, with labels relative to the delivery target. Sending a selection
+path, with labels relative to the delivery target. Each comment starts with
+a `path#L<start>-<end>` reference to its source lines, 1-based, before its
+quote; a comment whose text changed or was removed has none, since its lines
+no longer hold it. Sending a selection
 includes the unchanged comments wholly inside it after the quoted selection,
 and those count as sent too; a comment reaching beyond the selection stays. Only a matching paste result marks a batch sent. A
 clipboard fallback asks whether it was pasted: yes marks the batch sent so it

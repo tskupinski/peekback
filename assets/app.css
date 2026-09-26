@@ -423,6 +423,37 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
 }
 .comment-note { font-size: 12.5px; }
 .comment-changed { font-size: 11px; color: var(--banner-fg); font-style: italic; }
+
+/* ---- note composer, placed under the commented block ---- */
+
+.composer {
+  position: absolute;
+  z-index: 6;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--annotate) 45%, var(--border));
+  border-left: 3px solid var(--annotate);
+  border-radius: 8px;
+  background: var(--annotate-bg);
+  box-shadow: 0 6px 24px var(--shadow);
+}
+.composer[hidden] { display: none; }
+.composer-quote { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer textarea {
+  width: 100%;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.composer textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.composer-hint { font: 11px/1.4 var(--mono); color: var(--muted); }
 .comment-changed[hidden] { display: none; }
 .comment-remove {
   position: absolute;

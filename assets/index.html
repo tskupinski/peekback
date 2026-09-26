@@ -62,8 +62,9 @@
       <tr><td>]d / [d</td><td>next / previous document</td></tr>
       <tr><td>v</td><td>visual mode: extend with j / k</td></tr>
       <tr><td>y / s</td><td>copy / send the block or selection as Markdown; s also sends the comments inside it</td></tr>
-      <tr><td>c</td><td>comment on the block or selection</td></tr>
-      <tr><td>Space c</td><td>pending comments (Enter jumps, Ctrl-D removes)</td></tr>
+      <tr><td>c</td><td>comment on the block or selection: Enter saves, Shift-Enter adds a line, Esc cancels</td></tr>
+      <tr><td>C</td><td>edit the comment on the cursor's block</td></tr>
+      <tr><td>Space c</td><td>pending comments (Enter jumps, Ctrl-E edits, Ctrl-D removes)</td></tr>
       <tr><td>S / :sendall</td><td>send all pending comments as one prompt</td></tr>
       <tr><td>/</td><td>search, then n / N</td></tr>
       <tr><td>:</td><td>command line: :doc, :send, :copy, :c note, :sendall, :comments, :sidebar, :q, :help</td></tr>
@@ -77,6 +78,11 @@
     <span id="status-doc" class="status-doc"></span>
     <span id="status-msg" class="status-msg"></span>
   </footer>
+  <div id="composer" class="composer" hidden>
+    <div id="composer-quote" class="composer-quote"></div>
+    <textarea id="composer-input" rows="2" spellcheck="true" placeholder="Note for the agent"></textarea>
+    <div class="composer-hint">Enter saves · Shift-Enter new line · Esc cancels</div>
+  </div>
   <div id="cmdline" class="cmdline" hidden>
     <ul id="completions" class="completions" hidden></ul>
     <div class="cmdline-row"><span id="cmd-prefix" class="cmd-prefix">:</span><input id="cmd-input" type="text" autocomplete="off" spellcheck="false"></div>

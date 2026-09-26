@@ -173,12 +173,13 @@ pane and press the hotkey, or run `peekback show --session ID`.
 | `v` | visual mode, extend with `j` / `k` |
 | `y` | copy the block or selection as Markdown |
 | `s` | send the block or selection to the prompt as a blockquote, with the comments inside it |
-| `c` | comment: add a note to the block or selection |
+| `c` | comment on the block or selection: a note box opens under it; `Enter` saves, `Shift-Enter` adds a line, `Esc` cancels |
+| `C` | edit the comment on the cursor's block |
 | `S` | send all pending comments as one prompt |
 | `/` | search, then `n` / `N` |
 | `Space d` or `Ctrl-P` | document picker |
 | `Tab` / `Shift-Tab` in document picker | cycle Current session, Scratchpad, and Bookmarks |
-| `Space c` | pending comments (`Enter` jumps, `Ctrl-D` removes) |
+| `Space c` | pending comments (`Enter` jumps, `Ctrl-E` edits, `Ctrl-D` removes) |
 | `:` | command line: `:doc`, `:send`, `:c note`, `:sendall`, `:sidebar`, `:q`, `:help` |
 | `Tab` | toggle the sidebar |
 | `?` | key overlay |
@@ -190,7 +191,9 @@ and Comment actions.
 Blocks with pending comments are highlighted and show a comment-count badge.
 Hover over a marked block to read its notes, or use `Space c` to open the pending
 comments picker. Markers disappear when comments are removed or successfully
-sent. Sending a selection (`s`) also sends the comments inside it.
+sent. Sending a selection (`s`) also sends the comments inside it. Everything
+sent says where it is in the file, as `notes/plan.md#L12-18`, so the agent
+finds the text without searching, even after editing the file.
 
 Comments belong to their session. They stay while you hide and show the
 viewer, switch documents, reload or resume the session. Opening another

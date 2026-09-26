@@ -4,6 +4,9 @@
   const bannerEl = $("banner");
   const noDocumentsEl = $("no-documents");
   const noDocumentsText = noDocumentsEl.textContent.trim();
+  const composerEl = $("composer");
+  const composerQuote = $("composer-quote");
+  const composerInput = $("composer-input");
   const documentsEl = $("documents");
   const toastEl = $("toast");
   const toolbarEl = $("toolbar");
@@ -167,6 +170,14 @@
     collectBlocks();
     rendering = false;
     renderComments();
+    placeComposer();
+    if (state.pendingEdit) {
+      const comment = activeComments().find((c) => c.id === state.pendingEdit);
+      if (comment?.fileIdentity === state.doc.fileIdentity) {
+        state.pendingEdit = null;
+        Promise.resolve().then(() => openComposer({ editing: comment }));
+      }
+    }
     if (state.pendingAnswer && state.confirm) {
       const key = state.pendingAnswer;
       state.pendingAnswer = null;
@@ -471,11 +482,12 @@
     if (rendering || state.confirm || !text) return;
     if (action === "copy") post({ type: "copy", text });
     if (action === "send") {
+      const quoted = [lineRef(state.doc?.path, line, endLine), blockquote(text)].filter(Boolean).join("\n");
       const attached = commentsWithin(line, endLine);
-      if (attached.length) sendComments(attached, `${blockquote(text)}\n\n`);
-      else post({ type: "send", text: blockquote(text), purpose: "selection" });
+      if (attached.length) sendComments(attached, `${quoted}\n\n`);
+      else post({ type: "send", text: quoted, purpose: "selection" });
     }
-    if (action === "comment") openNoteInput(text, line, endLine);
+    if (action === "comment") openComposer({ target: commentTarget(text, line, endLine) });
   }
 
   // -------------------------------------------------------------- comments
@@ -483,7 +495,6 @@
   // Comments belong to their session and live in memory until they are sent
   // or discarded, their session ends, or the daemon stops. Moving to another
   // session parks them.
-  let noteTarget = null;
   let nextCommentId = 1;
   let commentsInFlight = null; // { request_id, ids, after } for a send that has not reported back
   // Tells the agent a quote is no longer in the file, so it is not read as a
@@ -506,10 +517,105 @@
     };
   }
 
-  function openNoteInput(quote, line, endLine) {
-    noteTarget = commentTarget(quote, line, endLine);
-    openCmdline("c");
-    cmdInput.placeholder = "note, Enter to add";
+  // ------------------------------------------------------------ composer
+
+  // Writing a note happens under the block it is about. It lives outside the
+  // rendered document, so a live reload while typing keeps the draft.
+  let composing = null; // { target } for a new comment, { editing } for an existing one
+
+  function openComposer(what) {
+    if (!state.doc || (!what.target?.quote && !what.editing)) return;
+    closePicker();
+    closeCmdline();
+    composing = what;
+    const { quote, note } = what.editing ?? { quote: what.target.quote, note: "" };
+    composerQuote.textContent = firstLine(quote);
+    composerInput.value = note;
+    composerEl.hidden = false;
+    setMode("comment");
+    fitComposer();
+    placeComposer();
+    composerInput.focus();
+  }
+
+  function closeComposer() {
+    if (composerEl.hidden) return;
+    composerEl.hidden = true;
+    composing = null;
+    composerInput.blur();
+    leaveVisual();
+    setMode("normal");
+    showQuestionLater();
+  }
+
+  function saveComposer() {
+    const what = composing;
+    const note = composerInput.value;
+    closeComposer();
+    if (what?.editing) {
+      what.editing.note = note.trim();
+      renderComments();
+      setMessage("comment updated");
+    } else if (what?.target) {
+      addComment(what.target, note);
+    }
+  }
+
+  // Under the last block the note is about, where the eye already is.
+  function placeComposer() {
+    if (composerEl.hidden || !composing) return;
+    const { line, endLine } = composing.editing ?? composing.target;
+    const block = state.blocks[nearestBlock(Number.isInteger(endLine) ? endLine - 1 : line)];
+    if (!block) return;
+    const rect = block.getBoundingClientRect();
+    const column = docEl.getBoundingClientRect();
+    composerEl.style.top = `${rect.bottom + (window.scrollY || 0) + 8}px`;
+    composerEl.style.left = `${rect.left}px`;
+    composerEl.style.width = `${Math.max(240, Math.min(640, column.right - rect.left - 24))}px`;
+    composerEl.scrollIntoView({ block: "nearest" });
+  }
+
+  function fitComposer() {
+    composerInput.rows = Math.min(8, Math.max(2, composerInput.value.split("\n").length));
+  }
+
+  function firstLine(quote) {
+    const line = quote.split("\n").find((l) => l.trim()) ?? "";
+    return line.replace(/^\s*(#{1,6}|>|[-*+]|\d+[.)])\s+/, "").slice(0, 120);
+  }
+
+  composerInput.addEventListener("input", fitComposer);
+  composerInput.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.isComposing) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeComposer();
+    } else if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      saveComposer();
+    }
+  });
+
+  // The comment on the cursor's block; with several, the latest.
+  function editCommentAtCursor() {
+    const block = state.blocks[state.cursor];
+    if (!block) return;
+    const start = Number(block.dataset.sourceLine);
+    const end = Number(block.dataset.sourceEnd);
+    const here = activeComments().filter((c) => !c.changed && c.fileIdentity === state.doc?.fileIdentity
+      && c.line < end && c.endLine > start);
+    if (here.length === 0) return setMessage("no comment on this block · c adds one");
+    openComposer({ editing: here.at(-1) });
+    if (here.length > 1) setMessage(`${here.length} comments here · Space c lists them`);
+  }
+
+  function editComment(c) {
+    if (c.fileIdentity !== state.doc?.fileIdentity) {
+      state.pendingEdit = c.id;
+      return jumpToComment(c);
+    }
+    openComposer({ editing: c });
   }
 
   function addComment(target, note) {
@@ -546,11 +652,20 @@
       .map(([path, group]) => {
         const label = promptPathFor(path);
         const body = group
-          .map((c) => [blockquote(c.quote), c.changed ? CHANGED_NOTE : null, c.note].filter(Boolean).join("\n"))
+          .map((c) => [c.changed ? null : lineRef(path, c.line, c.endLine), blockquote(c.quote),
+            c.changed ? CHANGED_NOTE : null, c.note].filter(Boolean).join("\n"))
           .join("\n\n");
         return `Comments on \`${label}\`:\n\n${body}`;
       })
       .join("\n\n");
+  }
+
+  // Where a quote sits in the file, as `path#L12-18`, so the agent finds it
+  // without searching, even after it has edited the file.
+  function lineRef(path, line, endLine) {
+    if (!path || !Number.isInteger(line) || !Number.isInteger(endLine) || endLine <= line) return null;
+    const first = line + 1;
+    return `\`${promptPathFor(path)}#L${first}${endLine > first ? `-${endLine}` : ""}\``;
   }
 
   function sendAllComments(after) {
@@ -918,20 +1033,20 @@
     handler(arg);
   }
 
-  // The command line doubles as the search field and the note input;
-  // `cmdPrefix` tells them apart.
+  // The command line doubles as the search field; `cmdPrefix` tells them
+  // apart.
   let cmdPrefix = ":";
   let completionList = [];
   let completionIndex = -1;
 
   function openCmdline(prefix) {
     cmdPrefix = prefix;
-    cmdPrefixEl.textContent = prefix === "c" ? "comment" : prefix;
+    cmdPrefixEl.textContent = prefix;
     cmdInput.value = "";
     cmdInput.placeholder = "";
     cmdlineEl.hidden = false;
     hideCompletions();
-    setMode(prefix === ":" ? "command" : prefix === "/" ? "search" : "comment");
+    setMode(prefix === ":" ? "command" : "search");
     cmdInput.focus();
   }
 
@@ -939,7 +1054,6 @@
     if (cmdlineEl.hidden) return;
     cmdlineEl.hidden = true;
     hideCompletions();
-    noteTarget = null;
     cmdInput.blur();
     setMode(state.anchor !== null ? "visual" : "normal");
     showQuestionLater();
@@ -997,13 +1111,9 @@
     } else if (event.key === "Enter") {
       const value = cmdInput.value;
       const prefix = cmdPrefix;
-      const target = noteTarget;
       closeCmdline();
       if (prefix === "/") gotoMatch(1);
-      else if (prefix === "c") {
-        if (target) addComment(target, value);
-        setMode("normal");
-      } else runCommand(value);
+      else runCommand(value);
     } else if (event.key === "Tab") {
       event.preventDefault();
       if (cmdPrefix === ":") cycleCompletion(event.shiftKey ? -1 : 1);
@@ -1072,7 +1182,7 @@
     if (kind === "documents" && picker.scope !== "bookmarks" && !state.doc?.sessionId) picker.scope = "bookmarks";
     if (kind === "documents") refreshScope();
     pickerInput.value = "";
-    pickerInput.placeholder = { documents: "open document", comments: "pending comments, Ctrl-D removes" }[kind];
+    pickerInput.placeholder = { documents: "open document", comments: "pending comments, Ctrl-E edits, Ctrl-D removes" }[kind];
     pickerEl.hidden = false;
     setMode("picker");
     updatePickerItems();
@@ -1186,6 +1296,12 @@
     } else if (event.key === "ArrowUp" || (ctrl && (event.key === "p" || event.key === "k"))) {
       event.preventDefault();
       movePicker(-1);
+    } else if (ctrl && event.key === "e" && picker.kind === "comments") {
+      event.preventDefault();
+      const chosen = picker.filtered[picker.index];
+      const comment = chosen && activeComments().find((c) => c.id === chosen.id);
+      closePicker();
+      if (comment) editComment(comment);
     } else if (ctrl && event.key === "d" && picker.kind === "comments") {
       event.preventDefault();
       const chosen = picker.filtered[picker.index];
@@ -1237,6 +1353,8 @@
       return answer(event.key);
     }
     if (rendering && event.key !== "Escape") return;
+    // A click elsewhere took focus from the note; the next key brings it back.
+    if (state.mode === "comment" && !composerEl.hidden) return composerInput.focus();
     if (["command", "search", "picker", "comment"].includes(state.mode)) return;
     if (modifierKeys.has(event.key)) return;
     if (event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -1297,6 +1415,7 @@
         case "y": actOnSelection("copy"); break;
         case "s": actOnSelection("send"); break;
         case "c": actOnSelection("comment"); break;
+        case "C": editCommentAtCursor(); break;
         case "S": sendAllComments(); break;
         case "/": openCmdline("/"); break;
         case ":": openCmdline(":"); break;

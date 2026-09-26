@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Write comments in a note box that opens under the commented block, with
+  several lines (`Shift-Enter`), instead of a one-line input at the bottom
+  edge. `C` edits the comment on the cursor's block, and `Ctrl-E` edits one
+  from the comments picker; comments could only be removed before.
+- Tell the agent where each comment and sent selection is, as a
+  `path#L12-18` reference before the quote.
 - Replace terminal color detection with built-in light and dark themes, in
   Peekback's own palette. `theme = "auto"` follows the system; `"light"` and
   `"dark"` pin a theme and the window's appearance. Terminal palettes failed
