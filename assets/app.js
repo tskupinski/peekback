@@ -49,7 +49,7 @@
     pendingJump: null, // { fileIdentity, line }: where to go once that document renders
     pendingEdit: null, // a comment id to edit once its document renders
     undo: null, // { comment } removed, or { what, note } a discarded note: what u brings back
-    pendingJump: null, // { path, line } to apply once that document renders
+    currentComment: null, // the comment ]c and [c last stopped on
   };
 
   // ------------------------------------------------------------- rendering
@@ -125,8 +125,9 @@
       documents: message.documents,
       label: labelFor(message.path, message.documents),
     };
-    // A note being written belongs to the document it was started on.
-    if (composing && (composing.target ?? composing.editing).fileIdentity !== state.doc.fileIdentity) settleComposer();
+    // A note being written belongs to the document and session it was started on.
+    const noteOn = composing && (composing.target ?? composing.editing);
+    if (noteOn && (noteOn.fileIdentity !== state.doc.fileIdentity || noteOn.owner !== commentOwner())) settleComposer();
     // Another session's comments wait for it; coming back finds them.
     const restored = previousOwner !== commentOwner() ? activeComments().length : 0;
     // A search belongs to what you were reading in that session.
@@ -503,7 +504,7 @@
   // or discarded, their session ends, or the daemon stops. Moving to another
   // session parks them.
   let nextCommentId = 1;
-  let commentsInFlight = null; // { request_id, ids } for a send that has not reported back
+  let commentsInFlight = null; // { request_id, sent } for a send that has not reported back
   // Tells the agent a quote is no longer in the file, so it is not read as a
   // request to restore it.
   const CHANGED_NOTE = "(This text has since changed or been removed.)";
@@ -558,7 +559,7 @@
   // Leaving the note's document saves what was written, with its own
   // document and session, rather than carrying the box to another document.
   function settleComposer() {
-    const what = composing;
+    const what = resolveNote(composing);
     const note = composerInput.value.trim();
     closeComposer();
     if (!note) return;
@@ -570,7 +571,7 @@
   // An empty note is no comment: a new one is not added, and emptying an
   // existing one removes it (u brings it back).
   function saveComposer() {
-    const what = composing;
+    const what = resolveNote(composing);
     const note = composerInput.value.trim();
     closeComposer();
     if (what?.editing) {
@@ -581,6 +582,16 @@
     } else if (what?.target && note) {
       addComment(what.target, note);
     }
+  }
+
+  // The comment a note edits may have been sent or removed since; the note
+  // then becomes a new comment on the same text rather than going nowhere.
+  function resolveNote(what) {
+    if (!what?.editing) return what;
+    const editing = state.comments.find((c) => c.id === what.editing.id);
+    if (editing) return { editing };
+    const { id, note, changed, ...target } = what.editing;
+    return { target };
   }
 
   // Esc on a note with writing in it keeps the writing for u.
@@ -659,8 +670,9 @@
 
   function editComment(c) {
     if (c.fileIdentity !== state.doc?.fileIdentity) {
-      state.pendingEdit = c.id;
-      return jumpToComment(c);
+      jumpToComment(c);
+      if (state.pendingJump) state.pendingEdit = c.id;
+      return;
     }
     openComposer({ editing: c });
   }
@@ -696,7 +708,13 @@
       renderComments();
       setMessage("comment restored");
     } else {
-      openComposer({ ...last.what, draft: last.note });
+      const what = resolveNote(last.what);
+      const on = what.editing ?? what.target;
+      if (on.fileIdentity !== state.doc?.fileIdentity) {
+        state.undo = last;
+        return setMessage(`that note is on ${promptPathFor(on.path)} · u there restores it`);
+      }
+      openComposer({ ...what, draft: last.note });
     }
   }
 
@@ -751,7 +769,7 @@
     if (state.question) return setMessage("answer whether the last comments were pasted first");
     if (commentsInFlight) return setMessage("still sending the previous batch");
     const request_id = post({ type: "send", text: prefix + commentsPrompt(comments, format), purpose: "comments" });
-    if (request_id !== null) commentsInFlight = { request_id, ids: comments.map((c) => c.id) };
+    if (request_id !== null) commentsInFlight = { request_id, sent: comments.map(({ id, note }) => ({ id, note })) };
   }
 
   // -------------------------------------------------------- review sheet
@@ -837,24 +855,28 @@
     }
   });
 
-  function markSent(ids) {
-    const sent = new Set(ids);
-    state.comments = state.comments.filter((c) => !sent.has(c.id));
+  // Only comments still as they were sent: one edited meanwhile stays
+  // pending with its new note, and one removed meanwhile cannot come back
+  // with u to be sent again.
+  function markSent(sent) {
+    const isSent = (c) => sent.some((s) => s.id === c.id && s.note === c.note);
+    state.comments = state.comments.filter((c) => !isSent(c));
+    if (state.undo?.comment && isSent(state.undo.comment)) state.undo = null;
     renderComments();
   }
 
   function onSendResult(message) {
     toast(message.text);
     if (message.purpose !== "comments" || message.request_id !== commentsInFlight?.request_id) return;
-    const { ids } = commentsInFlight;
+    const { sent } = commentsInFlight;
     commentsInFlight = null;
     if (message.ok && message.outcome === "pasted") {
-      markSent(ids);
+      markSent(sent);
     } else if (message.ok && message.outcome === "copied") {
       // Only you know whether it reached the prompt; keeping them unasked
       // would send them again next time.
-      const n = ids.length;
-      ask(`Copied ${n} comment${n === 1 ? "" : "s"}. Pasted? y marks sent · n keeps`, () => markSent(ids), () => {});
+      const n = sent.length;
+      ask(`Copied ${n} comment${n === 1 ? "" : "s"}. Pasted? y marks sent · n keeps`, () => markSent(sent), () => {});
     }
   }
 
@@ -1005,16 +1027,21 @@
     setMessage(`comment ${i + 1} of ${here.length}${stale}: ${c.note || "(no note)"}`);
   }
 
-  // Follows text that moved, as when the agent adds a paragraph above it.
-  // Anything else is reported as changed rather than guessed at.
-  // Only when the text occurs as often as when you commented, and then the
-  // same copy in order: with one copy gone, such as a repeated heading,
-  // there is no telling which was yours.
+  // Text still on its lines stays put, even when a copy appears elsewhere.
+  // Otherwise it follows text that moved, as when the agent adds a paragraph
+  // above it, but only when the text occurs as often as when you commented,
+  // and then the same copy in order: with one copy gone, such as a repeated
+  // heading, there is no telling which was yours. Anything else is reported
+  // as changed rather than guessed at.
   function locate(c, lines) {
     const found = occurrences(lines, c.anchorSource);
-    if (found.length === 0 || found.length !== c.anchorCount) return false;
-    const at = found[c.anchorIndex];
-    [c.line, c.endLine] = [at, at + (c.endLine - c.line)];
+    if (lines.slice(c.line, c.endLine).join("\n") !== c.anchorSource) {
+      if (found.length === 0 || found.length !== c.anchorCount) return false;
+      const at = found[c.anchorIndex];
+      [c.line, c.endLine] = [at, at + (c.endLine - c.line)];
+    }
+    // Counted again, so a later move is judged against the file as it is now.
+    [c.anchorCount, c.anchorIndex] = [found.length, found.indexOf(c.line)];
     return true;
   }
 
@@ -1036,6 +1063,9 @@
   }
 
   function jumpToComment(c) {
+    if (c.fileIdentity !== state.doc?.fileIdentity && !(state.doc?.documents ?? []).some((d) => d.path === c.path)) {
+      return setMessage(`${promptPathFor(c.path)} is not in this session's documents · Ctrl-P opens it`);
+    }
     if (c.fileIdentity !== state.doc?.fileIdentity) {
       state.pendingJump = { fileIdentity: c.fileIdentity, line: c.line };
       switchTo(state.doc?.sessionId ?? null, c.path);
@@ -1531,8 +1561,14 @@
       return answer(event.key);
     }
     if (rendering && event.key !== "Escape") return;
-    // A click elsewhere took focus from the note; the next key brings it back.
-    if (state.mode === "comment" && !composerEl.hidden) return composerInput.focus();
+    // A click elsewhere took focus from the note or the review sheet; the
+    // next key brings it back, and Esc still closes it.
+    const openInput = { comment: composerInput, review: reviewIntroInput }[state.mode];
+    if (openInput) {
+      event.preventDefault();
+      if (event.key !== "Escape") return openInput.focus();
+      return state.mode === "comment" ? discardComposer() : closeReview();
+    }
     if (inputOpen()) return;
     if (modifierKeys.has(event.key)) return;
     if (event.ctrlKey && !event.metaKey && !event.altKey) {

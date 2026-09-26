@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Keep the keyboard on an open review sheet or note after a click elsewhere;
+  the review sheet ignored every key, `Esc` included.
+- Stop losing notes around a send: an edit made while a send is waiting
+  stays pending instead of being marked sent, a comment removed while it
+  was being sent cannot be restored with `u` and sent again, and `u` after a
+  send restores a discarded edit as a new comment instead of into nothing.
+- Keep a comment on its text when the agent adds another copy of it, such as
+  a second `### Tests` heading; it was reported as changed.
+- Save an open note with its session when the viewer switches to another
+  session showing the same file.
+- Say how to reach a comment on a bookmark or scratchpad file from another
+  document, instead of a failed switch.
 - Count comments whose text changed in the status line, and let `]c` / `[c`
   stop on them. They used to vanish from the margin and `]c` while still
   counting as pending.

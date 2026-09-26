@@ -490,6 +490,125 @@ scenario("Leaving a document: the note is saved with it, a reload keeps it open"
   assert.deepEqual(marked(), [{ line: 2, endLine: 5, note: "Written during a reload" }]); // Followed its text.
 });
 
+scenario("Keyboard after a stray click: the review sheet keeps the keys, Esc still closes it", async page => {
+  const { element, key, command, render } = page;
+  await render();
+  command("c Review this");
+  key("S");
+  key("j"); // Focus was lost to a click; the key brings it back instead of being dropped.
+  assert.equal(element("mode").textContent, "REVIEW");
+  key("Escape");
+  assert.equal(element("review").hidden, true);
+  assert.equal(element("mode").textContent, "NORMAL");
+  key("c"); element("composer-input").value = "Half written";
+  key("Escape"); // Same for the note box.
+  assert.equal(element("composer").hidden, true);
+  assert.match(element("toast").textContent, /note discarded · u restores/);
+});
+
+scenario("Sends in flight: an edit made meanwhile stays pending, a removal is not undone into a resend", async page => {
+  const { element, receive, key, command, render, sendAll } = page;
+  const notes = () => element("comments").children.map(li => li.children[2].textContent);
+  await render();
+  command("c First version");
+  sendAll();
+  key("C"); element("composer-input").value = "First version, and more";
+  element("composer-input").dispatch("keydown", { key: "Enter" });
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
+  key("y"); // What was pasted is sent; what was added after it was not.
+  assert.deepEqual(notes(), ["First version, and more"]);
+  element("comments").children[0].children[3].dispatch("click");
+  command("c Removed while sending");
+  sendAll();
+  element("comments").children[0].children[3].dispatch("click");
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
+  key("u");
+  assert.match(element("status-msg").textContent, /nothing to undo/);
+  assert.deepEqual(notes(), []);
+});
+
+scenario("Undo after a send: a discarded edit comes back as a new comment, on its own document", async page => {
+  const { element, receive, key, command, render, sendAll } = page;
+  const composer = element("composer-input");
+  await render();
+  command("c Keep me");
+  key("C"); composer.value = "Keep me, reworded";
+  composer.dispatch("keydown", { key: "Escape" });
+  sendAll();
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
+  assert.equal(element("comments").children.length, 0);
+  key("u");
+  assert.equal(composer.value, "Keep me, reworded");
+  composer.dispatch("keydown", { key: "Enter" });
+  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent), ["Keep me, reworded"]);
+  element("comments").children[0].children[3].dispatch("click");
+  key("j"); key("c"); composer.value = "About the second paragraph";
+  composer.dispatch("keydown", { key: "Escape" });
+  await render("/other.md");
+  key("u");
+  assert.match(element("status-msg").textContent, /that note is on \/comments\.md · u there restores it/);
+  assert.equal(element("composer").hidden, true);
+  await render();
+  key("u");
+  assert.equal(composer.value, "About the second paragraph");
+  assert.equal(element("composer-quote").textContent, "Second paragraph.");
+});
+
+scenario("Repeated text: a comment still on its lines keeps them when a copy appears", async page => {
+  const { element, messages, receive, command, render, sendAll, marked } = page;
+  await render("/plan.md", "### Tests\n\nOne.");
+  command("c Cover the edge cases");
+  await render("/plan.md", "### Tests\n\nOne.\n\n### Tests\n\nTwo."); // Another phase with its own Tests.
+  assert.deepEqual(marked().map(m => m.line), [0]);
+  assert.equal(element("status-pending").textContent, "1 pending · S send");
+  await render("/plan.md", "Intro.\n\n### Tests\n\nOne.\n\n### Tests\n\nTwo."); // Then it moves with the first copy.
+  assert.deepEqual(marked().map(m => m.line), [2]);
+  sendAll();
+  assert.match(messages.at(-1).text, /`\/plan\.md#L3`\n> ### Tests\n\nCover the edge cases$/);
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
+});
+
+scenario("Another session on the same file: the open note is saved with its own session", async page => {
+  const { element, receive, key } = page;
+  const show = async session_id => {
+    receive({ type: "render", path: "/repo/PLAN.md", source, session: { session_id }, documents: [] });
+    await new Promise(setImmediate);
+  };
+  await show("a");
+  key("c"); element("composer-input").value = "From A";
+  await show("b");
+  assert.equal(element("composer").hidden, true);
+  assert.match(element("toast").textContent, /note saved with its document/);
+  assert.equal(element("comments").children.length, 0);
+  await show("a");
+  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent), ["From A"]);
+});
+
+scenario("Comments elsewhere: jumping reaches the session's documents, and says so for others", async page => {
+  const { element, messages, receive, key, command, input } = page;
+  const show = async (path, documents) => {
+    receive({ type: "render", path, source, session: { session_id: "s" }, documents });
+    await new Promise(setImmediate);
+  };
+  const listed = [{ path: "/plan.md", label: "plan.md", touched_at: 2 }, { path: "/notes.md", label: "notes.md", touched_at: 1 }];
+  await show("/bookmark.md", listed); // Opened from Bookmarks: not one of the session's documents.
+  command("c On the bookmark");
+  await show("/plan.md", listed);
+  command("c On the plan");
+  await show("/notes.md", listed);
+  const before = messages.length;
+  key(" "); key("c");
+  input.value = "bookmark"; input.dispatch("input");
+  input.dispatch("keydown", { key: "e", ctrlKey: true });
+  assert.equal(messages.length, before);
+  assert.match(element("status-msg").textContent, /\/bookmark\.md is not in this session's documents · Ctrl-P opens it/);
+  key(" "); key("c");
+  input.value = "plan"; input.dispatch("input");
+  input.dispatch("keydown", { key: "Enter" });
+  assert.equal(messages.at(-1).type, "switch");
+  assert.equal(messages.at(-1).path, "/plan.md");
+});
+
 scenario("Links: HTML and SVG anchors never navigate the webview", async page => {
   const { element, document, window, messages, schemeListeners, env, receive, expectRequest, key, command, render, sendAll, bars, marked, context, input } = page;
   const anchor = (attributes, xlink = {}) => ({

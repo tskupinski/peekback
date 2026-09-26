@@ -422,9 +422,16 @@ closes the box. `Enter` saves, `Shift-Enter` adds a line, `Esc` cancels. An
 empty new note adds nothing, and saving an existing comment empty removes it.
 `u` takes back the last removal (the sidebar's ×, `Ctrl-D` in the comments
 picker, or an emptied note) or the last note discarded with `Esc`, once, in
-the session it belongs to; each says so in a toast. `C` edits the latest comment on the cursor's block, and
-`Ctrl-E` in the comments picker edits the chosen one, opening its document
-first when it is another. `:c note` still adds a one-line note directly.
+the session it belongs to; each says so in a toast. A note is restored on its
+own document; elsewhere `u` says where it is. A note editing a comment that
+was sent or removed meanwhile is saved as a new comment on the same text.
+`C` edits the latest comment on the cursor's block, and `Ctrl-E` in the
+comments picker edits the chosen one, opening its document first when it is
+another of the session's documents; a comment on a file opened from
+Bookmarks or the live scratchpad listing is reached by opening that file
+again. `:c note` still adds a one-line note directly. A click outside an open
+note or review sheet does not take the keyboard with it: the next key goes
+back to it, and `Esc` closes it.
 
 Each attached comment is drawn as one bar in the left margin, laid out from
 the rendered positions of the blocks it covers, between the block cursor and
@@ -453,13 +460,16 @@ parked comments of a session that ended stay in memory, unseen, until then.
 There is one status-line question: after a clipboard fallback, whether the
 comments were pasted (`y` marks them sent, `n` or `Esc` keeps them). Until it
 is answered no comments can be sent, since they may already be in the
-prompt. While it is shown it owns the status message, and other mode
+prompt. Only comments still as they were sent are marked sent: one edited
+meanwhile stays pending with its new note, and one removed meanwhile is no
+longer offered to `u`. While it is shown it owns the status message, and other mode
 changes, selection actions and document switches are refused. It never
 interrupts typing: arriving while the command line, a note, search, a picker
 or the review sheet is open, it waits until that closes.
 
 Each comment keeps its quoted source and the source lines it covered. On every
-render of its document, a comment whose lines no longer hold that text is
+render of its document, a comment whose lines still hold that text stays,
+whatever copies appear elsewhere; one whose lines no longer hold it is
 searched for as an exact block sequence elsewhere in the file. It moves only
 when the text occurs as often as when the comment was written, to the same
 copy in order; with a copy of repeated text gone there is no telling which was
