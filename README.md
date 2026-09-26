@@ -172,7 +172,7 @@ pane and press the hotkey, or run `peekback show --session ID`.
 | `]d` / `[d` | next / previous document |
 | `v` | visual mode, extend with `j` / `k` |
 | `y` | copy the block or selection as Markdown |
-| `s` | send the block or selection to the prompt as a blockquote |
+| `s` | send the block or selection to the prompt as a blockquote, with the comments inside it |
 | `c` | comment: add a note to the block or selection |
 | `S` | send all pending comments as one prompt |
 | `/` | search, then `n` / `N` |
@@ -190,9 +190,19 @@ and Comment actions.
 Blocks with pending comments are highlighted and show a comment-count badge.
 Hover over a marked block to read its notes, or use `Space c` to open the pending
 comments picker. Markers disappear when comments are removed or successfully
-sent. If live edits change the text at a comment's saved lines, its marker is
-hidden; the original quote and note remain in the pending list. Comments stay
-in memory until the daemon stops.
+sent. Sending a selection (`s`) also sends the comments inside it.
+
+Comments belong to their session. They stay while you hide and show the
+viewer, switch documents, reload or resume the session. Opening another
+session parks them, and coming back restores them. They end when you send or
+discard them, when their session ends, or when the daemon stops;
+`peekback quit` discards them.
+
+When the agent moves commented text, the comment follows it. When it changes
+or deletes the text, the comment stays in the list marked "text changed or
+removed", and sending it tells the agent the quote is no longer in the file.
+If a send falls back to the clipboard, the viewer asks whether you pasted it,
+so the same comments are not sent twice.
 
 The document picker has **Current session**, **Scratchpad** and
 **Bookmarks** scopes; `Tab` and `Shift-Tab` cycle through them. Current

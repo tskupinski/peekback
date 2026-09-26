@@ -40,7 +40,10 @@
     pendingKey: null,
     count: "",
     search: { query: "", matches: [], index: -1 },
-    comments: [], // { id, path, label, quote, note, line, endLine, anchorSource }
+    comments: [], // { id, path, label, quote, note, line, endLine, anchorSource, anchorCount, anchorIndex, changed }
+    confirm: null, // the question being asked: { text, choices }
+    questions: [], // questions waiting their turn
+    pendingAnswer: null, // a key answering the question while blocks render
     pendingJump: null, // { path, line } to apply once that document renders
   };
 
@@ -82,10 +85,13 @@
   mermaid.initialize(mermaidOptions);
 
   let renderGeneration = 0;
+  let previousOwner = null;
   let rendering = false;
   let nextRequestId = 1;
   const sameContext = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  const commentOwner = () => JSON.stringify(state.doc?.context?.session ?? null);
+  // Comments belong to the session, not to one run of its agent, so a resume
+  // keeps them; sending still checks the exact run.
+  const commentOwner = () => JSON.stringify(state.doc?.context?.session?.key ?? null);
   const activeComments = () => state.comments.filter(c => c.owner === commentOwner());
 
   async function render(message) {
@@ -112,6 +118,10 @@
       documents: message.documents,
       label: labelFor(message.path, message.documents),
     };
+    // Another session's comments wait for it; coming back finds them.
+    const restored = previousOwner !== commentOwner() ? activeComments().length : 0;
+    previousOwner = commentOwner();
+    if (restored) toast(`${restored} unsent comment${restored === 1 ? "" : "s"} restored`);
     // A live reload starts a new view too; an open listing is asked for again
     // under it rather than left empty.
     if (contextChanged && !pickerEl.hidden && picker.kind === "documents") refreshScope();
@@ -155,6 +165,11 @@
     collectBlocks();
     rendering = false;
     renderComments();
+    if (state.pendingAnswer && state.confirm) {
+      const key = state.pendingAnswer;
+      state.pendingAnswer = null;
+      Promise.resolve().then(() => answer(key));
+    }
     if (sourceChanged && state.anchor !== null) setMode("normal");
     if (state.pendingJump?.path === message.path) {
       state.cursor = nearestBlock(state.pendingJump.line);
@@ -383,6 +398,12 @@
   // ----------------------------------------------------------------- modes
 
   function setMode(mode) {
+    // Only an answer ends a question; a reload or a click must not hide it.
+    if (state.confirm && mode !== "confirm") {
+      if (mode === "normal") state.anchor = null;
+      paintCursor(false);
+      return;
+    }
     state.mode = mode;
     if (mode === "normal") state.anchor = null;
     modeEl.textContent = mode.toUpperCase();
@@ -432,6 +453,7 @@
   // --------------------------------------------------------------- actions
 
   function switchTo(sessionId, path) {
+    if (state.confirm) return;
     post({ type: "switch", session_id: sessionId, path });
   }
 
@@ -451,18 +473,27 @@
   }
 
   function perform(action, text, line, endLine) {
-    if (rendering || !text) return;
+    if (rendering || state.confirm || !text) return;
     if (action === "copy") post({ type: "copy", text });
-    if (action === "send") post({ type: "send", text: blockquote(text), purpose: "selection" });
+    if (action === "send") {
+      const attached = commentsWithin(line, endLine);
+      if (attached.length) sendComments(attached, `${blockquote(text)}\n\n`);
+      else post({ type: "send", text: blockquote(text), purpose: "selection" });
+    }
     if (action === "comment") openNoteInput(text, line, endLine);
   }
 
   // -------------------------------------------------------------- comments
 
-  // Comments are not persisted: stopping the daemon loses them, by design.
+  // Comments belong to their session and live in memory until they are sent
+  // or discarded, their session ends, or the daemon stops. Moving to another
+  // session parks them.
   let noteTarget = null;
   let nextCommentId = 1;
-  let commentsInFlight = null; // ids included in a send that has not reported back
+  let commentsInFlight = null; // { request_id, ids, after } for a send that has not reported back
+  // Tells the agent a quote is no longer in the file, so it is not read as a
+  // request to restore it.
+  const CHANGED_NOTE = "(This text has since changed or been removed.)";
 
   function commentTarget(quote, line, endLine) {
     if (!state.doc) return null;
@@ -476,6 +507,7 @@
       endLine,
       anchorSource: Number.isInteger(line) && Number.isInteger(endLine)
         ? state.doc.source.split("\n").slice(line, endLine).join("\n") : null,
+      ...anchorOrder(line, endLine),
     };
   }
 
@@ -518,29 +550,122 @@
     return [...byPath.entries()]
       .map(([path, group]) => {
         const label = promptPathFor(path);
-        const body = group.map((c) => `${blockquote(c.quote)}\n${c.note}`.trimEnd()).join("\n\n");
+        const body = group
+          .map((c) => [blockquote(c.quote), c.changed ? CHANGED_NOTE : null, c.note].filter(Boolean).join("\n"))
+          .join("\n\n");
         return `Comments on \`${label}\`:\n\n${body}`;
       })
       .join("\n\n");
   }
 
-  function sendAllComments() {
+  function sendAllComments(after) {
     const comments = activeComments();
-    if (rendering || comments.length === 0) return setMessage("no pending comments for this session");
-    if (commentsInFlight) return setMessage("still sending the previous batch");
-    const request_id = post({ type: "send", text: commentsPrompt(comments), purpose: "comments" });
-    if (request_id !== null) commentsInFlight = { request_id, ids: comments.map(c => c.id) };
+    if (state.confirm) return after?.kept();
+    if (rendering) {
+      setMessage("still rendering; try again");
+      return after?.kept();
+    }
+    // With nothing left unsent there is nothing to keep the viewer here for.
+    if (comments.length === 0) {
+      after?.sent();
+      return setMessage("no pending comments for this session");
+    }
+    sendComments(comments, "", after);
+  }
+
+  // `after` hears whether the comments went out (sent) or stayed (kept).
+  function sendComments(comments, prefix, after) {
+    if (commentsInFlight) {
+      after?.kept();
+      return setMessage("still sending the previous batch");
+    }
+    const request_id = post({ type: "send", text: prefix + commentsPrompt(comments), purpose: "comments" });
+    if (request_id === null) return after?.kept();
+    commentsInFlight = { request_id, ids: comments.map((c) => c.id), after };
+  }
+
+  // Parked comments go with their session when it ends; the one on screen
+  // stays, since its documents remain readable.
+  function dropEnded(sessions) {
+    const live = new Set(sessions.map((key) => JSON.stringify(key)));
+    state.comments = state.comments.filter((c) => c.owner === commentOwner() || live.has(c.owner));
+  }
+
+  function markSent(ids) {
+    const sent = new Set(ids);
+    state.comments = state.comments.filter((c) => !sent.has(c.id));
+    renderComments();
   }
 
   function onSendResult(message) {
     toast(message.text);
     if (message.purpose !== "comments" || message.request_id !== commentsInFlight?.request_id) return;
-    if (message.ok && message.outcome === "pasted") {
-      const sent = new Set(commentsInFlight.ids);
-      state.comments = state.comments.filter((c) => !sent.has(c.id));
-      renderComments();
-    }
+    const { ids, after } = commentsInFlight;
     commentsInFlight = null;
+    if (message.ok && message.outcome === "pasted") {
+      markSent(ids);
+      after?.sent();
+    } else if (message.ok && message.outcome === "copied") {
+      // Only you know whether it reached the prompt; keeping them unasked
+      // would send them again next time.
+      const n = ids.length;
+      ask(`Copied ${n} comment${n === 1 ? "" : "s"} to the clipboard. Pasted ${n === 1 ? "it" : "them"}? y marks sent · n keeps`, {
+        y: () => { markSent(ids); after?.sent(); },
+        n: () => after?.kept(),
+      });
+    } else {
+      after?.kept();
+    }
+  }
+
+  // Comments whose text lies wholly inside a selection travel with it; one
+  // reaching beyond it was about more than you chose to send.
+  function commentsWithin(line, endLine) {
+    if (!Number.isInteger(line) || !Number.isInteger(endLine)) return [];
+    return activeComments().filter((c) => !c.changed && c.fileIdentity === state.doc?.fileIdentity
+      && c.line >= line && c.endLine <= endLine);
+  }
+
+  // One-key questions in the status line, asked one at a time and each
+  // answered: a newer one waits its turn, since dropping "Pasted them?"
+  // would send those comments again. Escape answers with the question's own
+  // Escape, else n. A question never interrupts typing: while an input is
+  // open it waits until the input closes, so a note being written is kept.
+  function ask(text, choices) {
+    state.questions.push({ text, choices });
+    showQuestion();
+  }
+
+  function showQuestion() {
+    if (state.confirm || state.questions.length === 0) return;
+    if (["command", "search", "comment", "picker"].includes(state.mode)) return;
+    state.confirm = state.questions.shift();
+    setMode("confirm");
+    const { text } = state.confirm;
+    setMessage(typeof text === "function" ? text() : text);
+  }
+
+  // After the key that closed an input has done its work, so its own message
+  // does not replace the question.
+  function showQuestionLater() {
+    Promise.resolve().then(showQuestion);
+  }
+
+  function answer(key) {
+    // An answer given mid-render waits for the blocks; sending first would
+    // otherwise be refused and look like it had happened.
+    if (rendering) {
+      state.pendingAnswer = key;
+      return;
+    }
+    const { choices } = state.confirm;
+    const choice = choices[key] ?? (key === "Escape" ? choices.Escape ?? choices.n : null);
+    if (!choice) return;
+    state.confirm = null;
+    setMode("normal");
+    setMessage("");
+    choice();
+    showQuestion();
   }
 
   function renderComments() {
@@ -555,6 +680,10 @@
         const note = document.createElement("div");
         note.className = "comment-note";
         note.textContent = c.note || "(no note)";
+        const changed = document.createElement("div");
+        changed.className = "comment-changed";
+        changed.textContent = "text changed or removed";
+        changed.hidden = !c.changed;
         const remove = document.createElement("button");
         remove.className = "comment-remove";
         remove.textContent = "×";
@@ -563,7 +692,7 @@
           event.stopPropagation();
           removeComment(c.id);
         });
-        li.append(quote, note, remove);
+        li.append(quote, changed, note, remove);
         li.addEventListener("click", () => jumpToComment(c));
         return li;
       })
@@ -573,11 +702,12 @@
     renderStatus();
   }
 
+  // The daemon asks before a session switch would drop these.
   function paintComments() {
     const lines = state.doc?.source.split("\n") ?? [];
-    const comments = activeComments().filter((c) => c.fileIdentity === state.doc?.fileIdentity
-      && c.anchorSource !== null
-      && lines.slice(c.line, c.endLine).join("\n") === c.anchorSource);
+    const here = activeComments().filter((c) => c.fileIdentity === state.doc?.fileIdentity && c.anchorSource !== null);
+    for (const c of here) c.changed = !locate(c, lines);
+    const comments = here.filter((c) => !c.changed);
     for (const block of state.blocks) {
       const start = Number(block.dataset.sourceLine);
       const end = Number(block.dataset.sourceEnd);
@@ -593,25 +723,56 @@
     }
   }
 
+  // Follows text that moved, as when the agent adds a paragraph above it.
+  // Anything else is reported as changed rather than guessed at.
+  // Only when the text occurs as often as when you commented, and then the
+  // same copy in order: with one copy gone, such as a repeated heading,
+  // there is no telling which was yours.
+  function locate(c, lines) {
+    const found = occurrences(lines, c.anchorSource);
+    if (found.length === 0 || found.length !== c.anchorCount) return false;
+    const at = found[c.anchorIndex];
+    [c.line, c.endLine] = [at, at + (c.endLine - c.line)];
+    return true;
+  }
+
+  // Which copy of its text a new comment is on, among how many.
+  function anchorOrder(line, endLine) {
+    if (!Number.isInteger(line) || !Number.isInteger(endLine)) return { anchorCount: 0, anchorIndex: -1 };
+    const lines = state.doc.source.split("\n");
+    const found = occurrences(lines, lines.slice(line, endLine).join("\n"));
+    return { anchorCount: found.length, anchorIndex: found.indexOf(line) };
+  }
+
+  function occurrences(lines, anchor) {
+    const want = anchor.split("\n");
+    const found = [];
+    for (let i = 0; i + want.length <= lines.length; i++) {
+      if (lines[i] === want[0] && lines.slice(i, i + want.length).join("\n") === anchor) found.push(i);
+    }
+    return found;
+  }
+
   function jumpToComment(c) {
     if (c.path !== state.doc?.path) {
       state.pendingJump = { path: c.path, line: c.line };
       switchTo(state.doc?.sessionId ?? null, c.path);
       return;
     }
+    if (c.changed) return setMessage("that text has changed or been removed");
     if (c.line !== undefined && c.line !== null) moveCursor(nearestBlock(c.line));
   }
 
   function commentCandidates() {
     return activeComments().map((c) => ({
       label: `${c.quote.split("\n")[0].slice(0, 60)}${c.note ? "  ·  " + c.note : ""}`,
-      meta: c.label,
+      meta: c.changed ? `${c.label} · text changed or removed` : c.label,
       id: c.id,
       run: () => jumpToComment(c),
     }));
   }
 
-  sendAllButton.addEventListener("click", sendAllComments);
+  sendAllButton.addEventListener("click", () => sendAllComments());
 
   // ---------------------------------------------------------------- search
 
@@ -786,6 +947,7 @@
     noteTarget = null;
     cmdInput.blur();
     setMode(state.anchor !== null ? "visual" : "normal");
+    showQuestionLater();
   }
 
   function completionsFor(value) {
@@ -927,6 +1089,7 @@
     pickerEl.hidden = true;
     pickerInput.blur();
     setMode(state.anchor !== null ? "visual" : "normal");
+    showQuestionLater();
   }
 
   function filterPicker() {
@@ -1073,6 +1236,11 @@
   const modifierKeys = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
 
   window.addEventListener("keydown", (event) => {
+    if (state.confirm) {
+      if (modifierKeys.has(event.key)) return;
+      event.preventDefault();
+      return answer(event.key);
+    }
     if (rendering && event.key !== "Escape") return;
     if (["command", "search", "picker", "comment"].includes(state.mode)) return;
     if (modifierKeys.has(event.key)) return;
@@ -1348,6 +1516,7 @@
         bannerEl.hidden = false;
         break;
       case "toast": toast(message.text); break;
+      case "live-sessions": dropEnded(message.sessions); break;
       case "theme": applyTheme(message.theme); break;
       case "send-result": onSendResult(message); break;
       default: console.warn("unknown message", message);

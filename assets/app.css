@@ -257,6 +257,7 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
 }
 .statusline .mode[data-mode="visual"] { background: #b35900; }
 .statusline .mode[data-mode="command"], .statusline .mode[data-mode="search"], .statusline .mode[data-mode="picker"], .statusline .mode[data-mode="comment"] { background: var(--accent); }
+.statusline .mode[data-mode="confirm"] { background: #b35900; }
 .statusline .status-doc { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .statusline .status-msg { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -448,6 +449,8 @@ html[data-theme] ::highlight(search) { background: var(--ansi-3); color: var(--b
   text-overflow: ellipsis;
 }
 .comment-note { font-size: 12.5px; }
+.comment-changed { font-size: 11px; color: var(--banner-fg); font-style: italic; }
+.comment-changed[hidden] { display: none; }
 .comment-remove {
   position: absolute;
   right: 4px;

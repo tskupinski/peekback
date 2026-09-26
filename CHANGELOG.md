@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Keep comments with their session. A resume keeps them, opening another
+  session parks them, and coming back restores them with a notice; they end
+  with their session. Previously a resume left them in memory where they could
+  never be shown or sent again.
+- Follow commented text that moves, and mark comments whose text changed or
+  was removed, saying so in what is sent. Previously such markers vanished.
+- Ask after a clipboard fallback whether the comments were pasted, so they are
+  not sent twice.
+- Sending a selection includes the comments inside it.
 - Open the hotkey on the tmux pane you are actually in. The daemon inherited
   the pane of whichever terminal started it, and tmux answered every "which
   pane is active" query for that pane's window, so the hotkey kept opening a

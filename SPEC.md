@@ -409,13 +409,50 @@ like Scratchpad.
 
 Keyboard and mouse selections map back to Markdown. Copy writes to the
 clipboard; Send pastes a blockquote; Comment accumulates notes for a combined
-paste. Drafts belong to their session incarnation and outgoing groups use
-canonical file paths, with labels calculated for the delivery target. Other
-sessions' drafts are preserved separately. Send results carry request IDs;
-only a matching successful paste removes that batch. Clipboard fallback keeps
-the draft. Selection actions are disabled while block mappings are rendering.
-Nothing submits a prompt. Comments are not persisted. Esc and `:q` hide
+paste. Selection actions are disabled while block mappings are rendering.
+Nothing submits a prompt. Esc and `:q` hide
 the viewer; `peekback quit` stops the daemon and unregisters the hotkey.
+
+### Review comments
+
+Comments are notes for the agent, not stored documents. They live in the
+page's memory and belong to their session: the agent and session ID, so a
+resume in a new incarnation keeps them. Hiding and showing the viewer,
+switching documents and live reloads keep them too. Opening another session
+parks them without asking; coming back restores them, with a notice of how
+many. They end when they are sent or discarded, when their session ends (the
+daemon lists live session keys to the page whenever they change, and parked
+comments of sessions no longer listed are dropped), or when the daemon stops.
+`peekback quit` discards them without asking. The session on screen keeps its
+comments even after it ends, since its documents stay readable.
+
+Questions are asked one at a time and each gets an answer: a newer one waits
+its turn, so "Pasted them?" is never dropped. While a question is open, other
+mode changes, selection actions and document switches wait for it. A
+question never interrupts typing: one that arrives while the command line, a
+note, search or a picker is open waits until it closes. An answer given while
+blocks render is applied once they are ready.
+
+Each comment keeps its quoted source and the source lines it covered. On every
+render of its document, a comment whose lines no longer hold that text is
+searched for as an exact block sequence elsewhere in the file. It moves only
+when the text occurs as often as when the comment was written, to the same
+copy in order; with a copy of repeated text gone there is no telling which was
+the comment's. Otherwise it is marked "text changed or removed": no
+block marker, a label in the sidebar and pickers, and a line in the sent
+prompt saying the quote is no longer in the file, so it is not read as a
+request to restore it. A later reload that brings the text back clears the
+mark. Only the document on screen is checked: a comment on another document
+of the session keeps the state it had when that document was last shown.
+
+Send all sends the session's comments as one prompt grouped by canonical file
+path, with labels relative to the delivery target. Sending a selection
+includes the unchanged comments wholly inside it after the quoted selection,
+and those count as sent too; a comment reaching beyond the selection stays. Only a matching paste result marks a batch sent. A
+clipboard fallback asks whether it was pasted: yes marks the batch sent so it
+cannot go out twice, no keeps it. Delivery still checks the exact session
+incarnation and process, so a comment written before a resume is sent only
+to the resumed process the viewer now shows.
 
 The config file is `~/.config/peekback/config.toml`. Window placement and hotkeys
 are read at daemon startup; bookmarks refresh their configuration on request,

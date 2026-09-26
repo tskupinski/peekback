@@ -68,12 +68,13 @@ async function main() {
     markdownit: () => ({ use() { return this; }, render(source) { return source; } }),
     ipc: { postMessage: text => messages.push(JSON.parse(text)) },
     scrollTo() {},
+    scrollBy() {},
   });
   element("no-documents").textContent = "This session has not written any Markdown yet. Its first document opens here.";
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../assets/app.js"), "utf8"), {
     window, document, console, CSS: {}, TextEncoder, mermaid: { initialize() { mermaidInits += 1; } }, renderMathInElement() {},
     localStorage: { getItem() { return null; }, setItem() {} },
-    setInterval() {}, setTimeout() {}, clearTimeout() {},
+    setInterval() {}, setTimeout() {}, clearTimeout() {}, requestAnimationFrame() {},
   });
   let context = { generation: 0, session: null };
   const receive = message => {
@@ -196,8 +197,19 @@ async function main() {
   await render();
   assert.equal(marked().length, 2);
   await render("/comments.md", "New paragraph.\n\n" + source);
-  assert.equal(marked().length, 0); // Never mark unrelated text after edits.
+  assert.equal(marked().length, 2); // Moved text keeps its comments.
+  assert.equal(marked()[0].dataset.sourceLine, "2");
+  await render("/comments.md", source.replace("First paragraph.", "First, rewritten."));
+  assert.equal(marked().length, 1); // Changed text is reported, never guessed at.
+  assert.equal(marked()[0].attributes.title, "Another note");
+  assert.equal(element("comments").children[0].children[1].hidden, false);
+  assert.match(element("comments").children[0].children[1].textContent, /text changed or removed/);
+  command("sendall");
+  assert.match(messages.at(-1).text, /Review both paragraphs/);
+  assert.match(messages.at(-1).text, /\(This text has since changed or been removed\.\)\nReview both paragraphs/);
+  receive({ type: "send-result", purpose: "comments", ok: false, text: "failed" });
   await render();
+  assert.equal(element("comments").children[0].children[1].hidden, true);
   command("sendall");
   receive({ type: "send-result", purpose: "comments", ok: false, text: "failed" });
   assert.equal(marked().length, 2);
@@ -206,9 +218,43 @@ async function main() {
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
   assert.equal(marked().length, 1); // Only the acknowledged batch disappears.
   assert.equal(marked()[0].attributes.title, "Added while sending");
-  element("comments").children[0].children[2].dispatch("click");
+  element("comments").children[0].children[3].dispatch("click");
   assert.equal(marked().length, 0);
   assert.equal(element("doc").children[1].attributes.title, undefined);
+
+  // Sending a selection takes the comments inside it along, and sends them.
+  key("g"); key("g"); command("c On the first");
+  key("G"); command("c On the last");
+  key("g"); key("g"); key("v"); key("j"); key("s");
+  const withComments = messages.at(-1);
+  assert.equal(withComments.purpose, "comments");
+  assert.match(withComments.text, /^> First paragraph\.\n>\n> Second paragraph\.\n\nComments on/);
+  assert.match(withComments.text, /On the first/);
+  assert.doesNotMatch(withComments.text, /On the last/);
+  receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
+  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent), ["On the last"]);
+  element("comments").children[0].children[3].dispatch("click");
+  key("Escape");
+  // A comment reaching beyond the selection stays behind.
+  key("g"); key("g"); key("v"); key("j"); command("c On both");
+  key("g"); key("g"); key("s");
+  assert.equal(messages.at(-1).purpose, "selection");
+  assert.doesNotMatch(messages.at(-1).text, /On both/);
+  receive({ type: "send-result", purpose: "selection", ok: true, text: "sent" });
+  element("comments").children[0].children[3].dispatch("click");
+  // With one of two identical blocks deleted, there is no telling which was
+  // yours: the comment is reported, not moved to the other.
+  const repeated = "Same.\n\nMiddle.\n\nSame.";
+  await render("/repeated.md", repeated);
+  key("G"); command("c On the second Same");
+  await render("/repeated.md", "Same.\n\nMiddle.");
+  assert.equal(marked().length, 0);
+  assert.equal(element("comments").children[0].children[1].hidden, false);
+  await render("/repeated.md", "Intro.\n\n" + repeated);
+  assert.equal(marked().length, 1); // Both copies back: it follows the move.
+  assert.equal(marked()[0].dataset.sourceLine, "6");
+  element("comments").children[0].children[3].dispatch("click");
+  await render();
 
   // Too large for the daemon: refused in the page, and not left "in flight".
   const huge = "x".repeat(4.5 * 1024 * 1024);
@@ -220,7 +266,7 @@ async function main() {
   assert.match(element("toast").textContent, /Too large to send/);
   command("sendall");
   assert.match(element("toast").textContent, /Too large to send/); // Not "still sending".
-  element("comments").children[0].children[2].dispatch("click");
+  element("comments").children[0].children[3].dispatch("click");
   await render();
 
   key("g"); key("g"); key("c");
@@ -290,6 +336,68 @@ async function main() {
   };
   await project("a", "Project A"); command("c Fix A");
   const aContext = context;
+  // A resume is the same session: its comments stay.
+  receive({ type: "render", path: "/a/README.md", file_identity: "/a/README.md", source: "Project A",
+    session: { session_id: "a", cwd: "/a" }, documents: [],
+    context: { generation: 99, session: { ...aContext.session, incarnation: "resumed" } } });
+  await new Promise(setImmediate);
+  assert.equal(element("comments").children.length, 1);
+  // Another session parks them, without asking; coming back restores them.
+  await project("b", "Project B");
+  assert.equal(element("comments").children.length, 0);
+  assert.doesNotMatch(element("status-doc").textContent, /pending/);
+  await project("a", "Project A");
+  assert.equal(element("comments").children.length, 1);
+  assert.match(element("toast").textContent, /1 unsent comment restored/);
+  await project("a", "Project A, reloaded");
+  assert.doesNotMatch(element("toast").textContent, /Project A, reloaded/); // A reload restores nothing.
+  // A parked session's comments end with it; the one on screen keeps its own.
+  await project("b", "Project B");
+  receive({ type: "live-sessions", sessions: [{ agent: "claude", session_id: "b" }] });
+  await project("a", "Project A");
+  assert.equal(element("comments").children.length, 0);
+  command("c Fix A");
+  receive({ type: "live-sessions", sessions: [] });
+  assert.equal(element("comments").children.length, 1);
+  element("comments").children[0].children[3].dispatch("click");
+  // Every question is answered in turn, and only an answer ends one: a
+  // reload does not hide "Pasted it?".
+  command("c Fix A once");
+  command("sendall");
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
+  receive({ type: "render", path: "/a/README.md", file_identity: "/a/README.md", source: "Project A, edited",
+    session: { session_id: "a", cwd: "/a" }, documents: [] });
+  await new Promise(setImmediate);
+  assert.equal(element("mode").textContent, "CONFIRM");
+  assert.match(element("status-msg").textContent, /Pasted it\?/);
+  key("j");
+  assert.equal(element("mode").textContent, "CONFIRM"); // Other keys do nothing.
+  key("Escape"); // Escape keeps them.
+  assert.equal(element("comments").children.length, 1);
+  command("sendall");
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
+  key("y");
+  assert.equal(element("comments").children.length, 0);
+  // A question arriving while a note is being written waits for it.
+  command("c Fix A again");
+  command("sendall");
+  key("c");
+  element("cmd-input").value = "Written while asked";
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
+  assert.equal(element("mode").textContent, "COMMENT");
+  element("cmd-input").dispatch("keydown", { key: "Enter" });
+  await new Promise(setImmediate);
+  assert.equal(element("mode").textContent, "CONFIRM");
+  key("y");
+  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent), ["Written while asked"]);
+  element("comments").children[0].children[3].dispatch("click");
+  // The sidebar's Send all button sends like S does.
+  command("c From the button");
+  element("send-all").dispatch("click");
+  assert.equal(messages.at(-1).type, "send");
+  assert.match(messages.at(-1).text, /From the button/);
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
+  assert.equal(element("comments").children.length, 0);
   await project("b", "Project B"); command("c Fix B"); command("sendall");
   const bSend = messages.at(-1);
   assert.equal(bSend.type, "send");
@@ -303,11 +411,13 @@ async function main() {
   receive({ type: "send-result", purpose: "comments", ok: true, request_id: bSend.request_id - 1, text: "stale" });
   assert.equal(element("comments").children.length, 1);
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
-  assert.equal(element("comments").children.length, 1); // Clipboard fallback preserves the draft.
-  command("sendall");
+  assert.equal(element("comments").children.length, 1); // Clipboard fallback keeps the draft until answered.
+  key("y");
+  assert.equal(element("comments").children.length, 0); // So it cannot go out twice.
+  await project("b", "Project B"); command("c Fix B again"); command("sendall");
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
   assert.equal(element("comments").children.length, 0);
-  await project("a", "Project A"); command("sendall");
+  await project("a", "Project A"); command("c Fix A"); command("sendall");
   assert.match(messages.at(-1).text, /Fix A/);
   assert.doesNotMatch(messages.at(-1).text, /Fix B/);
   receive({ type: "send-result", purpose: "comments", ok: false, text: "failed" });
