@@ -1,0 +1,218 @@
+//! The command-hook protocol Claude Code defined and Codex follows: the agent
+//! runs a command per event and writes one JSON payload to its stdin.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+use session_activity::{FileEvent, Outcome, Source};
+
+use super::Harness;
+use crate::record::{Event, Observation, Place, Start};
+
+/// `None` only for a payload that names no valid session or an event
+/// Peekback does not follow. A payload without a usable place still decodes,
+/// so its turn boundary is not lost.
+pub fn decode(harness: Harness, input: &Value, now: i64) -> Option<Observation> {
+    let session_id = input["session_id"].as_str().filter(|id| session_activity::valid_id(id))?;
+    let place = place(input);
+    let event = match input["hook_event_name"].as_str()? {
+        "SessionStart" if input["source"] == "compact" => Event::SessionStarted(Start::Compaction),
+        "SessionStart" => Event::SessionStarted(Start::New),
+        "UserPromptSubmit" => Event::PromptSubmitted,
+        "PostToolUse" | "PostToolUseFailure" => Event::ToolUsed(
+            place.as_ref().map_or_else(Vec::new, |place| tool_events(harness, session_id, &place.cwd, input, now)),
+        ),
+        "Stop" => Event::TurnEnded,
+        "SessionEnd" => Event::SessionEnded,
+        _ => return None,
+    };
+    Some(Observation { harness, session_id: session_id.into(), event, place })
+}
+
+/// Tools the harness does not map, including arbitrary shell commands, yield
+/// no file events.
+fn tool_events(harness: Harness, session_id: &str, cwd: &Path, input: &Value, now: i64) -> Vec<FileEvent> {
+    let key = harness.key(session_id);
+    let tool = input["tool_name"].as_str().unwrap_or_default();
+    let failed = input["hook_event_name"] == "PostToolUseFailure";
+    let mut events = harness.tool_events(&key, cwd, tool, &input["tool_input"], now, Source::Hook);
+    for event in &mut events {
+        event.tool_call_id = input["tool_use_id"].as_str().map(str::to_owned);
+        event.outcome = if failed { Outcome::Failed } else { outcome(&input["tool_response"]) };
+    }
+    events
+}
+
+fn outcome(response: &Value) -> Outcome {
+    let flags = [
+        response["is_error"].as_bool().map(|v| !v),
+        response["isError"].as_bool().map(|v| !v),
+        response["success"].as_bool(),
+    ];
+    if flags.contains(&Some(false)) {
+        return Outcome::Failed;
+    }
+    if flags.contains(&Some(true)) {
+        return Outcome::Succeeded;
+    }
+    // Output formats vary between agent versions; absence of an explicit
+    // success indicator is not proof that an attempted edit succeeded.
+    Outcome::Unknown
+}
+
+/// Merge the template's hook entries into a harness's settings, running
+/// `command`. Earlier entries are recognized by the `ours` prefix of their
+/// command and replaced; everything else is kept.
+pub fn merge(mut value: Value, template: &str, command: &str, ours: &str) -> Result<Value> {
+    let object = value.as_object_mut().context("settings must be a JSON object")?;
+    let hooks =
+        object.entry("hooks").or_insert_with(|| json!({})).as_object_mut().context("hooks must be a JSON object")?;
+    let mut template: Value = serde_json::from_str(template)?;
+    for (event, desired) in template["hooks"].as_object_mut().context("invalid embedded hook template")? {
+        for group in desired.as_array_mut().context("invalid embedded hook groups")? {
+            for hook in group["hooks"].as_array_mut().context("invalid embedded hook handlers")? {
+                hook["command"] = json!(command);
+            }
+        }
+        let groups = hooks
+            .entry(event.clone())
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .with_context(|| format!("hooks.{event} must be an array"))?;
+        // Only replace handlers bearing our exact marker. Preserve other handlers,
+        // matchers, event types, and all unrelated settings.
+        let mut kept = Vec::new();
+        for mut group in std::mem::take(groups) {
+            let handlers = group
+                .get_mut("hooks")
+                .and_then(Value::as_array_mut)
+                .with_context(|| format!("hooks.{event} group must contain a hooks array"))?;
+            let before = handlers.len();
+            handlers.retain(|hook| !hook["command"].as_str().is_some_and(|s| s.starts_with(ours)));
+            if !handlers.is_empty() || before == 0 {
+                kept.push(group);
+            }
+        }
+        kept.extend(desired.as_array().unwrap().iter().cloned());
+        *groups = kept;
+    }
+    Ok(value)
+}
+
+fn place(input: &Value) -> Option<Place> {
+    let cwd = input["cwd"].as_str().map(Path::new).filter(|cwd| cwd.is_absolute())?;
+    let transcript = match &input["transcript_path"] {
+        Value::Null => None,
+        Value::String(path) if path.is_empty() => None,
+        Value::String(path) => Some(PathBuf::from(path)),
+        _ => return None,
+    };
+    Some(Place { cwd: cwd.to_owned(), transcript })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use session_activity::Operation;
+
+    use super::*;
+
+    fn decoded(harness: Harness, extra: Value) -> Option<Observation> {
+        let mut input = json!({
+            "session_id": "s-1",
+            "hook_event_name": "Stop",
+            "cwd": "/work",
+            "transcript_path": "/work/t.jsonl",
+        });
+        input.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        decode(harness, &input, 100)
+    }
+
+    fn event(extra: Value) -> Option<Event> {
+        decoded(Harness::Claude, extra).map(|observation| observation.event)
+    }
+
+    fn place_of(extra: Value) -> Option<Place> {
+        decoded(Harness::Claude, extra).unwrap().place
+    }
+
+    #[test]
+    fn hook_names_map_to_lifecycle_events() {
+        assert_eq!(event(json!({"hook_event_name": "SessionStart"})), Some(Event::SessionStarted(Start::New)));
+        assert_eq!(
+            event(json!({"hook_event_name": "SessionStart", "source": "resume"})),
+            Some(Event::SessionStarted(Start::New))
+        );
+        assert_eq!(
+            event(json!({"hook_event_name": "SessionStart", "source": "compact"})),
+            Some(Event::SessionStarted(Start::Compaction))
+        );
+        assert_eq!(event(json!({"hook_event_name": "UserPromptSubmit"})), Some(Event::PromptSubmitted));
+        assert_eq!(event(json!({"hook_event_name": "Stop"})), Some(Event::TurnEnded));
+        assert_eq!(event(json!({"hook_event_name": "SessionEnd"})), Some(Event::SessionEnded));
+    }
+
+    #[test]
+    fn unsupported_events_and_invalid_sessions_are_not_observed() {
+        assert_eq!(event(json!({"hook_event_name": "Notification"})), None);
+        assert_eq!(event(json!({"hook_event_name": null})), None);
+        assert_eq!(event(json!({"session_id": "../escape"})), None);
+        assert_eq!(event(json!({"session_id": ""})), None);
+        assert_eq!(event(json!({"session_id": null})), None);
+    }
+
+    #[test]
+    fn a_payload_without_a_usable_place_still_decodes() {
+        assert_eq!(place_of(json!({"cwd": "relative"})), None);
+        assert_eq!(place_of(json!({"cwd": null})), None);
+        assert_eq!(place_of(json!({"transcript_path": 7})), None);
+        assert_eq!(event(json!({"cwd": "relative"})), Some(Event::TurnEnded));
+    }
+
+    #[test]
+    fn an_empty_or_missing_transcript_is_absent() {
+        let without = Some(Place { cwd: "/work".into(), transcript: None });
+        assert_eq!(place_of(json!({"transcript_path": ""})), without);
+        assert_eq!(place_of(json!({"transcript_path": null})), without);
+        assert_eq!(place_of(json!({})), Some(Place { cwd: "/work".into(), transcript: Some("/work/t.jsonl".into()) }));
+    }
+
+    #[test]
+    fn tools_become_file_events_and_other_tools_none() {
+        let write =
+            json!({"hook_event_name": "PostToolUse", "tool_name": "Write", "tool_input": {"file_path": "a.md"}});
+        let Some(Event::ToolUsed(events)) = event(write) else { panic!("not a tool event") };
+        assert_eq!(events.len(), 1);
+        assert_eq!((events[0].path.as_path(), events[0].operation), (Path::new("/work/a.md"), Operation::Write));
+        let bash = json!({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}});
+        assert_eq!(event(bash), Some(Event::ToolUsed(Vec::new())));
+        let unplaced = json!({"hook_event_name": "PostToolUse", "tool_name": "Write", "cwd": "relative"});
+        assert_eq!(event(unplaced), Some(Event::ToolUsed(Vec::new())));
+    }
+
+    fn edit_outcome(extra: Value) -> Outcome {
+        let mut edit =
+            json!({"hook_event_name": "PostToolUse", "tool_name": "Edit", "tool_input": {"file_path": "a.md"}});
+        edit.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let Some(Event::ToolUsed(events)) = event(edit) else { panic!("not a tool event") };
+        events[0].outcome
+    }
+
+    #[test]
+    fn explicit_results_decide_outcomes_and_failure_wins() {
+        assert_eq!(edit_outcome(json!({"tool_response": {"is_error": true}})), Outcome::Failed);
+        assert_eq!(edit_outcome(json!({"tool_response": {"success": true}})), Outcome::Succeeded);
+        assert_eq!(edit_outcome(json!({"tool_response": "unrecognized result text"})), Outcome::Unknown);
+        assert_eq!(edit_outcome(json!({"tool_response": {"is_error": false, "success": false}})), Outcome::Failed);
+        assert_eq!(edit_outcome(json!({"hook_event_name": "PostToolUseFailure"})), Outcome::Failed);
+    }
+
+    #[test]
+    fn failed_tools_are_observed_for_every_harness() {
+        for harness in Harness::ALL {
+            let failed = decoded(harness, json!({"hook_event_name": "PostToolUseFailure", "tool_name": "Bash"}));
+            assert_eq!(failed.map(|observation| observation.event), Some(Event::ToolUsed(Vec::new())));
+        }
+    }
+}

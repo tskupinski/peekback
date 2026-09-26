@@ -63,7 +63,7 @@ Maintainer instructions are in [RELEASING.md](RELEASING.md).
 ### Setup details
 
 `peekback setup --dry-run` shows the target files and hook commands without
-writing. `--agent all` configures both agents even before they are detected.
+writing. `--all` configures both agents even before they are detected.
 
 Setup merges hooks into `~/.claude/settings.json` and `~/.codex/hooks.json`,
 respecting `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. It preserves unrelated settings
@@ -156,6 +156,9 @@ the first prompt; until then the hotkey in its tmux pane shows an empty view
 that switches to the session once it starts. When Codex runs `peekback show` itself,
 Peekback uses `CODEX_THREAD_ID` (or `CODEX_SESSION_ID`) to select that session.
 
+The viewer shows one session at a time. To look at another session, go to its
+pane and press the hotkey, or run `peekback show --session ID`.
+
 ### Keys
 
 | Key | Action |
@@ -167,7 +170,6 @@ Peekback uses `CODEX_THREAD_ID` (or `CODEX_SESSION_ID`) to select that session.
 | `zz` / `zt` / `zb` | scroll the cursor block to center / top / bottom |
 | `]]` / `[[` | next / previous heading |
 | `]d` / `[d` | next / previous document |
-| `]s` / `[s` | next / previous session |
 | `v` | visual mode, extend with `j` / `k` |
 | `y` | copy the block or selection as Markdown |
 | `s` | send the block or selection to the prompt as a blockquote |
@@ -176,9 +178,8 @@ Peekback uses `CODEX_THREAD_ID` (or `CODEX_SESSION_ID`) to select that session.
 | `/` | search, then `n` / `N` |
 | `Space d` or `Ctrl-P` | document picker |
 | `Tab` / `Shift-Tab` in document picker | cycle Current session, Scratchpad, and Bookmarks |
-| `Space s` | session picker |
 | `Space c` | pending comments (`Enter` jumps, `Ctrl-D` removes) |
-| `:` | command line: `:doc`, `:session`, `:send`, `:c note`, `:sendall`, `:sidebar`, `:q`, `:help` |
+| `:` | command line: `:doc`, `:send`, `:c note`, `:sendall`, `:sidebar`, `:q`, `:help` |
 | `Tab` | toggle the sidebar |
 | `?` | key overlay |
 | `Esc` | cancel, clear search, or leave the viewer |
@@ -215,14 +216,14 @@ and waits for you to press Enter. Control characters are stripped before
 sending. If the tracked agent process is no longer running, automatic sending
 falls back to the clipboard; a pinned paste backend refuses the send. Such a
 session also counts as ended everywhere else, so it drops out of
-`peekback status`, the session picker and the hotkey. Entries created before
+`peekback status` and the hotkey. Entries created before
 process tracking remain browsable, but automatic sending uses the clipboard
 until fresh hook activity records an identity that can be verified.
 
 ### Commands
 
 ```
-peekback setup [--agent claude|codex|all] [--dry-run]  configure hooks
+peekback setup [--agent claude|codex | --all] [--dry-run]  configure hooks
 peekback show [FILE] [--session ID] [--pane %N] [--no-focus]  show a document
 peekback browse [--session ID]                       browse session files
 peekback browse --all-sessions [--list]              browse retained history

@@ -77,6 +77,8 @@ async function main() {
   });
   let context = { generation: 0, session: null };
   const receive = message => {
+    // The daemon renders a live session with its cwd and display name.
+    if (message.session) message.session = { cwd: "/", agent_name: "Claude Code", ...message.session };
     if (message.type === "render") {
       context = message.context ?? { generation: context.generation + 1,
         session: message.session ? { key: { agent: "claude", session_id: message.session.session_id }, incarnation: "test", process: null, started_at: 0 } : null };
@@ -282,9 +284,8 @@ async function main() {
   console.log("Empty session passed: placeholder, inert actions, picker hint, first document replaces it, scan notes.");
 
   const project = async (id, text, file = "README.md") => {
-    receive({ type: "sessions", sessions: [{ session_id: "a", cwd: "/a" }, { session_id: "b", cwd: "/b" }], current: id });
     receive({ type: "render", path: `/${id}/${file}`, file_identity: `/${id}/${file}`, source: text,
-      session: { session_id: id }, documents: [] });
+      session: { session_id: id, cwd: `/${id}` }, documents: [] });
     await new Promise(setImmediate);
   };
   await project("a", "Project A"); command("c Fix A");
@@ -295,6 +296,9 @@ async function main() {
   assert.equal(bSend.context.session.key.session_id, "b");
   assert.match(bSend.text, /Fix B/);
   assert.doesNotMatch(bSend.text, /Fix A/);
+  assert.match(bSend.text, /(^|[^/])README\.md/, "paths are relative to the session's cwd");
+  assert.doesNotMatch(bSend.text, /\/b\/README\.md/);
+  assert.match(element("status-doc").textContent, /^b · Claude Code › /);
   assert.equal(element("comments").children.length, 1);
   receive({ type: "send-result", purpose: "comments", ok: true, request_id: bSend.request_id - 1, text: "stale" });
   assert.equal(element("comments").children.length, 1);

@@ -35,7 +35,7 @@ pub fn lock(root: &Path, id: &str) -> Result<Lock> {
 }
 
 fn marker(root: &Path, key: &SessionKey) -> PathBuf {
-    root.join("lifecycle").join(format!("{}.{}.ended", key.agent.slug(), key.session_id))
+    root.join("lifecycle").join(format!("{}.{}.ended", key.agent.as_str(), key.session_id))
 }
 
 pub fn ended(root: &Path, key: &SessionKey) -> bool {

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::harness::Harness;
+
 /// A process identity that survives PID reuse: a recycled PID gets a
 /// different start time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,17 +42,9 @@ pub fn hook_agent() -> Option<ProcessId> {
 /// The agent in the foreground of the terminal a process is attached to, such
 /// as a pane's shell. It is named by the command it was started as: the
 /// native Claude Code executable is a file named after its version.
-pub fn foreground_agent(pid: u32) -> Option<session_activity::Agent> {
+pub fn foreground_agent(pid: u32) -> Option<Harness> {
     let leader = info(pid)?.foreground_group;
-    agent_named(started_as(leader)?.rsplit('/').next()?)
-}
-
-fn agent_named(name: &str) -> Option<session_activity::Agent> {
-    match name {
-        "claude" => Some(session_activity::Agent::Claude),
-        "codex" => Some(session_activity::Agent::Codex),
-        _ => None,
-    }
+    Harness::started_as(started_as(leader)?.rsplit('/').next()?)
 }
 
 fn is_shell(name: &str) -> bool {
@@ -202,7 +196,5 @@ mod tests {
     fn a_process_is_named_by_what_it_was_started_as() {
         let me = started_as(std::process::id()).unwrap();
         assert!(me.contains("peekback"), "{me}");
-        assert_eq!(agent_named("codex"), Some(session_activity::Agent::Codex));
-        assert_eq!(agent_named("2.1.282"), None);
     }
 }

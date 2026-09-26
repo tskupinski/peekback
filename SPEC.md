@@ -15,8 +15,9 @@ present that evidence.
 
 | Component | Responsibility |
 | --- | --- |
-| `crates/session-activity/` | Agent adapters, event schemas, path normalization, storage, scans, reconciliation, compaction and retention |
-| `src/setup.rs`, `src/hooks.rs` | Agent hook configuration and collection |
+| `crates/session-activity/` | Agent-independent event schemas, path normalization, storage, scans, reconciliation, compaction and retention |
+| `src/harness/` | One module per agent harness: identity, session variables, setup, decoding its hooks into lifecycle observations, tool and transcript adapters, private directories |
+| `src/setup.rs`, `src/record.rs` | Agent hook configuration; recording observations as turns, file events and registry entries |
 | `src/registry.rs`, `src/lifecycle.rs` | Live sessions, terminal identity, lifecycle locks and end markers |
 | `src/capture.rs`, `src/capture_jobs.rs`, `src/activity.rs`, `src/discovery.rs` | Capture policy and retry jobs, JSON queries, Markdown filtering |
 | `src/browse.rs` | Interactive terminal browser and plain listing |
@@ -48,10 +49,36 @@ Codex hook trust remains a user decision in `/hooks`; setup does not override it
 Both agents register `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`,
 and `SessionEnd`. Claude additionally registers `PostToolUseFailure`. The
 collector receives JSON on stdin and captures terminal identifiers from the
-hook environment. The library recognizes supported Claude file tools and
+hook environment. Peekback recognizes supported Claude file tools and
 Codex `apply_patch` operations; shell commands and Codex transcripts are not
 parsed for file effects. Files written through shell commands are found by
 the turn capture described under File evidence.
+
+### Harness boundary
+
+Each supported agent harness is a module under `src/harness/`, and every
+`match` on a harness lives in `src/harness/mod.rs`. A harness module provides
+its name, executables, session environment variables, setup file, a decoder
+from its hook payloads to lifecycle observations (session started or
+compacted, prompt submitted, tool used, turn ended, session ended), its tool
+mapping, and optionally a transcript reader and private directories. The
+lifecycle core in `src/record.rs` consumes only observations. A payload
+without a usable cwd still closes its turn but does not rewrite the registry
+entry. Session environment variables are read Codex first, since Codex
+started from Claude Code's Bash tool inherits `CLAUDE_CODE_SESSION_ID`.
+
+The boundary assumes a harness runs like Claude Code and Codex:
+
+1. One agent process, in one terminal pane, owns one session. The hook
+   records the nearest non-shell ancestor as the agent; liveness, pane
+   ownership and sending all depend on it.
+2. A pane shows one session at a time.
+3. The integration runs inside the agent's process tree, with its
+   environment, so the pane and the agent process can be captured.
+4. Sending pastes into a TUI composer that accepts bracketed paste.
+5. Subagents are recorded with the main session, not as sessions of their own.
+
+A harness that breaks one of these needs a design change, not only a module.
 
 Hooks maintain two different kinds of state:
 
@@ -355,8 +382,9 @@ The native viewer rejects files over 4 MiB and loads them on workers. A watcher
 reloads the current document, observing both a symlink and its resolved target.
 Changes are debounced and stale reads are discarded; an intentionally emptied
 file replaces the previous content. If it is deleted, the last rendered
-content remains with a banner. Registry changes update the live session list
-and current-session documents. The document picker has Current session,
+content remains with a banner. Registry changes update the current session's
+documents. The viewer shows one session at a time; the hotkey or `show`
+changes it. The document picker has Current session,
 Scratchpad and Bookmarks scopes, cycled with Tab and Shift-Tab. Scratchpad and
 Bookmarks refresh on opening and with Ctrl-R, and their warnings appear in the
 picker.

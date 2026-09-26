@@ -37,7 +37,7 @@ pub enum Retry {
 pub fn enqueue(root: &Path, session: &Session, turn: Option<capture::Turn>) -> Result<()> {
     let key = session.activity_key();
     key.validate()?;
-    let dir = root.join("pending-captures").join(key.agent.slug()).join(&key.session_id);
+    let dir = root.join("pending-captures").join(key.agent.as_str()).join(&key.session_id);
     lifecycle::ensure_dir(&dir)?;
     let stem = format!(
         "{}.{}.{}",
@@ -66,7 +66,7 @@ fn write(dir: &Path, stem: &str, job: &Job) -> Result<()> {
 
 pub fn retry(root: &Path, key: &SessionKey, mode: Retry) -> Result<()> {
     key.validate()?;
-    let dir = root.join("pending-captures").join(key.agent.slug()).join(&key.session_id);
+    let dir = root.join("pending-captures").join(key.agent.as_str()).join(&key.session_id);
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -105,7 +105,7 @@ pub fn retry(root: &Path, key: &SessionKey, mode: Retry) -> Result<()> {
                         "capture failed {} times and is no longer retried automatically; \
                          fix the cause, then run peekback activity retry --agent {} --session {}",
                         job.attempts,
-                        key.agent.slug(),
+                        key.agent.as_str(),
                         key.session_id
                     ))
                 } else {

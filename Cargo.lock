@@ -1985,6 +1985,7 @@ dependencies = [
  "serde_json",
  "session-activity",
  "tao",
+ "time",
  "toml 1.1.6+spec-1.1.0",
  "unicode-width",
  "wry",
@@ -2394,7 +2395,6 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
- "time",
 ]
 
 [[package]]

@@ -2,8 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use serde_json::json;
-
 use crate::*;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -25,8 +23,12 @@ impl Drop for Temp {
     }
 }
 
-fn key(agent: Agent) -> SessionKey {
-    SessionKey { agent, session_id: "same-id".into() }
+fn agent(id: &str) -> AgentId {
+    AgentId::new(id).unwrap()
+}
+
+fn key(id: &str) -> SessionKey {
+    SessionKey { agent: agent(id), session_id: "same-id".into() }
 }
 
 #[test]
@@ -36,14 +38,14 @@ fn all_history_keeps_namespaces_compaction_retention_and_partial_failures() {
     assert!(store.sessions().sessions.is_empty());
     assert!(store.read_all().events.is_empty());
     assert!(!temp.0.join("history").exists());
-    for agent in [Agent::Claude, Agent::Codex] {
-        let session = key(agent);
+    for id in ["claude", "codex"] {
+        let session = key(id);
         let event = FileEvent::new(&session, &temp.0, Path::new("shared.md"), 10, Operation::Write, Source::Hook);
         store.append(&session, &[event.clone()]).unwrap();
         store.append(&session, &[FileEvent { timestamp: 20, ..event }]).unwrap();
         store.maintain(&session, Some(15), true).unwrap();
     }
-    assert_eq!(store.sessions().sessions, vec![key(Agent::Claude), key(Agent::Codex)]);
+    assert_eq!(store.sessions().sessions, vec![key("claude"), key("codex")]);
     let report = store.read_all();
     assert!(report.warnings.is_empty());
     assert_eq!(report.events.len(), 2);
@@ -51,10 +53,10 @@ fn all_history_keeps_namespaces_compaction_retention_and_partial_failures() {
     assert_eq!(summaries.len(), 1);
     assert_ne!(summaries[0].events[0].session.agent, summaries[0].events[1].session.agent);
     assert!(summaries[0].events.iter().all(|e| e.timestamp == 20));
-    fs::write(store.directory(&key(Agent::Claude)).unwrap().join(".checkpoint"), "broken").unwrap();
+    fs::write(store.directory(&key("claude")).unwrap().join(".checkpoint"), "broken").unwrap();
     let report = store.read_all();
     assert_eq!(report.events.len(), 1);
-    assert_eq!(report.events[0].session.agent, Agent::Codex);
+    assert_eq!(report.events[0].session.agent, agent("codex"));
     assert_eq!(report.warnings.len(), 1);
     assert!(report.warnings[0].path.ends_with("claude/same-id"));
 }
@@ -71,42 +73,51 @@ fn session_enumeration_ignores_symlinks_and_reports_invalid_directories() {
     symlink(root.join("codex"), root.join("claude")).unwrap();
     symlink(root.join("codex/valid"), root.join("codex/linked")).unwrap();
     let report = Store::new(root).sessions();
-    assert_eq!(report.sessions, vec![SessionKey { agent: Agent::Codex, session_id: "valid".into() }]);
+    assert_eq!(report.sessions, vec![SessionKey { agent: agent("codex"), session_id: "valid".into() }]);
     assert_eq!(report.warnings.len(), 3);
 }
 
+#[test]
+fn session_enumeration_lists_every_valid_agent_namespace() {
+    let temp = Temp::new();
+    let root = temp.0.join("history");
+    fs::create_dir_all(root.join("future-agent/one")).unwrap();
+    fs::create_dir_all(root.join("codex/two")).unwrap();
+    fs::create_dir_all(root.join("Not An Agent/three")).unwrap();
+    fs::write(root.join("stray.json"), "{}").unwrap();
+    let report = Store::new(root).sessions();
+    let listed: Vec<_> = report.sessions.iter().map(|k| (k.agent.as_str(), k.session_id.as_str())).collect();
+    assert_eq!(listed, [("codex", "two"), ("future-agent", "one")]);
+    assert_eq!(report.warnings.len(), 1);
+    assert!(report.warnings[0].path.ends_with("Not An Agent"));
+}
+
+#[test]
+fn agent_ids_are_safe_path_components_stored_as_plain_strings() {
+    for invalid in ["", "Claude", "a/b", "..", "a b", "a_b"] {
+        assert!(AgentId::new(invalid).is_err(), "{invalid}");
+    }
+    let key = SessionKey { agent: agent("codex"), session_id: "s".into() };
+    let json = serde_json::to_string(&key).unwrap();
+    assert_eq!(json, r#"{"agent":"codex","session_id":"s"}"#);
+    assert_eq!(serde_json::from_str::<SessionKey>(&json).unwrap(), key);
+    assert!(serde_json::from_str::<SessionKey>(r#"{"agent":"../x","session_id":"s"}"#).is_err());
+}
+
+/// One tool call that created, renamed and deleted files.
 fn patch_event(cwd: &Path) -> Vec<FileEvent> {
-    hook_events(Agent::Codex, &json!({
-        "session_id": "same-id", "cwd": cwd, "hook_event_name": "PostToolUse",
-        "tool_name": "apply_patch", "tool_use_id": "call-1",
-        "tool_input": {"command": "*** Begin Patch\n*** Add File: ./src/main.rs\n+// code\n+*** Add File: fake.md\n*** Update File: old name.md\n*** Move to: new name.md\n@@\n-old\n+new\n*** Delete File: deleted.txt\n*** End Patch"},
-        "tool_response": {"success": true}
-    }), 42).unwrap()
-}
-
-#[test]
-fn normalizes_all_file_types_renames_deletes_and_outcomes() {
-    let events = patch_event(Path::new("/project"));
-    assert_eq!(events.len(), 3);
-    assert_eq!(events[0].path, Path::new("/project/src/main.rs"));
-    assert_eq!(events[0].operation, Operation::Create);
-    assert_eq!(events[1].operation, Operation::Rename);
-    assert_eq!(events[1].previous_path.as_deref(), Some(Path::new("/project/old name.md")));
-    assert_eq!(events[1].path, Path::new("/project/new name.md"));
-    assert_eq!(events[2].operation, Operation::Delete);
-    assert!(events.iter().all(|e| e.outcome == Outcome::Succeeded && e.tool_call_id.as_deref() == Some("call-1")));
-    assert_eq!(files(events).len(), 4);
-}
-
-#[test]
-fn failed_and_unknown_results_remain_distinct() {
-    let mut input = json!({"session_id":"same-id", "cwd":"/project", "hook_event_name":"PostToolUse",
-        "tool_name":"Edit", "tool_input":{"file_path":"src/main.rs"}, "tool_response":{"is_error":true}});
-    assert_eq!(hook_events(Agent::Claude, &input, 1).unwrap()[0].outcome, Outcome::Failed);
-    input["tool_response"] = json!("unrecognized result text");
-    assert_eq!(hook_events(Agent::Claude, &input, 1).unwrap()[0].outcome, Outcome::Unknown);
-    input["tool_name"] = json!("Read");
-    assert_eq!(hook_events(Agent::Claude, &input, 1).unwrap()[0].operation, Operation::Read);
+    let session = key("codex");
+    let mut events = vec![
+        FileEvent::new(&session, cwd, Path::new("./src/main.rs"), 42, Operation::Create, Source::Hook),
+        FileEvent::new(&session, cwd, Path::new("new name.md"), 42, Operation::Rename, Source::Hook),
+        FileEvent::new(&session, cwd, Path::new("deleted.txt"), 42, Operation::Delete, Source::Hook),
+    ];
+    events[1].previous_path = Some(cwd.join("old name.md"));
+    for event in &mut events {
+        event.tool_call_id = Some("call-1".into());
+        event.outcome = Outcome::Succeeded;
+    }
+    events
 }
 
 #[test]
@@ -116,19 +127,19 @@ fn concurrent_batches_survive_and_agent_namespaces_do_not_collide() {
     std::thread::scope(|scope| {
         for _ in 0..16 {
             let store = &store;
-            scope.spawn(move || store.append(&key(Agent::Codex), &patch_event(Path::new("/project"))).unwrap());
+            scope.spawn(move || store.append(&key("codex"), &patch_event(Path::new("/project"))).unwrap());
         }
     });
-    assert_eq!(store.events(&key(Agent::Codex)).unwrap().len(), 48);
-    assert!(store.events(&key(Agent::Claude)).unwrap().is_empty());
+    assert_eq!(store.events(&key("codex")).unwrap().len(), 48);
+    assert!(store.events(&key("claude")).unwrap().is_empty());
     let mut events = patch_event(Path::new("/project"));
     for event in &mut events {
-        event.session.agent = Agent::Claude;
+        event.session.agent = agent("claude");
     }
-    store.append(&key(Agent::Claude), &events).unwrap();
-    assert_eq!(store.events(&key(Agent::Claude)).unwrap().len(), 3);
+    store.append(&key("claude"), &events).unwrap();
+    assert_eq!(store.events(&key("claude")).unwrap().len(), 3);
     let reopened = Store::new(&temp.0);
-    assert_eq!(reopened.events(&key(Agent::Codex)).unwrap().len(), 48);
+    assert_eq!(reopened.events(&key("codex")).unwrap().len(), 48);
 }
 
 #[test]
@@ -136,17 +147,17 @@ fn paths_and_schema_are_validated_and_partial_batches_ignored() {
     let temp = Temp::new();
     let store = Store::new(&temp.0);
     for id in ["", ".", "..", "../escape", "a/b"] {
-        assert!(store.events(&SessionKey { agent: Agent::Codex, session_id: id.into() }).is_err());
+        assert!(store.events(&SessionKey { agent: agent("codex"), session_id: id.into() }).is_err());
     }
     let mut events = patch_event(Path::new("/project"));
     events[0].schema_version = 99;
-    assert!(store.append(&key(Agent::Codex), &events).is_err());
+    assert!(store.append(&key("codex"), &events).is_err());
     events[0].schema_version = 1;
-    store.append(&key(Agent::Codex), &events).unwrap();
+    store.append(&key("codex"), &events).unwrap();
     fs::write(temp.0.join("codex/same-id/interrupted.tmp"), "{").unwrap();
-    assert_eq!(store.events(&key(Agent::Codex)).unwrap().len(), 3);
+    assert_eq!(store.events(&key("codex")).unwrap().len(), 3);
     fs::write(temp.0.join("codex/same-id/corrupt.json"), "{").unwrap();
-    assert!(store.events(&key(Agent::Codex)).is_err());
+    assert!(store.events(&key("codex")).is_err());
 }
 
 #[test]
@@ -159,35 +170,19 @@ fn scans_are_separate_evidence_and_respect_depth_and_budget() {
         fs::write(temp.0.join(path), "text").unwrap();
     }
     let roots = [ScanRoot { path: temp.0.clone(), since: 0, until: i64::MAX, depth: 1, source: Source::ProjectScan }];
-    let events = scan(&key(Agent::Claude), &temp.0, &roots, 100);
+    let events = scan(&key("claude"), &temp.0, &roots, 100);
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].operation, Operation::Observed);
     assert_eq!(events[0].source, Source::ProjectScan);
     assert_eq!(events[0].outcome, Outcome::Unknown);
-    assert!(scan(&key(Agent::Claude), &temp.0, &roots, 0).is_empty());
-}
-
-#[test]
-fn claude_transcripts_resolve_relative_paths_and_keep_unknown_outcomes() {
-    let temp = Temp::new();
-    let path = temp.0.join("transcript.jsonl");
-    let record = json!({"type":"assistant", "timestamp":"2026-09-23T00:00:00Z", "message":{"content":[
-        {"type":"tool_use", "id":"call-1", "name":"Write", "input":{"file_path":"src/main.rs"}}
-    ]}});
-    fs::write(&path, format!("not json\n{record}\n{{")).unwrap();
-    let events = transcript_events(&key(Agent::Claude), &temp.0, &path);
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].path, temp.0.join("src/main.rs"));
-    assert_eq!(events[0].outcome, Outcome::Unknown);
-    assert_eq!(events[0].source, Source::Transcript);
-    assert!(transcript_events(&key(Agent::Codex), &temp.0, &path).is_empty());
+    assert!(scan(&key("claude"), &temp.0, &roots, 0).is_empty());
 }
 
 #[test]
 fn damaged_oversized_and_invalid_batches_do_not_hide_healthy_history() {
     let temp = Temp::new();
     let store = Store::new(&temp.0);
-    let session = key(Agent::Codex);
+    let session = key("codex");
     store.append(&session, &patch_event(Path::new("/project"))).unwrap();
     let dir = temp.0.join("codex/same-id");
     fs::write(dir.join("damaged.json"), "{").unwrap();
@@ -232,63 +227,32 @@ fn retries_are_collapsed_and_outcomes_reconciled_without_merging_distinct_calls(
 }
 
 #[test]
-fn transcript_results_resolve_outcomes_by_call_id_and_record_cwd() {
-    let temp = Temp::new();
-    let path = temp.0.join("transcript.jsonl");
-    let request = json!({"type":"assistant", "cwd":"/changed-directory", "message":{"content":[
-        {"type":"tool_use", "id":"failed", "name":"Edit", "input":{"file_path":"plan.md"}},
-        {"type":"tool_use", "id":"ok", "name":"Write", "input":{"file_path":"other.md"}},
-        {"type":"tool_use", "id":"pending", "name":"Read", "input":{"file_path":"third.md"}}
-    ]}});
-    let response = json!({"type":"user", "message":{"content":[
-        {"type":"tool_result", "tool_use_id":"ok", "content":"done"},
-        {"type":"tool_result", "tool_use_id":"failed", "is_error":true, "content":"failed"}
-    ]}});
-    fs::write(&path, format!("{request}\n{{\n{response}\n")).unwrap();
-    let events = transcript_events(&key(Agent::Claude), &temp.0, &path);
-    assert_eq!(events[0].path, Path::new("/changed-directory/plan.md"));
-    assert_eq!(events[0].outcome, Outcome::Failed);
-    assert_eq!(events[1].outcome, Outcome::Succeeded);
-    assert_eq!(events[2].outcome, Outcome::Unknown);
-}
-
-#[test]
-fn explicit_failure_hook_and_conflicting_response_flags_report_failure() {
-    let mut input = json!({"session_id":"same-id", "cwd":"/project", "hook_event_name":"PostToolUseFailure",
-        "tool_name":"Edit", "tool_input":{"file_path":"plan.md"}, "tool_use_id":"call-1"});
-    assert_eq!(hook_events(Agent::Claude, &input, 1).unwrap()[0].outcome, Outcome::Failed);
-    input["hook_event_name"] = json!("PostToolUse");
-    input["tool_response"] = json!({"is_error":false, "success":false});
-    assert_eq!(hook_events(Agent::Claude, &input, 1).unwrap()[0].outcome, Outcome::Failed);
-}
-
-#[test]
 fn scan_reports_budget_depth_and_io_limits_without_false_empty_results() {
     let temp = Temp::new();
     fs::write(temp.0.join("first.md"), "text").unwrap();
     let roots = [ScanRoot { path: temp.0.clone(), since: 0, until: i64::MAX, depth: 1, source: Source::ProjectScan }];
-    let complete = scan_report(&key(Agent::Codex), &temp.0, &roots, 1);
+    let complete = scan_report(&key("codex"), &temp.0, &roots, 1);
     assert_eq!(complete.entries_visited, 1);
     assert!(!complete.budget_exhausted); // Exactly meeting the budget is not truncation.
     fs::create_dir(temp.0.join("nested")).unwrap();
-    let budget = scan_report(&key(Agent::Codex), &temp.0, &roots, 1);
+    let budget = scan_report(&key("codex"), &temp.0, &roots, 1);
     assert!(budget.budget_exhausted);
     assert_eq!(budget.entries_visited, 1);
-    let depth = scan_report(&key(Agent::Codex), &temp.0, &roots, 10);
+    let depth = scan_report(&key("codex"), &temp.0, &roots, 10);
     assert!(depth.depth_limited);
     let bad =
         [ScanRoot { path: temp.0.join("first.md"), since: 0, until: i64::MAX, depth: 1, source: Source::ProjectScan }];
-    assert_eq!(scan_report(&key(Agent::Codex), &temp.0, &bad, 10).warnings.len(), 1);
+    assert_eq!(scan_report(&key("codex"), &temp.0, &bad, 10).warnings.len(), 1);
     let empty = Temp::new();
     let roots = [ScanRoot { path: empty.0.clone(), since: 0, until: i64::MAX, depth: 1, source: Source::ProjectScan }];
-    assert!(!scan_report(&key(Agent::Codex), &empty.0, &roots, 0).budget_exhausted);
+    assert!(!scan_report(&key("codex"), &empty.0, &roots, 0).budget_exhausted);
 }
 
 #[test]
 fn compaction_preview_and_commit_preserve_raw_events_and_future_appends() {
     let temp = Temp::new();
     let store = Store::new(&temp.0);
-    let session = key(Agent::Codex);
+    let session = key("codex");
     for time in 0..8 {
         let mut events = patch_event(Path::new("/project"));
         for event in &mut events {
@@ -316,7 +280,7 @@ fn compaction_preview_and_commit_preserve_raw_events_and_future_appends() {
 fn retention_is_explicit_inclusive_and_prevents_old_imports() {
     let temp = Temp::new();
     let store = Store::new(&temp.0);
-    let session = key(Agent::Codex);
+    let session = key("codex");
     let mut events = patch_event(Path::new("/project"));
     for (index, event) in events.iter_mut().enumerate() {
         event.timestamp = index as i64;
@@ -341,7 +305,7 @@ fn retention_is_explicit_inclusive_and_prevents_old_imports() {
 fn future_cutoffs_are_rejected_so_recording_cannot_stop_for_good() {
     let temp = Temp::new();
     let store = Store::new(&temp.0);
-    let session = key(Agent::Codex);
+    let session = key("codex");
     store.append(&session, &patch_event(Path::new("/project"))).unwrap();
     let milliseconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
     for apply in [false, true] {
@@ -357,7 +321,7 @@ fn future_cutoffs_are_rejected_so_recording_cannot_stop_for_good() {
 fn unexpected_history_files_stop_preview_and_apply_alike() {
     let temp = Temp::new();
     let store = Store::new(&temp.0);
-    let session = key(Agent::Codex);
+    let session = key("codex");
     store.append(&session, &patch_event(Path::new("/project"))).unwrap();
     let dir = temp.0.join("codex/same-id");
     let batch = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).next().unwrap();
@@ -382,7 +346,7 @@ fn unexpected_history_files_stop_preview_and_apply_alike() {
 fn checkpoint_survives_interrupted_cleanup_and_ignores_uncommitted_packs() {
     let temp = Temp::new();
     let store = Store::new(&temp.0);
-    let session = key(Agent::Codex);
+    let session = key("codex");
     store.append(&session, &patch_event(Path::new("/project"))).unwrap();
     let dir = temp.0.join("codex/same-id");
     let source = fs::read_dir(&dir)
@@ -411,25 +375,25 @@ fn checkpoint_survives_interrupted_cleanup_and_ignores_uncommitted_packs() {
 fn concurrent_appends_and_compaction_do_not_lose_history() {
     let temp = Temp::new();
     let store = Store::new(&temp.0);
-    let session = key(Agent::Codex);
+    let session = key("codex");
     store.append(&session, &patch_event(Path::new("/project"))).unwrap();
     std::thread::scope(|scope| {
         let store = &store;
         for _ in 0..8 {
             scope.spawn(move || {
                 for _ in 0..3 {
-                    store.append(&key(Agent::Codex), &patch_event(Path::new("/project"))).unwrap();
+                    store.append(&key("codex"), &patch_event(Path::new("/project"))).unwrap();
                 }
             });
         }
         scope.spawn(move || {
             for _ in 0..3 {
-                store.maintain(&key(Agent::Codex), None, true).unwrap();
+                store.maintain(&key("codex"), None, true).unwrap();
             }
         });
         scope.spawn(move || {
             for _ in 0..5 {
-                assert!(store.read(&key(Agent::Codex)).unwrap().warnings.is_empty());
+                assert!(store.read(&key("codex")).unwrap().warnings.is_empty());
             }
         });
     });
@@ -449,7 +413,7 @@ fn scans_skip_other_checkouts_but_keep_submodules_and_the_root_checkout() {
         fs::write(temp.0.join(path), "text").unwrap();
     }
     let roots = [ScanRoot { path: temp.0.clone(), since: 0, until: i64::MAX, depth: 4, source: Source::ProjectScan }];
-    let mut found: Vec<_> = scan(&key(Agent::Claude), &temp.0, &roots, 100)
+    let mut found: Vec<_> = scan(&key("claude"), &temp.0, &roots, 100)
         .into_iter()
         .map(|e| e.path)
         .filter(|p| p.extension().is_some_and(|e| e == "md"))
@@ -468,42 +432,18 @@ fn scans_accept_only_modification_times_inside_the_window() {
         fs::File::options().write(true).open(&path).unwrap().set_modified(at).unwrap();
     }
     let roots = [ScanRoot { path: temp.0.clone(), since: 100, until: 200, depth: 1, source: Source::ProjectScan }];
-    let mut found: Vec<_> = scan(&key(Agent::Claude), &temp.0, &roots, 100).into_iter().map(|e| e.timestamp).collect();
+    let mut found: Vec<_> = scan(&key("claude"), &temp.0, &roots, 100).into_iter().map(|e| e.timestamp).collect();
     found.sort();
     assert_eq!(found, [100, 200]);
 }
 
 #[test]
-fn last_activity_is_the_newest_agent_record_and_ignores_prompts() {
-    let temp = Temp::new();
-    let path = temp.0.join("transcript.jsonl");
-    let record = |kind: &str, at: &str, content: serde_json::Value| {
-        json!({"type": kind, "timestamp": at, "message": {"content": content}}).to_string()
-    };
-    let lines = [
-        record("assistant", "2026-09-25T10:00:00Z", json!([{"type":"text", "text":"working"}])),
-        record("user", "2026-09-25T10:05:00Z", json!([{"type":"tool_result", "tool_use_id":"t1"}])),
-        record("user", "2026-09-25T12:00:00Z", json!("the next prompt, hours later")),
-        json!({"type":"attachment", "timestamp":"2026-09-25T12:00:01Z"}).to_string(),
-    ];
-    fs::write(&path, lines.join("\n")).unwrap();
-    let expected = time::OffsetDateTime::parse("2026-09-25T10:05:00Z", &time::format_description::well_known::Rfc3339)
-        .unwrap()
-        .unix_timestamp();
-    assert_eq!(transcript_last_activity(&path), Some(expected));
-    let padded = format!("{}\n{}", "x".repeat(600 * 1024), lines.join("\n"));
-    fs::write(&path, padded).unwrap();
-    assert_eq!(transcript_last_activity(&path), Some(expected)); // Only the tail is read.
-    assert_eq!(transcript_last_activity(&temp.0.join("missing.jsonl")), None);
-}
-
-#[test]
 fn file_activity_tells_scan_only_and_shared_files_apart() {
-    let session = key(Agent::Claude);
+    let session = key("claude");
     let observed =
         FileEvent::new(&session, Path::new("/p"), Path::new("a.md"), 1, Operation::Observed, Source::ProjectScan);
     let mut shared = observed.clone();
-    shared.concurrent = vec![SessionKey { agent: Agent::Codex, session_id: "other".into() }];
+    shared.concurrent = vec![SessionKey { agent: agent("codex"), session_id: "other".into() }];
     let written = FileEvent::new(&session, Path::new("/p"), Path::new("a.md"), 2, Operation::Write, Source::Hook);
     let file = |events: Vec<FileEvent>| files(events).remove(0);
     assert!(file(vec![observed.clone()]).scan_only());
@@ -513,31 +453,17 @@ fn file_activity_tells_scan_only_and_shared_files_apart() {
 }
 
 #[test]
-fn subagent_transcripts_sit_beside_the_main_transcript() {
-    let temp = Temp::new();
-    let main = temp.0.join("session.jsonl");
-    fs::write(&main, "").unwrap();
-    assert!(subagent_transcripts(&main).is_empty());
-    let dir = temp.0.join("session/subagents");
-    fs::create_dir_all(dir.join("nested.jsonl")).unwrap();
-    for name in ["agent-b.jsonl", "agent-a.jsonl", "agent-a.meta.json"] {
-        fs::write(dir.join(name), "").unwrap();
-    }
-    assert_eq!(subagent_transcripts(&main), [dir.join("agent-a.jsonl"), dir.join("agent-b.jsonl")]);
-}
-
-#[test]
 fn append_new_keeps_one_copy_across_schemas_and_concurrent_annotations() {
     let temp = Temp::new();
     let store = Store::new(&temp.0);
-    let session = key(Agent::Codex);
+    let session = key("codex");
     let mut old = patch_event(Path::new("/project"));
     for event in &mut old {
         event.schema_version = 1;
     }
     store.append(&session, &old).unwrap();
     let mut again = patch_event(Path::new("/project"));
-    again[0].concurrent = vec![SessionKey { agent: Agent::Claude, session_id: "other".into() }];
+    again[0].concurrent = vec![SessionKey { agent: agent("claude"), session_id: "other".into() }];
     let mut later = again[0].clone();
     later.timestamp += 1;
     again.push(later.clone());

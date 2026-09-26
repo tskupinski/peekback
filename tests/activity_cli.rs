@@ -38,7 +38,8 @@ fn all_sessions_listing_works_without_live_sessions_and_exposes_provenance() {
     let root = std::env::temp_dir().join(format!("peekback-all-cli-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     let store = session_activity::Store::new(root.join("activity"));
-    for agent in [session_activity::Agent::Claude, session_activity::Agent::Codex] {
+    for agent in ["claude", "codex"] {
+        let agent = session_activity::AgentId::new(agent).unwrap();
         let key = session_activity::SessionKey { agent, session_id: "same-id".into() };
         let event = session_activity::FileEvent::new(
             &key,

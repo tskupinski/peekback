@@ -32,7 +32,7 @@ pub fn record(root: &Path, session: &Session, closed: Option<Turn>) -> Result<()
     let key = session.activity_key();
     key.validate()?;
     let dir = root.join("turns");
-    let path = dir.join(format!("{}.{}.json", key.agent.slug(), key.session_id));
+    let path = dir.join(format!("{}.{}.json", key.agent.as_str(), key.session_id));
     let mut history = match fs::read(&path) {
         Ok(bytes) => serde_json::from_slice::<History>(&bytes).context("reading turn history")?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => History { session: key.clone(), turns: Vec::new() },

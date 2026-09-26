@@ -9,12 +9,13 @@ mod config;
 mod daemon;
 mod discovery;
 mod document;
-mod hooks;
+mod harness;
 mod lifecycle;
 mod mux;
 mod paths;
 mod process;
 mod protocol;
+mod record;
 mod registry;
 mod send;
 mod session;
@@ -169,7 +170,7 @@ fn status(prune: bool) -> Result<()> {
             println!(
                 "  {}  {}  {}  active {}  {}  send via {}",
                 s.session_id,
-                s.agent.name(),
+                s.harness.name(),
                 s.cwd.display(),
                 ago(now - s.last_active_at),
                 terminal,

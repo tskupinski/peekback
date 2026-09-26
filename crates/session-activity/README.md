@@ -1,8 +1,10 @@
 # session-activity
 
-A Rust library for file activity observed during Claude Code and Codex
-sessions. It normalizes supported tool activity, preserves the evidence behind
-each path, and retains history independently of the calling application.
+A Rust library for file activity observed during coding-agent sessions, such
+as Claude Code and Codex. It preserves the evidence behind each path and
+retains history independently of the calling application. It knows no
+particular agent: the caller turns its agent's hooks or transcripts into
+`FileEvent`s.
 It is developed alongside Peekback and published separately on crates.io;
 it has no GUI, Markdown, terminal, or Peekback runtime dependency.
 
@@ -25,40 +27,37 @@ maintenance is unavailable. To install the Peekback application instead, use
 
 The library owns:
 
-- `SessionKey`: agent plus native session ID.
+- `SessionKey`: an `AgentId` namespace chosen by the caller (lowercase ASCII
+  letters, digits and `-`) plus the agent's native session ID.
 - `FileEvent`: versioned file metadata, operation, outcome, timestamp, source,
   working directory, optional tool call ID, rename origin, and the sessions
   that were working concurrently when a scan observed the file.
-- Adapters for supported `PostToolUse` payloads, Claude `PostToolUseFailure`,
-  and Claude transcripts, including tool-result correlation, plus
-  `subagent_transcripts` to find the subagent transcripts beside a main one.
 - `Store`: retained event batches under a caller-supplied directory.
   `Store::append_new` appends only events not already retained, for callers
   that capture the same evidence repeatedly.
 - `Store::sessions` and `Store::read_all`: enumerate and read retained history
-  across both agent namespaces, independently of a live-session registry.
+  across every agent namespace, independently of a live-session registry.
 - `scan_report`: bounded filesystem scans and completeness diagnostics from
   caller-supplied roots, each with an inclusive modification-time window
   (`scan` returns only the events).
-- `transcript_last_activity`: when the agent last acted, from the newest
-  assistant message or tool result near the end of a Claude transcript.
 - `FileActivity::scan_only` and `FileActivity::possibly_shared`: whether only
   scans saw a file, and whether one did while another session was working in
   the same place.
 - `Store::maintain`: preview or apply compaction and timestamp retention.
 - `files`: grouping observations by path without losing their evidence.
 
-Peekback owns the hook command, live session registry, terminal metadata,
-choice of scan roots, Markdown filtering, and labels. The library does not
+Peekback owns the hook command, hook and transcript decoding for each agent,
+live session registry, terminal metadata, choice of scan roots, Markdown
+filtering, and labels. The library does not
 read a global configuration or choose its own storage location.
 
 ```rust
-use session_activity::{Agent, SessionKey, Store, files};
+use session_activity::{AgentId, SessionKey, Store, files};
 
 // The caller chooses the directory; the library never discovers global state.
 let store = Store::new(std::env::temp_dir().join("my-app-session-activity"));
 let session = SessionKey {
-    agent: Agent::Codex,
+    agent: AgentId::new("codex")?,
     session_id: "native-session-id".into(),
 };
 let report = store.read(&session)?;
@@ -69,9 +68,9 @@ let touched_files = files(report.events);
 # Ok::<(), anyhow::Error>(())
 ```
 
-To collect a hook, call `hook_events(agent, &payload, unix_seconds)` and pass
-its result to `store.append(&session, &events)`. Only normalized metadata is
-stored; the raw hook payload and document contents are discarded.
+To record an observation, build it with `FileEvent::new` and pass it to
+`store.append(&session, &events)`. Only metadata is stored, never document
+contents.
 
 From a repository checkout, run the consumer example:
 
@@ -96,23 +95,15 @@ Events describe observations, not a complete audit of a session's filesystem
 effects. Errors use `anyhow::Result`; error message wording is diagnostic and is
 not a stable API. `Store::events` is strict, while `Store::read` returns healthy
 events with warnings. A malformed authoritative checkpoint remains a hard error.
-`transcript_events` is best-effort: an unavailable transcript or malformed
-records can yield an empty or partial result without a diagnostic report.
 
 Operations are `read`, `write` (create or replace), `create`, `modify`, `delete`,
-`rename`, and `observed`. Claude `Read`, `Write`, `Edit`, and `MultiEdit` are
-recognized. Codex `apply_patch` headers supply create/modify/delete/rename
-operations. Arbitrary shell commands and Codex transcripts are not parsed.
-Rename events carry the destination in `path` and origin in `previous_path`.
+`rename`, and `observed`. Rename events carry the destination in `path` and origin in `previous_path`.
 File queries include both, even when either path no longer exists.
 
 Sources distinguish hooks, transcript records, legacy registry paths, and
-project/scratchpad/memory scans. Structured `success` or `is_error`/`isError`
-booleans can establish an outcome; explicit failure wins over contradictory
-success flags. Claude failure hooks establish failure directly. Transcript
-requests are matched to `tool_result` blocks by call ID; unmatched requests
-retain unknown outcomes. Relative transcript paths use a record's cwd when
-available. A scan only observes file modification times. Consumers
+project/scratchpad/memory scans. The caller sets an event's outcome when its
+source establishes one; otherwise it stays unknown. A scan only observes file
+modification times. Consumers
 decide which operations, outcomes, and sources count for their use case.
 
 `reconcile` connects known outcomes to unknown observations for the same

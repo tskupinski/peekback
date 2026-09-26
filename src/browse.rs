@@ -12,11 +12,12 @@ use crossterm::{
     style::{Attribute, Print, SetAttribute},
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use session_activity::{Agent, FileActivity, Outcome, SessionKey, Source};
+use session_activity::{FileActivity, Outcome, SessionKey, Source};
 use unicode_width::UnicodeWidthChar;
 
 use crate::{
     activity, client, discovery,
+    harness::Harness,
     protocol::{Request, Response},
     registry, session,
 };
@@ -32,8 +33,8 @@ pub struct Args {
     #[arg(long, conflicts_with = "pane")]
     session: Option<String>,
     /// Agent namespace; use with --session to browse ended sessions
-    #[arg(long, requires = "session", value_parser = ["claude", "codex"])]
-    agent: Option<String>,
+    #[arg(long, requires = "session")]
+    agent: Option<Harness>,
     /// Select the session registered in a tmux pane
     #[arg(long)]
     pane: Option<String>,
@@ -63,7 +64,7 @@ impl Snapshot {
             });
         };
         key.validate()?;
-        let active = registry::find(&key.session_id).filter(|s| s.agent == key.agent);
+        let active = registry::find(&key.session_id).filter(|s| s.activity_key() == key);
         let report = activity::store().read(&key)?;
         let events = report.events;
         let warnings = report.warnings.into_iter().map(|w| format!("{}: {}", w.path.display(), w.message)).collect();
@@ -74,7 +75,7 @@ impl Snapshot {
     fn title(&self) -> String {
         self.key
             .as_ref()
-            .map(|key| format!("{} / {}", key.agent.name(), key.session_id))
+            .map(|key| format!("{} / {}", Harness::label(&key.agent), key.session_id))
             .unwrap_or_else(|| "All sessions / retained history".into())
     }
 
@@ -88,10 +89,7 @@ pub fn run(args: Args) -> Result<()> {
         None
     } else {
         Some(match (&args.agent, &args.session) {
-            (Some(agent), Some(id)) => SessionKey {
-                agent: if agent == "codex" { Agent::Codex } else { Agent::Claude },
-                session_id: id.clone(),
-            },
+            (Some(harness), Some(id)) => harness.key(id.clone()),
             _ => session::resolve(args.session.as_deref(), args.pane.as_deref())?.activity_key(),
         })
     };
@@ -300,7 +298,7 @@ impl Browser {
                                     "{}  {:?} / {:?} / {:?}",
                                     event.timestamp, event.source, event.operation, event.outcome
                                 ),
-                                format!("  {} / {}", event.session.agent.name(), event.session.session_id),
+                                format!("  {} / {}", Harness::label(&event.session.agent), event.session.session_id),
                                 format!("  {}", event.path.display()),
                             ];
                             if let Some(from) = &event.previous_path {
@@ -441,7 +439,7 @@ fn evidence(file: &FileActivity) -> &'static str {
 fn provenance(file: &FileActivity) -> String {
     let mut sessions = Vec::new();
     for event in file.events.iter().rev() {
-        let label = format!("{} / {}", event.session.agent.name(), event.session.session_id);
+        let label = format!("{} / {}", Harness::label(&event.session.agent), event.session.session_id);
         if !sessions.contains(&label) {
             sessions.push(label);
         }
@@ -455,7 +453,7 @@ fn preview_request(key: Option<&SessionKey>, path: &Path) -> Result<Request> {
     let path = path.canonicalize().context("Cannot open selected file")?;
     // Ended sessions still have history, but cannot receive selections back.
     let session_id =
-        key.and_then(|key| registry::find(&key.session_id).filter(|s| s.agent == key.agent)).map(|s| s.session_id);
+        key.and_then(|key| registry::find(&key.session_id).filter(|s| s.activity_key() == *key)).map(|s| s.session_id);
     Ok(Request::Show { session_id, path: Some(path), focus: true })
 }
 
@@ -547,7 +545,7 @@ mod tests {
     use session_activity::{FileEvent, Operation};
 
     fn snapshot() -> Snapshot {
-        let key = SessionKey { agent: Agent::Codex, session_id: "browser-unit".into() };
+        let key = Harness::Codex.key("browser-unit");
         let events = vec![
             FileEvent::new(&key, Path::new("/missing"), Path::new("notes.md"), 2, Operation::Modify, Source::Hook),
             FileEvent::new(

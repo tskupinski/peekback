@@ -53,13 +53,13 @@ fn success(output: Output) -> String {
 #[test]
 fn setup_dry_run_does_not_create_directories_and_validates_all_inputs_first() {
     let f = Fixture::new();
-    let text = success(f.setup(binary(), &["--agent", "all", "--dry-run"]));
+    let text = success(f.setup(binary(), &["--all", "--dry-run"]));
     assert!(text.contains("would update"));
     assert_eq!(fs::read_dir(&f.0).unwrap().count(), 0);
     assert!(!f.setup(binary(), &[]).status.success());
     fs::create_dir(f.0.join("codex")).unwrap();
     fs::write(f.0.join("codex/hooks.json"), "broken").unwrap();
-    assert!(!f.setup(binary(), &["--agent", "all"]).status.success());
+    assert!(!f.setup(binary(), &["--all"]).status.success());
     assert!(!f.0.join("claude").exists());
     assert_eq!(fs::read_to_string(f.0.join("codex/hooks.json")).unwrap(), "broken");
 }
@@ -129,7 +129,7 @@ fn setup_preserves_settings_is_repeatable_and_hooks_work_without_scripts_or_path
     // Moving the installation updates our commands and preserves user handlers.
     let moved = f.0.join("moved-peekback");
     fs::rename(&installed, &moved).unwrap();
-    success(f.setup(&moved, &["--agent", "all"]));
+    success(f.setup(&moved, &["--all"]));
     let settings: Value = serde_json::from_slice(&fs::read(f.0.join("codex/hooks.json")).unwrap()).unwrap();
     assert_eq!(settings["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
     assert!(settings["hooks"]["SessionStart"][1]["hooks"][0]["command"].as_str().unwrap().contains("moved-peekback"));
