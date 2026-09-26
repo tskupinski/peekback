@@ -7,6 +7,7 @@
   const composerEl = $("composer");
   const composerQuote = $("composer-quote");
   const composerInput = $("composer-input");
+  const statusPendingEl = $("status-pending");
   const documentsEl = $("documents");
   const toastEl = $("toast");
   const toolbarEl = $("toolbar");
@@ -435,8 +436,12 @@
     const session = state.doc?.session;
     if (session) parts.push(sessionName(session));
     if (state.doc) parts.push(state.doc.label);
-    if (activeComments().length) parts.push(`${activeComments().length} pending`);
     statusDocEl.textContent = parts.join(" › ");
+    // Pending comments stay in view while the sidebar is closed, with the key
+    // that sends them.
+    const pending = activeComments().length;
+    statusPendingEl.hidden = pending === 0;
+    statusPendingEl.textContent = `${pending} pending · S send`;
   }
 
   // The sidebar is off by default; the popup is narrow and the picker
@@ -585,6 +590,15 @@
   }
 
   composerInput.addEventListener("input", fitComposer);
+
+  // Bars follow the text when the layout changes: a resize, an image loading.
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => { if (!rendering) { drawGutter(attachedComments()); placeComposer(); } }).observe(docEl);
+  }
+
+  function attachedComments() {
+    return activeComments().filter((c) => !c.changed && c.fileIdentity === state.doc?.fileIdentity);
+  }
   composerInput.addEventListener("keydown", (event) => {
     event.stopPropagation();
     if (event.isComposing) return;
@@ -831,6 +845,69 @@
         block.removeAttribute("title");
       }
     }
+    drawGutter(comments);
+  }
+
+  // One bar per comment beside the blocks it covers, laid out from their
+  // rendered positions; overlapping comments take the next lane over.
+  const gutter = document.createElement("div");
+  gutter.className = "comment-gutter";
+  gutter.setAttribute("aria-hidden", "true");
+  let gutterShownIn = null; // the render the gutter was last attached to
+
+  function drawGutter(comments) {
+    gutter.replaceChildren();
+    if (!comments.length) return;
+    // A render replaces the document's contents, gutter included.
+    if (gutterShownIn !== renderGeneration) {
+      docEl.append(gutter);
+      gutterShownIn = renderGeneration;
+    }
+    const base = docEl.getBoundingClientRect();
+    const lanes = [];
+    const bars = [];
+    for (const c of [...comments].sort((a, b) => a.line - b.line || b.endLine - a.endLine)) {
+      const blocks = state.blocks.filter((b) => Number(b.dataset.sourceLine) < c.endLine && Number(b.dataset.sourceEnd) > c.line);
+      if (!blocks.length) continue;
+      const top = blocks[0].getBoundingClientRect().top - base.top;
+      const bottom = blocks.at(-1).getBoundingClientRect().bottom - base.top;
+      let lane = lanes.findIndex((end) => end <= top);
+      if (lane < 0) lane = lanes.push(0) - 1;
+      lanes[lane] = bottom;
+      const bar = document.createElement("div");
+      bar.className = "comment-bar" + (c.id === state.currentComment ? " current" : "");
+      bar.dataset.commentId = String(c.id);
+      bar.title = c.note || "(no note)";
+      bar.style.top = `${top}px`;
+      bar.style.height = `${Math.max(bottom - top, 4)}px`;
+      bar.style.left = `${GUTTER_LEFT + Math.min(lane, 2) * 4}px`;
+      bars.push(bar);
+    }
+    gutter.replaceChildren(...bars);
+  }
+
+  // Between the block cursor, 18px left of the text, and the text; three lanes
+  // fit before the 32px padding.
+  const GUTTER_LEFT = 20;
+
+  // Reads notes without the mouse: steps through this document's comments in
+  // order and shows each one's note.
+  function nextComment(direction) {
+    const here = activeComments()
+      .filter((c) => !c.changed && c.fileIdentity === state.doc?.fileIdentity)
+      .sort((a, b) => a.line - b.line || a.id - b.id);
+    if (here.length === 0) return setMessage("no comments in this document");
+    const at = Number(state.blocks[state.cursor]?.dataset.sourceLine ?? -1);
+    const current = here.findIndex((c) => c.id === state.currentComment);
+    let i = current >= 0 && here[current].line === at
+      ? current + direction
+      : direction > 0 ? here.findIndex((c) => c.line > at) : here.findLastIndex((c) => c.line < at);
+    if (i < 0 || i >= here.length) i = direction > 0 ? 0 : here.length - 1;
+    const c = here[i];
+    state.currentComment = c.id;
+    moveCursor(nearestBlock(c.line));
+    paintComments();
+    setMessage(`comment ${i + 1} of ${here.length}: ${c.note || "(no note)"}`);
   }
 
   // Follows text that moved, as when the agent adds a paragraph above it.
@@ -1396,6 +1473,7 @@
       const direction = pending === "]" ? 1 : -1;
       if (key === pending) nextHeading(direction);
       else if (key === "d") cycleDocument(direction);
+      else if (key === "c") nextComment(direction);
       else handled = false;
     } else {
       switch (key) {

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Mark each comment with one bar in the left margin beside its blocks, instead
+  of a badge under every block and a tinted background. A range comment no
+  longer looks like several, and adding one no longer moves the text.
+- Step through comments with `]c` / `[c`, which show each note in the status
+  line, so notes can be read without hovering.
+- Show the pending count with `S send` on the right of the status line.
 - Write comments in a note box that opens under the commented block, with
   several lines (`Shift-Enter`), instead of a one-line input at the bottom
   edge. `C` edits the comment on the cursor's block, and `Ctrl-E` edits one

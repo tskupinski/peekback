@@ -419,6 +419,15 @@ it is placed again after every render. `Enter` saves, `Shift-Enter` adds a
 line, `Esc` cancels. `C` edits the latest comment on the cursor's block, and
 `Ctrl-E` in the comments picker edits the chosen one, opening its document
 first when it is another. `:c note` still adds a one-line note directly.
+
+Each attached comment is drawn as one bar in the left margin, laid out from
+the rendered positions of the blocks it covers, between the block cursor and
+the text, so marking never changes the document's layout. Overlapping
+comments take the next of three lanes. Bars are redrawn after each render and
+when the document's size changes, as when an image loads. `]c` and `[c` move
+the cursor to the next or previous comment in source order, wrapping, and
+show its note in the status line; the chosen comment's bar is emphasized. The
+status line shows the session's pending count with the key that sends it.
 Nothing submits a prompt. Esc and `:q` hide
 the viewer; `peekback quit` stops the daemon and unregisters the hotkey.
 
@@ -447,8 +456,8 @@ render of its document, a comment whose lines no longer hold that text is
 searched for as an exact block sequence elsewhere in the file. It moves only
 when the text occurs as often as when the comment was written, to the same
 copy in order; with a copy of repeated text gone there is no telling which was
-the comment's. Otherwise it is marked "text changed or removed": no
-block marker, a label in the sidebar and pickers, and a line in the sent
+the comment's. Otherwise it is marked "text changed or removed": no margin
+bar, a label in the sidebar and pickers, and a line in the sent
 prompt saying the quote is no longer in the file, so it is not read as a
 request to restore it. A later reload that brings the text back clears the
 mark. Only the document on screen is checked: a comment on another document

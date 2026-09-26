@@ -60,6 +60,7 @@
       <tr><td>gg / G</td><td>top / bottom</td></tr>
       <tr><td>]] / [[</td><td>next / previous heading</td></tr>
       <tr><td>]d / [d</td><td>next / previous document</td></tr>
+      <tr><td>]c / [c</td><td>next / previous comment, showing its note</td></tr>
       <tr><td>v</td><td>visual mode: extend with j / k</td></tr>
       <tr><td>y / s</td><td>copy / send the block or selection as Markdown; s also sends the comments inside it</td></tr>
       <tr><td>c</td><td>comment on the block or selection: Enter saves, Shift-Enter adds a line, Esc cancels</td></tr>
@@ -77,6 +78,7 @@
     <span id="mode" class="mode">NORMAL</span>
     <span id="status-doc" class="status-doc"></span>
     <span id="status-msg" class="status-msg"></span>
+    <span id="status-pending" class="status-pending" hidden></span>
   </footer>
   <div id="composer" class="composer" hidden>
     <div id="composer-quote" class="composer-quote"></div>

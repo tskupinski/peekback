@@ -265,6 +265,31 @@ async function main() {
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
   assert.equal(element("comments").children.length, 0);
 
+  // One bar per comment beside its blocks: a range is one mark, not three, and
+  // overlapping comments sit in lanes side by side.
+  const bars = () => element("doc").children.find(el => el.className === "comment-gutter")?.children ?? [];
+  key("g"); key("g"); key("v"); key("j"); key("j"); command("c Whole section");
+  key("g"); key("g"); key("j"); command("c Just the second");
+  assert.equal(bars().length, 2);
+  assert.deepEqual(bars().map(b => b.style.left), ["20px", "24px"]);
+  assert.equal(element("status-pending").hidden, false);
+  assert.equal(element("status-pending").textContent, "2 pending · S send");
+  assert.doesNotMatch(element("status-doc").textContent, /pending/);
+  // ]c and [c read the notes without the mouse.
+  key("g"); key("g"); key("]"); key("c"); // The next one, as in vim, not the one here.
+  assert.match(element("status-msg").textContent, /^comment 2 of 2: Just the second$/);
+  assert.equal(bars().find(b => b.className.includes("current")).title, "Just the second");
+  key("]"); key("c");
+  assert.match(element("status-msg").textContent, /^comment 1 of 2: Whole section$/); // Wraps around.
+  key("["); key("c");
+  assert.match(element("status-msg").textContent, /^comment 2 of 2/);
+  command("sendall");
+  receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
+  assert.equal(bars().length, 0);
+  assert.equal(element("status-pending").hidden, true);
+  key("]"); key("c");
+  assert.match(element("status-msg").textContent, /no comments in this document/);
+
   // Sending a selection takes the comments inside it along, and sends them.
   key("g"); key("g"); command("c On the first");
   key("G"); command("c On the last");

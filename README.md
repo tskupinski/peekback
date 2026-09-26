@@ -170,6 +170,7 @@ pane and press the hotkey, or run `peekback show --session ID`.
 | `zz` / `zt` / `zb` | scroll the cursor block to center / top / bottom |
 | `]]` / `[[` | next / previous heading |
 | `]d` / `[d` | next / previous document |
+| `]c` / `[c` | next / previous comment, showing its note in the status line |
 | `v` | visual mode, extend with `j` / `k` |
 | `y` | copy the block or selection as Markdown |
 | `s` | send the block or selection to the prompt as a blockquote, with the comments inside it |
@@ -188,10 +189,12 @@ pane and press the hotkey, or run `peekback show --session ID`.
 Text selected with the mouse gets a small toolbar with the same Copy, Send
 and Comment actions.
 
-Blocks with pending comments are highlighted and show a comment-count badge.
-Hover over a marked block to read its notes, or use `Space c` to open the pending
-comments picker. Markers disappear when comments are removed or successfully
-sent. Sending a selection (`s`) also sends the comments inside it. Everything
+Each pending comment is a bar in the left margin beside the blocks it covers;
+overlapping comments sit side by side, and adding one never moves the text.
+`]c` and `[c` step through them and show each note in the status line, the
+status line shows how many are pending with `S` to send them, and `Space c`
+lists them all. Hovering a bar also shows its note. Bars disappear when
+comments are removed or successfully sent. Sending a selection (`s`) also sends the comments inside it. Everything
 sent says where it is in the file, as `notes/plan.md#L12-18`, so the agent
 finds the text without searching, even after editing the file.
 

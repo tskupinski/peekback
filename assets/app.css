@@ -107,6 +107,7 @@ body {
 }
 
 .markdown {
+  position: relative;
   max-width: 860px;
   padding: 24px 28px 120px 32px;
   margin: 0 auto;
@@ -237,6 +238,16 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
 .statusline .mode[data-mode="confirm"] { background: var(--mode-visual); }
 .statusline .status-doc { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .statusline .status-msg { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.statusline .status-pending {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 4px;
+  color: var(--annotate);
+  background: var(--annotate-bg);
+  border: 1px solid color-mix(in srgb, var(--annotate) 40%, transparent);
+  white-space: nowrap;
+}
+.statusline .status-pending[hidden] { display: none; }
 
 .cmdline {
   position: fixed;
@@ -379,32 +390,18 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
 
 /* ---- comments ---- */
 
-.markdown .commented {
-  background: var(--annotate-bg);
-  box-shadow: -3px 0 var(--annotate);
+/* One bar per comment in the left margin, spanning its blocks; comments
+   never change the text's layout. Overlapping comments sit side by side. */
+.comment-gutter { position: absolute; top: 0; left: 0; width: 0; height: 0; pointer-events: none; }
+.comment-bar {
+  position: absolute;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--annotate);
+  opacity: 0.55;
+  pointer-events: auto;
 }
-.markdown .commented.selected {
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
-  box-shadow: -3px 0 var(--annotate), 0 0 0 6px color-mix(in srgb, var(--accent) 12%, transparent);
-}
-.markdown pre.mermaid.commented { flex-direction: column; align-items: center; }
-.markdown .commented::after {
-  content: attr(data-comment-label);
-  display: block;
-  width: fit-content;
-  margin: 6px 0 0 8px;
-  padding: 1px 7px;
-  border: 1px solid color-mix(in srgb, var(--annotate) 40%, transparent);
-  border-radius: 4px;
-  background: var(--annotate-bg);
-  color: var(--annotate);
-  font: 11px/1.6 var(--mono);
-  font-weight: 500;
-  white-space: nowrap;
-  user-select: none;
-  pointer-events: none;
-  align-self: flex-start;
-}
+.comment-bar.current { opacity: 1; width: 4px; }
 
 .comment {
   position: relative;
