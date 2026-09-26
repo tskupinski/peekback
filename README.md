@@ -196,10 +196,11 @@ status line shows how many are pending (and how many changed) with `S` to send
 them, and `Space c` lists them all. Hovering a bar also shows its note.
 
 `S` opens a review sheet showing the session it will send to and exactly
-what will be pasted, starting with an opening line you can edit ("Address
-these review comments." until you change it; clear it to send none).
-`Enter` sends, `Esc` closes without sending, and the arrow keys scroll the
-preview. `s` on a selection sends right away. Bars disappear when
+what will be pasted, opening with "Address these review comments.". `j` /
+`k` and `Ctrl-D` / `Ctrl-U` scroll it, `Enter` sends, and `Esc` or `q`
+closes it without sending. The paste is never submitted, so anything more
+you want to say goes in the prompt after it. `s` on a selection sends right
+away. Bars disappear when
 comments are removed or successfully sent. Sending a selection (`s`) also sends the comments inside it. Everything
 sent says where it is in the file, as `notes/plan.md#L12-18`, so the agent
 finds the text without searching, even after editing the file.

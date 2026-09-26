@@ -34,8 +34,8 @@
 - `u` undoes removing a comment or discarding a written note, which each say
   so; `u` was a second half-page-up key. An empty new note is no longer
   added as "(no note)", and emptying a comment in `C` removes it.
-- Review before sending: `S` opens a sheet with the target session, an
-  editable opening line, and exactly what will be pasted; `Enter` sends and
+- Review before sending: `S` opens a sheet with the target session and
+  exactly what will be pasted, scrolled with `j` / `k`; `Enter` sends and
   `Esc` closes.
 - Mark each comment with one bar in the left margin beside its blocks, instead
   of a badge under every block and a tinted background. A range comment no

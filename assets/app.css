@@ -309,8 +309,6 @@ body {
 }
 .review[hidden] { display: none; }
 .review-target { padding: 10px 14px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 13px; }
-.review-row { display: flex; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: var(--mono-size, 13px); }
-.review-row input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--fg); font: inherit; }
 .review-preview {
   flex: 1 1 auto;
   margin: 0;

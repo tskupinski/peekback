@@ -480,12 +480,14 @@ request to restore it. A later reload that brings the text back clears the
 mark. Only the document on screen is checked: a comment on another document
 of the session keeps the state it had when that document was last shown.
 
-Send all opens a review sheet first: the target session, an editable opening
-line, and a read-only preview of the exact text to paste, updated as the line
-or the comments change; a comment edited or removed while the sheet is open
-is sent as it is then, or not at all. `Enter` sends, `Esc` closes, the arrow keys scroll the
-preview. The opening line defaults to "Address these review comments.", is
-remembered while the daemon runs, and is left out when empty. Without a
+Send all opens a review sheet first: the target session and a read-only
+preview of the exact text to paste, which opens with the fixed line "Address
+these review comments.". The paste lands in the prompt unsubmitted, so other
+framing is typed there rather than in the sheet. The sheet takes every key
+while open: `j` / `k` and `Ctrl-D` / `Ctrl-U` scroll, `Enter` sends, `Esc`
+or `q` closes, and other keys do nothing. The preview follows the comments,
+so one changed by a live reload or a session change while it is open is sent
+as it is then. Without a
 session the sheet says there is nowhere to send and sends nothing. `s` on a
 selection sends at once. The sent text groups the session's comments by canonical file
 path, with labels relative to the delivery target. Each comment starts with

@@ -753,11 +753,10 @@
 
   const reviewEl = $("review");
   const reviewTarget = $("review-target");
-  const reviewIntroInput = $("review-intro");
   const reviewPreview = $("review-preview");
   let reviewing = null; // ids of the comments the sheet would send
-  // The opening line you last sent with, kept while the daemon runs.
-  let reviewIntro = "Address these review comments.";
+  // Framing beyond this is typed in the prompt, where the paste lands unsent.
+  const REVIEW_INTRO = "Address these review comments.\n\n";
 
   function openReview(comments) {
     if (comments.length === 0) return setMessage("no pending comments for this session");
@@ -765,22 +764,16 @@
     closePicker();
     closeCmdline();
     reviewing = new Set(comments.map((c) => c.id));
-    reviewIntroInput.value = reviewIntro;
     reviewEl.hidden = false;
+    reviewPreview.scrollTop = 0;
     setMode("review");
     showReviewText();
-    reviewIntroInput.focus();
   }
 
   // The comments under review as they are now: one removed or edited while
   // the sheet is open is not sent as it was.
   function reviewedComments() {
     return reviewing ? activeComments().filter((c) => reviewing.has(c.id)) : [];
-  }
-
-  function reviewPrefix() {
-    const intro = reviewIntroInput.value.trim();
-    return intro ? `${intro}\n\n` : "";
   }
 
   function showReviewText() {
@@ -795,14 +788,13 @@
     reviewTarget.textContent = session
       ? `Send ${n} comment${n === 1 ? "" : "s"} to ${sessionName(session)}`
       : "No session to send to: this document is not part of one";
-    reviewPreview.textContent = reviewPrefix() + commentsPrompt(comments);
+    reviewPreview.textContent = REVIEW_INTRO + commentsPrompt(comments);
   }
 
   function closeReview() {
     if (reviewEl.hidden) return;
     reviewEl.hidden = true;
     reviewing = null;
-    reviewIntroInput.blur();
     setMode("normal");
     showQuestionLater();
   }
@@ -810,27 +802,21 @@
   function sendReview() {
     if (!state.doc?.session) return;
     const comments = reviewedComments();
-    const prefix = reviewPrefix();
-    reviewIntro = reviewIntroInput.value.trim();
     closeReview();
-    sendComments(comments, prefix);
+    sendComments(comments, REVIEW_INTRO);
   }
 
-  reviewIntroInput.addEventListener("input", showReviewText);
-  reviewIntroInput.addEventListener("keydown", (event) => {
-    event.stopPropagation();
-    if (event.isComposing) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeReview();
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      sendReview();
-    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      reviewPreview.scrollTop += event.key === "ArrowDown" ? 48 : -48;
-    }
-  });
+  // The sheet is read like the document: it takes every key while open.
+  function reviewKey(event) {
+    const half = Math.max(48, Math.floor((reviewPreview.clientHeight || 0) / 2));
+    const scroll = {
+      j: 48, ArrowDown: 48, k: -48, ArrowUp: -48,
+      ...(event.ctrlKey ? { d: half, u: -half } : {}),
+    }[event.key];
+    if (scroll) reviewPreview.scrollTop += scroll;
+    else if (event.key === "Enter") sendReview();
+    else if (event.key === "Escape" || event.key === "q") closeReview();
+  }
 
   // Only comments still as they were sent: one edited meanwhile stays
   // pending with its new note, and one removed meanwhile cannot come back
@@ -1502,13 +1488,16 @@
       return answer(event.key);
     }
     if (rendering && event.key !== "Escape") return;
-    // A click elsewhere took focus from the note or the review sheet; the
-    // next key brings it back, and Esc still closes it.
-    const openInput = { comment: composerInput, review: reviewIntroInput }[state.mode];
-    if (openInput) {
+    // A click elsewhere took focus from the note; the next key brings it
+    // back, and Esc still closes it.
+    if (state.mode === "comment" && !composerEl.hidden) {
       event.preventDefault();
-      if (event.key !== "Escape") return openInput.focus();
-      return state.mode === "comment" ? discardComposer() : closeReview();
+      return event.key === "Escape" ? discardComposer() : composerInput.focus();
+    }
+    if (state.mode === "review") {
+      if (modifierKeys.has(event.key)) return;
+      event.preventDefault();
+      return reviewKey(event);
     }
     if (inputOpen()) return;
     if (modifierKeys.has(event.key)) return;

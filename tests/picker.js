@@ -145,13 +145,10 @@ function boot({ markdown = false } = {}) {
     receive({ type: "render", path, source: text, session: { session_id: "reviewer" }, documents: [] });
     await new Promise(setImmediate);
   };
-  // S opens the review sheet; Enter in it sends. An empty opening line keeps
-  // these tests' prompts to the comments themselves.
+  // S opens the review sheet; Enter in it sends.
   const sendAll = () => {
-    command("sendall");
-    element("review-intro").value = "";
-    element("review-intro").dispatch("input");
-    element("review-intro").dispatch("keydown", { key: "Enter" });
+    key("S");
+    key("Enter");
   };
   const bars = () => element("doc").children.find(el => el.className === "comment-gutter")?.children ?? [];
   // The comments drawn in the margin: the source lines each bar spans, and its note.
@@ -189,7 +186,7 @@ const scenarios = [];
 const scenario = (name, run, options) => scenarios.push({ name, run, options });
 
 scenario("Picker: scopes, scratchpad listing, filtering, caps, >30 results, opening, refresh, bookmarks", async page => {
-  const { element, window, receive, expectRequest, key, render, listed, input } = page;
+  const { element, window, receive, expectRequest, key, listed, input } = page;
   receive({ type: "render", path: "/current.md", source: "", session: { session_id: "live" },
     documents: [{ path: "/current.md", label: "current.md", touched_at: 1 }] });
   await new Promise(setImmediate);
@@ -383,33 +380,36 @@ scenario("Composer: writing, editing, undo, the prompt's line references", async
 });
 
 scenario("Review sheet: preview, opening line, one comment, no session", async page => {
-  const { element, messages, receive, key, command, render, pending, remove, input } = page;
+  const { element, document, window, messages, receive, key, command, render, pending, remove } = page;
   await render();
   // Send all reviews first: the sheet shows the target and exactly what will
   // be pasted, with an opening line you can change.
   command("c Review this");
-  const intro = element("review-intro");
+  const preview = element("review-preview");
   const beforeReview = messages.length;
   key("S");
   assert.equal(element("mode").textContent, "REVIEW");
   assert.equal(element("review").hidden, false);
   assert.equal(element("review-target").textContent, "Send 1 comment to / · Claude Code");
-  assert.equal(intro.value, "Address these review comments."); // Until you send with another.
-  intro.value = "Address these review comments.";
-  intro.dispatch("input");
-  assert.match(element("review-preview").textContent, /^Address these review comments\.\n\nComments on `\/comments\.md`:\n\n`\/comments\.md#L1`\n> First paragraph\.\n\nReview this$/);
-  intro.dispatch("keydown", { key: "ArrowDown" }); // Scrolls the preview, nothing else.
-  intro.dispatch("keydown", { key: "Escape" });
+  assert.match(preview.textContent, /^Address these review comments\.\n\nComments on `\/comments\.md`:\n\n`\/comments\.md#L1`\n> First paragraph\.\n\nReview this$/);
+  // Read like the document: j and k scroll the preview and move nothing else.
+  preview.scrollTop = 0;
+  key("j"); key("j"); key("k");
+  assert.equal(preview.scrollTop, 48);
+  window.dispatch("keydown", { key: "d", ctrlKey: true });
+  assert.ok(preview.scrollTop > 48);
+  key("c"); key("x"); key("S"); // Other keys do nothing while it is open.
+  assert.equal(element("mode").textContent, "REVIEW");
+  assert.equal(pending(), 1);
+  key("Escape");
   assert.equal(element("review").hidden, true);
   assert.equal(messages.length, beforeReview); // Closing sends nothing.
-  key("S");
-  intro.value = "Please fix:";
-  intro.dispatch("input");
-  intro.dispatch("keydown", { key: "Enter" });
-  assert.match(messages.at(-1).text, /^Please fix:\n\nComments on/);
+  key("S"); key("q"); // q closes too, as it leaves the viewer elsewhere.
+  assert.equal(element("review").hidden, true);
+  key("S"); key("Enter");
+  assert.match(messages.at(-1).text, /^Address these review comments\.\n\nComments on/);
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
   assert.equal(pending(), 0);
-  intro.value = "";
   key("S");
   assert.match(element("status-msg").textContent, /no pending comments for this session/);
   assert.equal(element("review").hidden, true);
@@ -420,9 +420,9 @@ scenario("Review sheet: preview, opening line, one comment, no session", async p
   const beforeStandalone = messages.length;
   key("S");
   assert.match(element("review-target").textContent, /No session to send to/);
-  intro.dispatch("keydown", { key: "Enter" });
+  key("Enter");
   assert.equal(messages.length, beforeStandalone);
-  intro.dispatch("keydown", { key: "Escape" });
+  key("Escape");
   remove();
 });
 
@@ -496,7 +496,7 @@ scenario("Size limit: refused in the page, not left in flight", async page => {
 });
 
 scenario("Leaving a document: the note is saved with it, a reload keeps it open", async page => {
-  const { element, document, key, render, marked, pending, remove, input } = page;
+  const { element, document, key, render, marked, pending, remove } = page;
   await render();
   // Leaving the document saves the note with it; the box does not follow.
   key("g"); key("g"); key("c");
@@ -542,8 +542,8 @@ scenario("Real Markdown: frontmatter, headings, list items, fences and quotes ea
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
 }, { markdown: true });
 
-scenario("Keyboard after a stray click: the review sheet keeps the keys, Esc still closes it", async page => {
-  const { element, key, command, render, input } = page;
+scenario("Keyboard after a stray click: the review sheet and the note keep the keys, Esc still closes them", async page => {
+  const { element, key, command, render } = page;
   await render();
   command("c Review this");
   key("S");
@@ -559,7 +559,7 @@ scenario("Keyboard after a stray click: the review sheet keeps the keys, Esc sti
 });
 
 scenario("Sends in flight: an edit made meanwhile stays pending, a removal is not undone into a resend", async page => {
-  const { element, receive, key, command, render, sendAll, notes, remove, input } = page;
+  const { element, receive, key, command, render, sendAll, notes, remove } = page;
   await render();
   command("c First version");
   sendAll();
@@ -579,7 +579,7 @@ scenario("Sends in flight: an edit made meanwhile stays pending, a removal is no
 });
 
 scenario("Undo after a send: a discarded edit comes back as a new comment, on its own document", async page => {
-  const { element, receive, key, command, render, sendAll, pending, notes, remove, input } = page;
+  const { element, receive, key, command, render, sendAll, pending, notes, remove } = page;
   const composer = element("composer-input");
   await render();
   command("c Keep me");
@@ -620,7 +620,7 @@ scenario("Repeated text: a comment still on its lines keeps them when a copy app
 });
 
 scenario("Another session on the same file: the open note is saved with its own session", async page => {
-  const { element, document, receive, key, render, pending, notes, input } = page;
+  const { element, document, receive, key, pending, notes } = page;
   const show = async session_id => {
     receive({ type: "render", path: "/repo/PLAN.md", source, session: { session_id }, documents: [] });
     await new Promise(setImmediate);
@@ -636,7 +636,7 @@ scenario("Another session on the same file: the open note is saved with its own 
 });
 
 scenario("Comments elsewhere: jumping reaches the session's documents, and says so for others", async page => {
-  const { element, messages, receive, key, command, render, notes, input } = page;
+  const { element, messages, receive, key, command, notes, input } = page;
   const show = async (path, documents) => {
     receive({ type: "render", path, source, session: { session_id: "s" }, documents });
     await new Promise(setImmediate);
@@ -682,7 +682,7 @@ scenario("Links: HTML and SVG anchors never navigate the webview", async page =>
 });
 
 scenario("Empty session: placeholder, inert actions, picker hint, first document, scan notes", async page => {
-  const { element, window, messages, receive, key, render, input } = page;
+  const { element, window, messages, receive, key, input } = page;
   // A focused Codex pane before its first prompt: no session exists yet.
   receive({ type: "render", path: null, source: "", session: null, documents: [], unstarted: "Codex" });
   await new Promise(setImmediate);
@@ -782,12 +782,12 @@ scenario("Session isolation: drafts, delivery identity, acknowledgments, copied 
   // While "Pasted?" waits behind an open input, nothing more can be sent:
   // those comments may already be in the prompt.
   command("sendall"); // The sheet is open when the copied result arrives...
-  element("review-intro").dispatch("keydown", { key: "Enter" });
+  key("Enter");
   command("sendall");
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
   assert.equal(element("mode").textContent, "REVIEW"); // ...so the question waits.
   const beforeBlocked = messages.length;
-  element("review-intro").dispatch("keydown", { key: "Enter" });
+  key("Enter");
   assert.equal(messages.length, beforeBlocked); // Not sent a second time.
   await new Promise(setImmediate);
   assert.equal(element("mode").textContent, "CONFIRM");
@@ -837,7 +837,7 @@ scenario("Session isolation: drafts, delivery identity, acknowledgments, copied 
 });
 
 scenario("Themes: auto follows the system, pinned themes stay, font overrides, diagram colors", async page => {
-  const { element, document, schemeListeners, env, receive, input } = page;
+  const { element, document, schemeListeners, env, receive } = page;
   // Auto follows the system between the light and dark themes, and diagrams
   // follow along; a pinned theme ignores the system.
   const root = document.documentElement;
