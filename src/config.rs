@@ -17,11 +17,10 @@ pub struct Config {
     /// Fraction of the terminal's width the viewer takes for `right` and
     /// `left`.
     pub split: f64,
-    /// `auto` takes colors and the monospace font from the terminal the
-    /// session runs in; `system` keeps the page's own light and dark
-    /// palettes.
+    /// A built-in color theme, `light` or `dark`, or `auto` to follow the
+    /// system appearance between them.
     pub theme: String,
-    /// Overrides for the monospace font the terminal theme would supply.
+    /// The monospace font for code and the viewer's chrome, and its size.
     pub font: Option<String>,
     pub font_size: Option<f64>,
     /// Markdown files, directories or globs listed in the picker's Bookmarks
@@ -78,6 +77,14 @@ pub fn load() -> Config {
     if let Err(e) = Backend::parse(&config.backend) {
         eprintln!("{}: {e}, using backend = \"auto\"", path().display());
         config.backend = defaults.backend;
+    }
+    // Before built-in themes, `system` meant the page's own palettes, which
+    // is what `auto` means now.
+    if config.theme == "system" {
+        config.theme = defaults.theme.clone();
+    } else if !crate::theme::known(&config.theme) {
+        eprintln!("{}: unknown theme \"{}\", using theme = \"auto\"", path().display(), config.theme);
+        config.theme = defaults.theme.clone();
     }
     if !(0.2..=0.9).contains(&config.split) {
         eprintln!("{}: split must be between 0.2 and 0.9, using 0.5", path().display());

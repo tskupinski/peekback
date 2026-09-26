@@ -89,6 +89,16 @@ impl View {
     /// Moves the window onto the terminal window according to the configured
     /// placement. A popup that borrows the terminal's space, not a window of
     /// its own.
+    /// A pinned theme's appearance for the window's own chrome, or the
+    /// system's.
+    pub fn set_appearance(&self, appearance: Option<crate::theme::Appearance>) {
+        use crate::theme::Appearance;
+        self.window.set_theme(appearance.map(|a| match a {
+            Appearance::Light => tao::window::Theme::Light,
+            Appearance::Dark => tao::window::Theme::Dark,
+        }));
+    }
+
     pub fn place(&self, terminal: Option<Frame>) {
         let Some(t) = terminal else { return };
         let (x, width) = match self.placement {

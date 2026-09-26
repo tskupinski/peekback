@@ -23,7 +23,8 @@ present that evidence.
 | `src/browse.rs` | Interactive terminal browser and plain listing |
 | `src/client.rs`, `src/protocol.rs`, `src/daemon/` | Viewer IPC, native window, file watchers, global hotkey |
 | `src/mux/`, `src/send.rs` | Multiplexer adapters and verified delivery selection |
-| `src/terminal.rs`, `src/theme.rs` | Terminal application operations and appearance |
+| `src/terminal.rs` | Terminal application operations |
+| `src/theme.rs`, `assets/themes/` | Built-in color themes and the choice between them |
 | `src/turn_history.rs` | Durable turn intervals and original roots for overlap detection |
 | `assets/` | Embedded Markdown rendering and viewer interactions |
 
@@ -324,8 +325,8 @@ Tao owns the main-thread event loop. Socket and watcher threads pass messages
 through an event proxy; UI state and JavaScript evaluation stay on the main
 thread. `daemon/controller.rs` coordinates state and effects;
 `daemon/messages.rs` defines the protocol and `daemon/state.rs` defines session
-and view identity. Four bounded workers handle file reads, discovery, listings
-and theme extraction. A separate serial worker handles sends and clipboard
+and view identity. Four bounded workers handle file reads, discovery and
+listings. A separate serial worker handles sends and clipboard
 operations. The UI thread never waits for these operations.
 
 Every view has a generation and a namespaced session identity with incarnation
@@ -457,11 +458,18 @@ to the resumed process the viewer now shows.
 The config file is `~/.config/peekback/config.toml`. Window placement and hotkeys
 are read at daemon startup; bookmarks refresh their configuration on request,
 themes on opening a view, and delivery preferences on sending.
-Automatic themes read iTerm2 preferences or Ghostty configuration; unknown
-terminals use built-in system light/dark palettes. Terminal colors and monospace
-fonts style code and chrome while body text keeps the system font. Font and
-size overrides also work with system colors and unsupported terminals. Theme
-subprocesses use the same bounded runner as multiplexer commands.
+Themes are built in. Each is a stylesheet in `assets/themes/` defining the
+same color tokens for the interface, syntax highlighting and comment markers,
+scoped to `:root[data-theme="<name>"]`, plus an entry in `src/theme.rs` that
+says whether it is light or dark. `theme = "auto"` resolves to `light` or
+`dark` from the system appearance in the page and follows it as it changes;
+a named theme stays, and also pins the native window's appearance. Diagrams
+take their colors from the active theme's tokens. An unknown name is
+reported and replaced by `auto`; the earlier `system` means `auto`.
+`tests/themes.js` requires every theme to define the full token set and to
+meet 4.5:1 for text and 3:1 for the cursor and comment markers. The `font` and
+`font_size` settings style code and chrome; body text keeps the system font.
+Colors are not read from the terminal.
 
 ## Sending to the terminal
 

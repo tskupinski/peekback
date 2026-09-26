@@ -8,8 +8,8 @@ You peek at what the agent wrote. What you mark up goes back.
 
 The terminal browser covers all file types and keeps observed history after
 sessions end. The Markdown viewer adds Mermaid, KaTeX, syntax highlighting,
-live reload, and vim-style navigation. It takes its colors from your terminal
-and uses normal window stacking. The app supports Apple Silicon macOS;
+live reload, and vim-style navigation. It comes with light and dark themes
+that follow your system, and uses normal window stacking. The app supports Apple Silicon macOS;
 the separately published [session-activity library](https://crates.io/crates/session-activity)
 also supports Linux.
 
@@ -391,7 +391,7 @@ hotkey = "Cmd+Shift+M"   # empty string disables it
 backend = "auto"         # or tmux, keystroke, clipboard
 placement = "right"      # right, left, over, or free
 split = 0.5              # share of the terminal's width for right / left
-theme = "auto"           # or system: keep the page's own light / dark palettes
+theme = "auto"           # follow the system, or light / dark
 # font = "JetBrains Mono"
 # font_size = 13
 bookmarks = [
@@ -433,11 +433,12 @@ which may differ from the selected session. Automatic mode never uses it.
 
 ### Theme
 
-With `theme = "auto"`, colors and the monospace font come from the terminal
-the session runs in. iTerm2 is read from its preferences, Ghostty from its
-config and theme file. Body text keeps the system font; the terminal font
-goes on code and the chrome. Unknown terminals get the built-in light and
-dark palettes, following the system.
+Peekback has built-in light and dark themes. `theme = "auto"`, the default,
+follows the macOS appearance; `"light"` or `"dark"` pins one, including the
+window's own title bar and controls. Every theme is checked to keep text at
+4.5:1 contrast or better. Body text uses the system font; `font` and
+`font_size` set the monospace font for code and the viewer's chrome. Colors
+are not taken from the terminal.
 
 ### Optional terminal keybindings
 

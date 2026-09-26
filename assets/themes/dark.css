@@ -1,0 +1,29 @@
+/* Peekback dark. Every theme defines the same tokens; tests/themes.js checks
+   each text pair for 4.5:1 and markers for 3:1. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #15181c;
+  --fg: #e2e5e9;
+  --muted: #9ba4af;
+  --border: #2f353c;
+  --sidebar-bg: #1b1f24;
+  --code-bg: #1e2227;
+  --accent: #7ea6ff;
+  --on-accent: #10131a;
+  --banner-bg: #3a2f12;
+  --banner-fg: #f3d27a;
+  --annotate: #c3a3ff;
+  --annotate-bg: #241f31;
+  --mode-visual: #e8a25c;
+  --search-bg: #e7c24a;
+  --search-fg: #15181c;
+  --shadow: rgba(0, 0, 0, 0.45);
+  --syn-comment: #8d97a3;
+  --syn-keyword: #e39ee6;
+  --syn-string: #9fd49a;
+  --syn-number: #f2b47a;
+  --syn-title: #8fb6ff;
+  --syn-type: #72d2dc;
+  --syn-variable: #ff9e90;
+  --syn-attr: #e5c67c;
+}

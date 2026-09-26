@@ -6,7 +6,7 @@ use crate::{
     protocol::{Request, Response},
     registry::{self, Session, SessionKey},
     send, session, terminal,
-    theme::{self, Theme},
+    theme::Theme,
 };
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use std::fs;
@@ -175,9 +175,7 @@ impl App {
                     },
                 };
                 let current = open(generation, session_id, path, awaiting)?;
-                let config = config::load();
-                let terminal = current.session.as_ref().map(|s| s.terminal.clone()).unwrap_or_default();
-                let theme = theme::detect(&terminal, &config);
+                let theme = Some(Theme::from_config(&config::load()));
                 Ok(Box::new(Loaded { current, theme }))
             })();
             let _ = proxy.send_event(UserEvent::Opened { generation, result, reply });
@@ -396,6 +394,7 @@ impl App {
                     }
                     self.theme = loaded.theme;
                     self.current = Some(loaded.current);
+                    self.view.set_appearance(self.theme.as_ref().and_then(Theme::appearance));
                     self.view.push(&DaemonMessage::Theme { theme: self.theme.as_ref() });
                     self.render();
                     self.refresh_at = Some(Instant::now());

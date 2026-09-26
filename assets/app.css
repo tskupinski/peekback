@@ -1,31 +1,8 @@
 :root {
-  color-scheme: light dark;
-  --bg: #ffffff;
-  --fg: #1f2328;
-  --muted: #59636e;
-  --border: #d1d9e0;
-  --sidebar-bg: #f6f8fa;
-  --code-bg: #f6f8fa;
-  --accent: #0969da;
-  --banner-bg: #fff8c5;
-  --banner-fg: #4d2d00;
+  /* Colors come from the active theme in themes/, chosen by data-theme. */
   --sidebar-width: 240px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d1117;
-    --fg: #e6edf3;
-    --muted: #9198a1;
-    --border: #3d444d;
-    --sidebar-bg: #161b22;
-    --code-bg: #161b22;
-    --accent: #4493f8;
-    --banner-bg: #3a2d00;
-    --banner-fg: #f2cc60;
-  }
 }
 
 * { box-sizing: border-box; }
@@ -113,7 +90,7 @@ body {
   background: var(--fg);
   color: var(--bg);
   font-size: 13px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 6px 24px var(--shadow);
   z-index: 10;
 }
 
@@ -229,7 +206,7 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
   border-radius: 2px;
 }
 .markdown .match { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); }
-::highlight(search) { background: #ffd54a; color: #1f2328; }
+::highlight(search) { background: var(--search-bg); color: var(--search-fg); }
 
 .statusline {
   position: fixed;
@@ -255,9 +232,9 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
   color: var(--bg);
   background: var(--muted);
 }
-.statusline .mode[data-mode="visual"] { background: #b35900; }
+.statusline .mode[data-mode="visual"] { background: var(--mode-visual); }
 .statusline .mode[data-mode="command"], .statusline .mode[data-mode="search"], .statusline .mode[data-mode="picker"], .statusline .mode[data-mode="comment"] { background: var(--accent); }
-.statusline .mode[data-mode="confirm"] { background: #b35900; }
+.statusline .mode[data-mode="confirm"] { background: var(--mode-visual); }
 .statusline .status-doc { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .statusline .status-msg { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -301,7 +278,7 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
   padding: 3px;
   border-radius: 8px;
   background: var(--fg);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 6px 24px var(--shadow);
   z-index: 8;
 }
 .toolbar button {
@@ -325,7 +302,7 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--sidebar-bg);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 10px 40px var(--shadow);
   font-size: 13px;
 }
 .help h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
@@ -350,7 +327,7 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--sidebar-bg);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 16px 48px var(--shadow);
   font-family: var(--mono);
   font-size: var(--mono-size, 13px);
   overflow: hidden;
@@ -385,34 +362,30 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
 .picker-item.active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .picker-list .empty { padding: 5px 14px; }
 
-/* ---- terminal theme: code colors on the ANSI palette ---- */
+/* ---- syntax highlighting, from the theme's tokens ---- */
 
-html[data-theme="dark"] { color-scheme: dark; }
-html[data-theme="light"] { color-scheme: light; }
-html[data-theme] .hljs { color: var(--fg); background: transparent; }
-html[data-theme] .hljs-comment, html[data-theme] .hljs-quote { color: var(--ansi-8); font-style: italic; }
-html[data-theme] .hljs-keyword, html[data-theme] .hljs-selector-tag, html[data-theme] .hljs-meta { color: var(--ansi-5); }
-html[data-theme] .hljs-string, html[data-theme] .hljs-addition, html[data-theme] .hljs-regexp { color: var(--ansi-2); }
-html[data-theme] .hljs-number, html[data-theme] .hljs-literal, html[data-theme] .hljs-symbol { color: var(--ansi-3); }
-html[data-theme] .hljs-title, html[data-theme] .hljs-section, html[data-theme] .hljs-name, html[data-theme] .hljs-attr { color: var(--ansi-4); }
-html[data-theme] .hljs-type, html[data-theme] .hljs-built_in, html[data-theme] .hljs-class .hljs-title { color: var(--ansi-6); }
-html[data-theme] .hljs-variable, html[data-theme] .hljs-template-variable, html[data-theme] .hljs-attribute { color: var(--ansi-1); }
-html[data-theme] .hljs-deletion { color: var(--ansi-1); }
-html[data-theme] .hljs-params, html[data-theme] .hljs-punctuation, html[data-theme] .hljs-subst { color: var(--fg); }
-html[data-theme] .hljs-property, html[data-theme] .hljs-selector-class, html[data-theme] .hljs-selector-id { color: var(--ansi-6); }
-html[data-theme] .hljs-emphasis { font-style: italic; }
-html[data-theme] .hljs-strong { font-weight: 600; }
-html[data-theme] ::highlight(search) { background: var(--ansi-3); color: var(--bg); }
+.hljs { color: var(--fg); background: transparent; }
+.hljs-comment, .hljs-quote { color: var(--syn-comment); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-meta, .hljs-doctag { color: var(--syn-keyword); }
+.hljs-string, .hljs-addition, .hljs-regexp, .hljs-char.escape_ { color: var(--syn-string); }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet { color: var(--syn-number); }
+.hljs-title, .hljs-section, .hljs-name, .hljs-title.function_ { color: var(--syn-title); }
+.hljs-type, .hljs-built_in, .hljs-title.class_, .hljs-property, .hljs-selector-class, .hljs-selector-id { color: var(--syn-type); }
+.hljs-variable, .hljs-template-variable, .hljs-deletion { color: var(--syn-variable); }
+.hljs-attr, .hljs-attribute, .hljs-selector-attr, .hljs-selector-pseudo, .hljs-link { color: var(--syn-attr); }
+.hljs-params, .hljs-punctuation, .hljs-subst, .hljs-operator { color: var(--fg); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
 
 /* ---- comments ---- */
 
 .markdown .commented {
-  background: color-mix(in srgb, var(--banner-fg) 8%, var(--bg));
-  box-shadow: -3px 0 var(--banner-fg);
+  background: var(--annotate-bg);
+  box-shadow: -3px 0 var(--annotate);
 }
 .markdown .commented.selected {
   background: color-mix(in srgb, var(--accent) 12%, var(--bg));
-  box-shadow: -3px 0 var(--banner-fg), 0 0 0 6px color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: -3px 0 var(--annotate), 0 0 0 6px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .markdown pre.mermaid.commented { flex-direction: column; align-items: center; }
 .markdown .commented::after {
@@ -421,10 +394,10 @@ html[data-theme] ::highlight(search) { background: var(--ansi-3); color: var(--b
   width: fit-content;
   margin: 6px 0 0 8px;
   padding: 1px 7px;
-  border: 1px solid color-mix(in srgb, var(--banner-fg) 40%, transparent);
+  border: 1px solid color-mix(in srgb, var(--annotate) 40%, transparent);
   border-radius: 4px;
-  background: var(--banner-bg);
-  color: var(--banner-fg);
+  background: var(--annotate-bg);
+  color: var(--annotate);
   font: 11px/1.6 var(--mono);
   font-weight: 500;
   white-space: nowrap;
@@ -438,7 +411,7 @@ html[data-theme] ::highlight(search) { background: var(--ansi-3); color: var(--b
   padding: 6px 22px 6px 8px;
   margin: 0 -8px 4px;
   border-radius: 6px;
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--annotate);
 }
 .comment:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); }
 .comment-quote {
@@ -469,7 +442,7 @@ html[data-theme] ::highlight(search) { background: var(--ansi-3); color: var(--b
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--accent);
-  color: var(--bg);
+  color: var(--on-accent);
   font: inherit;
   font-weight: 600;
   cursor: pointer;

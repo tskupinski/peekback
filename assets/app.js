@@ -83,6 +83,8 @@
   }
   let mermaidOptions = mermaidDefaults();
   mermaid.initialize(mermaidOptions);
+  // Follows the system until the daemon names a theme.
+  document.documentElement.dataset.theme = darkMode() ? "dark" : "light";
 
   let renderGeneration = 0;
   let previousOwner = null;
@@ -234,68 +236,61 @@
 
   // The terminal's palette and font, when the daemon could read them. Body
   // text keeps the system font; the terminal font goes on code and chrome.
+  // The daemon names a built-in theme, or "auto" to follow the system
+  // between light and dark; every color comes from that theme's stylesheet.
+  let themeName = "auto";
+
   function applyTheme(theme) {
+    themeName = theme?.name ?? "auto";
     const root = document.documentElement;
-    const vars = ["bg", "fg", "muted", "accent", "border", "sidebar-bg", "code-bg", "banner-bg", "banner-fg", "mono"];
-    if (!theme || theme.palette?.length < 16) {
-      root.removeAttribute("data-theme");
-      for (const v of vars) root.style.removeProperty(`--${v}`);
-      for (let i = 0; i < 16; i++) root.style.removeProperty(`--ansi-${i}`);
-      mermaidOptions = mermaidDefaults();
-    } else {
-      const dark = luminance(theme.background) < 0.5;
-      root.dataset.theme = dark ? "dark" : "light";
-      const p = theme.palette;
-      const set = (k, v) => root.style.setProperty(`--${k}`, v);
-      set("bg", theme.background);
-      set("fg", theme.foreground);
-      set("muted", p[8]);
-      set("accent", p[4]);
-      set("border", `color-mix(in srgb, ${theme.foreground} 18%, ${theme.background})`);
-      set("sidebar-bg", `color-mix(in srgb, ${theme.foreground} 5%, ${theme.background})`);
-      set("code-bg", `color-mix(in srgb, ${theme.foreground} 7%, ${theme.background})`);
-      set("banner-bg", `color-mix(in srgb, ${p[3]} 25%, ${theme.background})`);
-      set("banner-fg", theme.foreground);
-      p.forEach((c, i) => set(`ansi-${i}`, c));
-      if (theme.font_family) set("mono", `"${theme.font_family}", ui-monospace, Menlo, monospace`);
-      mermaidOptions = {
-        startOnLoad: false,
-        securityLevel: "strict",
-        theme: "base",
-        themeVariables: {
-          darkMode: dark,
-          background: theme.background,
-          primaryColor: `color-mix(in srgb, ${p[4]} 25%, ${theme.background})`,
-          primaryTextColor: theme.foreground,
-          primaryBorderColor: p[4],
-          lineColor: theme.foreground,
-          secondaryColor: `color-mix(in srgb, ${p[5]} 25%, ${theme.background})`,
-          tertiaryColor: `color-mix(in srgb, ${p[6]} 20%, ${theme.background})`,
-          fontFamily: theme.font_family ? `"${theme.font_family}", monospace` : "monospace",
-        },
-      };
-    }
     if (theme?.font_family) root.style.setProperty("--mono", `"${theme.font_family}", ui-monospace, Menlo, monospace`);
     else root.style.removeProperty("--mono");
     if (theme?.font_size) root.style.setProperty("--mono-size", `${theme.font_size}px`);
     else root.style.removeProperty("--mono-size");
+    showTheme();
+  }
+
+  function showTheme() {
+    const root = document.documentElement;
+    root.dataset.theme = themeName === "auto" ? (darkMode() ? "dark" : "light") : themeName;
+    mermaidOptions = mermaidTheme();
     mermaid.initialize(mermaidOptions);
     rerender();
   }
 
-  function luminance(hex) {
-    const n = parseInt(String(hex).slice(1, 7), 16) || 0;
-    const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => v / 255);
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  // Diagrams take the theme's colors, so they never look like another app's.
+  function mermaidTheme() {
+    const token = (name) => getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim();
+    const [bg, fg, accent, annotate] = ["bg", "fg", "accent", "annotate"].map(token);
+    if (!bg) return mermaidDefaults();
+    return {
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: "base",
+      themeVariables: {
+        darkMode: getComputedStyle(document.documentElement).colorScheme === "dark",
+        background: bg,
+        primaryColor: mixHex(accent, bg, 0.16),
+        primaryTextColor: fg,
+        primaryBorderColor: accent,
+        lineColor: token("muted"),
+        secondaryColor: mixHex(annotate, bg, 0.16),
+        tertiaryColor: token("code-bg"),
+        fontFamily: token("font") || "sans-serif",
+      },
+    };
   }
 
-  // Font overrides stay as applyTheme left them; only diagram colors follow
-  // the system scheme.
+  // Mermaid parses only plain colors, not CSS color-mix(); theme tokens are
+  // #rrggbb, as tests/themes.js requires.
+  function mixHex(a, b, t) {
+    const parts = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    const [x, y] = [parts(a), parts(b)];
+    return "#" + x.map((v, i) => Math.round(v * t + y[i] * (1 - t)).toString(16).padStart(2, "0")).join("");
+  }
+
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    if (document.documentElement.dataset.theme) return;
-    mermaidOptions = mermaidDefaults();
-    mermaid.initialize(mermaidOptions);
-    rerender();
+    if (themeName === "auto") showTheme();
   });
 
   // ---------------------------------------------------------------- blocks

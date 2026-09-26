@@ -12,6 +12,8 @@ class Element {
     this.dataset = {};
     this.attributes = {};
     this.hidden = true;
+    const props = {};
+    this.style = { setProperty(k, v) { props[k] = v; }, removeProperty(k) { delete props[k]; }, get: k => props[k] };
     this.value = "";
     this.className = "";
     const classes = new Set();
@@ -62,9 +64,12 @@ async function main() {
   } });
   const messages = [];
   const schemeListeners = [];
+  let systemDark = false;
   let mermaidInits = 0;
+  let mermaidOptions = null;
+  let themeTokens = {};
   const window = Object.assign(new Element(), {
-    matchMedia: () => ({ matches: false, addEventListener(_, fn) { schemeListeners.push(fn); } }),
+    matchMedia: () => ({ get matches() { return systemDark; }, addEventListener(_, fn) { schemeListeners.push(fn); } }),
     markdownit: () => ({ use() { return this; }, render(source) { return source; } }),
     ipc: { postMessage: text => messages.push(JSON.parse(text)) },
     scrollTo() {},
@@ -72,9 +77,10 @@ async function main() {
   });
   element("no-documents").textContent = "This session has not written any Markdown yet. Its first document opens here.";
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../assets/app.js"), "utf8"), {
-    window, document, console, CSS: {}, TextEncoder, mermaid: { initialize() { mermaidInits += 1; } }, renderMathInElement() {},
+    window, document, console, CSS: {}, TextEncoder, mermaid: { initialize(options) { mermaidInits += 1; mermaidOptions = options; } }, renderMathInElement() {},
     localStorage: { getItem() { return null; }, setItem() {} },
     setInterval() {}, setTimeout() {}, clearTimeout() {}, requestAnimationFrame() {},
+    getComputedStyle: () => ({ getPropertyValue: k => themeTokens[k.slice(2)] ?? "", colorScheme: systemDark ? "dark" : "light" }),
   });
   let context = { generation: 0, session: null };
   const receive = message => {
@@ -440,11 +446,36 @@ async function main() {
   assert.equal(messages.length, beforeRender); // No action may use the previous render's block ranges.
   await new Promise(setImmediate);
 
-  // A system light/dark switch with system colors re-themes diagrams.
+  // Auto follows the system between the light and dark themes, and diagrams
+  // follow along; a pinned theme ignores the system.
+  const root = document.documentElement;
+  receive({ type: "theme", theme: { name: "auto", font_family: "My Mono", font_size: 14 } });
+  assert.equal(root.dataset.theme, "light");
+  assert.equal(root.style.get("--mono"), '"My Mono", ui-monospace, Menlo, monospace');
+  assert.equal(root.style.get("--mono-size"), "14px");
   const initsBefore = mermaidInits;
+  systemDark = true;
   for (const fn of schemeListeners) fn({ matches: true });
+  assert.equal(root.dataset.theme, "dark");
   assert.equal(mermaidInits, initsBefore + 1);
+  receive({ type: "theme", theme: { name: "light", font_family: null, font_size: null } });
+  assert.equal(root.dataset.theme, "light");
+  assert.equal(root.style.get("--mono"), undefined);
+  const pinnedInits = mermaidInits;
+  for (const fn of schemeListeners) fn({ matches: true });
+  assert.equal(root.dataset.theme, "light");
+  assert.equal(mermaidInits, pinnedInits);
+  systemDark = false;
+  // Diagrams get plain colors: Mermaid cannot parse CSS color-mix().
+  themeTokens = { bg: "#ffffff", fg: "#000000", accent: "#0000ff", annotate: "#ff0000", muted: "#555555", "code-bg": "#eeeeee" };
+  receive({ type: "theme", theme: { name: "light", font_family: null, font_size: null } });
+  assert.equal(mermaidOptions.theme, "base");
+  assert.equal(mermaidOptions.themeVariables.primaryColor, "#d6d6ff");
+  assert.equal(mermaidOptions.themeVariables.secondaryColor, "#ffd6d6");
+  for (const value of Object.values(mermaidOptions.themeVariables)) assert.doesNotMatch(String(value), /color-mix/);
+  themeTokens = {};
   console.log("Session isolation passed: drafts, delivery identity, acknowledgments, copied drafts, stale listings, rendering actions.");
+  console.log("Themes applied: auto follows the system, pinned themes stay, font overrides.");
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

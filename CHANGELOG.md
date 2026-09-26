@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Replace terminal color detection with built-in light and dark themes, in
+  Peekback's own palette. `theme = "auto"` follows the system; `"light"` and
+  `"dark"` pin a theme and the window's appearance. Terminal palettes failed
+  text contrast in most themes, and themes are now defined in one place so
+  more can be added. `theme = "system"` still works and means `auto`.
+- Give comments their own color instead of the warning banner's.
 - Keep comments with their session. A resume keeps them, opening another
   session parks them, and coming back restores them with a notice; they end
   with their session. Previously a resume left them in memory where they could

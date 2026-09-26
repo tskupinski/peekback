@@ -7,6 +7,7 @@ cargo test --workspace --locked
 cargo build --locked
 node --check assets/app.js
 node tests/picker.js
+node tests/themes.js
 bash -n hooks/register.sh scripts/*.sh
 python3 scripts/vendor-licenses.py --check
 python3 -m unittest discover -s tests -p 'test_*.py'
