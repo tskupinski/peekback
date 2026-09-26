@@ -48,6 +48,13 @@
     <ul id="picker-list" class="picker-list"></ul>
   </div>
 
+  <div id="review" class="review" hidden role="dialog" aria-label="Review before sending">
+    <div id="review-target" class="review-target"></div>
+    <div class="review-row"><span class="cmd-prefix">›</span><input id="review-intro" type="text" autocomplete="off" spellcheck="true" placeholder="Opening line (optional)"></div>
+    <pre id="review-preview" class="review-preview"></pre>
+    <div class="review-hint">Enter sends · Esc closes · ↑ ↓ scroll</div>
+  </div>
+
   <div id="help" class="help" hidden>
     <h3>Keys</h3>
     <table>
@@ -65,8 +72,8 @@
       <tr><td>y / s</td><td>copy / send the block or selection as Markdown; s also sends the comments inside it</td></tr>
       <tr><td>c</td><td>comment on the block or selection: Enter saves, Shift-Enter adds a line, Esc cancels</td></tr>
       <tr><td>C</td><td>edit the comment on the cursor's block</td></tr>
-      <tr><td>Space c</td><td>pending comments (Enter jumps, Ctrl-E edits, Ctrl-D removes)</td></tr>
-      <tr><td>S / :sendall</td><td>send all pending comments as one prompt</td></tr>
+      <tr><td>Space c</td><td>pending comments (Enter jumps, Ctrl-E edits, Ctrl-S sends one, Ctrl-D removes)</td></tr>
+      <tr><td>S / :sendall</td><td>review all pending comments, then Enter sends them as one prompt</td></tr>
       <tr><td>/</td><td>search, then n / N</td></tr>
       <tr><td>:</td><td>command line: :doc, :send, :copy, :c note, :sendall, :comments, :sidebar, :q, :help</td></tr>
       <tr><td>Tab</td><td>toggle the sidebar</td></tr>

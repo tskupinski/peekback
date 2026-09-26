@@ -176,11 +176,11 @@ pane and press the hotkey, or run `peekback show --session ID`.
 | `s` | send the block or selection to the prompt as a blockquote, with the comments inside it |
 | `c` | comment on the block or selection: a note box opens under it; `Enter` saves, `Shift-Enter` adds a line, `Esc` cancels |
 | `C` | edit the comment on the cursor's block |
-| `S` | send all pending comments as one prompt |
+| `S` | review all pending comments, then `Enter` sends them as one prompt |
 | `/` | search, then `n` / `N` |
 | `Space d` or `Ctrl-P` | document picker |
 | `Tab` / `Shift-Tab` in document picker | cycle Current session, Scratchpad, and Bookmarks |
-| `Space c` | pending comments (`Enter` jumps, `Ctrl-E` edits, `Ctrl-D` removes) |
+| `Space c` | pending comments (`Enter` jumps, `Ctrl-E` edits, `Ctrl-S` sends one, `Ctrl-D` removes) |
 | `:` | command line: `:doc`, `:send`, `:c note`, `:sendall`, `:sidebar`, `:q`, `:help` |
 | `Tab` | toggle the sidebar |
 | `?` | key overlay |
@@ -193,7 +193,14 @@ Each pending comment is a bar in the left margin beside the blocks it covers;
 overlapping comments sit side by side, and adding one never moves the text.
 `]c` and `[c` step through them and show each note in the status line, the
 status line shows how many are pending with `S` to send them, and `Space c`
-lists them all. Hovering a bar also shows its note. Bars disappear when
+lists them all. Hovering a bar also shows its note.
+
+`S` opens a review sheet showing the session it will send to and exactly
+what will be pasted, starting with an opening line you can edit ("Address
+these review comments." until you change it; clear it to send none).
+`Enter` sends, `Esc` closes without sending, and the arrow keys scroll the
+preview. `Ctrl-S` in the comments picker sends just the chosen comment the
+same way. `s` on a selection sends right away. Bars disappear when
 comments are removed or successfully sent. Sending a selection (`s`) also sends the comments inside it. Everything
 sent says where it is in the file, as `notes/plan.md#L12-18`, so the agent
 finds the text without searching, even after editing the file.

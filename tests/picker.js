@@ -188,8 +188,16 @@ async function main() {
   };
   const source = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
   const render = async (path = "/comments.md", text = source) => {
-    receive({ type: "render", path, source: text, documents: [] });
+    receive({ type: "render", path, source: text, session: { session_id: "reviewer" }, documents: [] });
     await new Promise(setImmediate);
+  };
+  // S opens the review sheet; Enter in it sends. An empty opening line keeps
+  // these tests' prompts to the comments themselves.
+  const sendAll = () => {
+    command("sendall");
+    element("review-intro").value = "";
+    element("review-intro").dispatch("input");
+    element("review-intro").dispatch("keydown", { key: "Enter" });
   };
   const marked = () => element("doc").children.filter(el => el.classList.contains("commented"));
   await render();
@@ -211,16 +219,16 @@ async function main() {
   assert.equal(marked()[0].attributes.title, "Another note");
   assert.equal(element("comments").children[0].children[1].hidden, false);
   assert.match(element("comments").children[0].children[1].textContent, /text changed or removed/);
-  command("sendall");
+  sendAll();
   assert.match(messages.at(-1).text, /Review both paragraphs/);
   assert.match(messages.at(-1).text, /\(This text has since changed or been removed\.\)\nReview both paragraphs/);
   receive({ type: "send-result", purpose: "comments", ok: false, text: "failed" });
   await render();
   assert.equal(element("comments").children[0].children[1].hidden, true);
-  command("sendall");
+  sendAll();
   receive({ type: "send-result", purpose: "comments", ok: false, text: "failed" });
   assert.equal(marked().length, 2);
-  command("sendall");
+  sendAll();
   command("c Added while sending");
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
   assert.equal(marked().length, 1); // Only the acknowledged batch disappears.
@@ -260,10 +268,64 @@ async function main() {
   assert.equal(composer.value, "Reworded");
   composer.dispatch("keydown", { key: "Escape" });
   // What the agent gets: where each quote is, as a line reference.
-  command("sendall");
+  sendAll();
   assert.match(messages.at(-1).text, /Comments on `\/comments\.md`:\n\n`\/comments\.md#L3`\n> Second paragraph\.\nReworded$/);
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
   assert.equal(element("comments").children.length, 0);
+
+  // Send all reviews first: the sheet shows the target and exactly what will
+  // be pasted, with an opening line you can change.
+  command("c Review this");
+  const intro = element("review-intro");
+  const beforeReview = messages.length;
+  key("S");
+  assert.equal(element("mode").textContent, "REVIEW");
+  assert.equal(element("review").hidden, false);
+  assert.equal(element("review-target").textContent, "Send 1 comment to / · Claude Code");
+  assert.equal(intro.value, "");  // The line last sent with; these tests sent without one.
+  intro.value = "Address these review comments.";
+  intro.dispatch("input");
+  assert.match(element("review-preview").textContent, /^Address these review comments\.\n\nComments on `\/comments\.md`:\n\n`\/comments\.md#L1`\n> First paragraph\.\nReview this$/);
+  intro.dispatch("keydown", { key: "ArrowDown" }); // Scrolls the preview, nothing else.
+  intro.dispatch("keydown", { key: "Escape" });
+  assert.equal(element("review").hidden, true);
+  assert.equal(messages.length, beforeReview); // Closing sends nothing.
+  key("S");
+  intro.value = "Please fix:";
+  intro.dispatch("input");
+  intro.dispatch("keydown", { key: "Enter" });
+  assert.match(messages.at(-1).text, /^Please fix:\n\nComments on/);
+  receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
+  assert.equal(element("comments").children.length, 0);
+  // Ctrl-S in the comments picker sends just the chosen one, through the sheet.
+  command("c Keep"); key("j"); command("c Send only this");
+  key(" "); key("c");
+  input.value = "only this";
+  input.dispatch("input");
+  input.dispatch("keydown", { key: "s", ctrlKey: true });
+  assert.equal(element("review-target").textContent, "Send 1 comment to / · Claude Code");
+  assert.equal(intro.value, "Please fix:"); // Remembered.
+  assert.doesNotMatch(element("review-preview").textContent, /Keep/);
+  intro.dispatch("keydown", { key: "Enter" });
+  receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
+  assert.deepEqual(element("comments").children.map(li => li.children[2].textContent), ["Keep"]);
+  element("comments").children[0].children[3].dispatch("click");
+  intro.value = "";
+  key("S");
+  assert.match(element("status-msg").textContent, /no pending comments for this session/);
+  assert.equal(element("review").hidden, true);
+  // Without a session there is nowhere to send: the sheet says so and Enter does nothing.
+  receive({ type: "render", path: "/standalone.md", source, documents: [] });
+  await new Promise(setImmediate);
+  command("c Standalone note");
+  const beforeStandalone = messages.length;
+  key("S");
+  assert.match(element("review-target").textContent, /No session to send to/);
+  intro.dispatch("keydown", { key: "Enter" });
+  assert.equal(messages.length, beforeStandalone);
+  intro.dispatch("keydown", { key: "Escape" });
+  element("comments").children[0].children[3].dispatch("click");
+  await render();
 
   // One bar per comment beside its blocks: a range is one mark, not three, and
   // overlapping comments sit in lanes side by side.
@@ -283,7 +345,7 @@ async function main() {
   assert.match(element("status-msg").textContent, /^comment 1 of 2: Whole section$/); // Wraps around.
   key("["); key("c");
   assert.match(element("status-msg").textContent, /^comment 2 of 2/);
-  command("sendall");
+  sendAll();
   receive({ type: "send-result", purpose: "comments", ok: true, text: "sent" });
   assert.equal(bars().length, 0);
   assert.equal(element("status-pending").hidden, true);
@@ -330,10 +392,10 @@ async function main() {
   await render("/huge.md", huge);
   command("c Too much");
   const beforeHuge = messages.length;
-  command("sendall");
+  sendAll();
   assert.equal(messages.length, beforeHuge);
   assert.match(element("toast").textContent, /Too large to send/);
-  command("sendall");
+  sendAll();
   assert.match(element("toast").textContent, /Too large to send/); // Not "still sending".
   element("comments").children[0].children[3].dispatch("click");
   await render();
@@ -432,7 +494,7 @@ async function main() {
   // Every question is answered in turn, and only an answer ends one: a
   // reload does not hide "Pasted it?".
   command("c Fix A once");
-  command("sendall");
+  sendAll();
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
   receive({ type: "render", path: "/a/README.md", file_identity: "/a/README.md", source: "Project A, edited",
     session: { session_id: "a", cwd: "/a" }, documents: [] });
@@ -443,13 +505,13 @@ async function main() {
   assert.equal(element("mode").textContent, "CONFIRM"); // Other keys do nothing.
   key("Escape"); // Escape keeps them.
   assert.equal(element("comments").children.length, 1);
-  command("sendall");
+  sendAll();
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
   key("y");
   assert.equal(element("comments").children.length, 0);
   // A question arriving while a note is being written waits for it.
   command("c Fix A again");
-  command("sendall");
+  sendAll();
   key("c");
   element("composer-input").value = "Written while asked";
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
@@ -463,11 +525,13 @@ async function main() {
   // The sidebar's Send all button sends like S does.
   command("c From the button");
   element("send-all").dispatch("click");
+  assert.equal(element("mode").textContent, "REVIEW"); // The button reviews too.
+  element("review-intro").dispatch("keydown", { key: "Enter" });
   assert.equal(messages.at(-1).type, "send");
   assert.match(messages.at(-1).text, /From the button/);
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
   assert.equal(element("comments").children.length, 0);
-  await project("b", "Project B"); command("c Fix B"); command("sendall");
+  await project("b", "Project B"); command("c Fix B"); sendAll();
   const bSend = messages.at(-1);
   assert.equal(bSend.type, "send");
   assert.equal(bSend.context.session.key.session_id, "b");
@@ -483,10 +547,10 @@ async function main() {
   assert.equal(element("comments").children.length, 1); // Clipboard fallback keeps the draft until answered.
   key("y");
   assert.equal(element("comments").children.length, 0); // So it cannot go out twice.
-  await project("b", "Project B"); command("c Fix B again"); command("sendall");
+  await project("b", "Project B"); command("c Fix B again"); sendAll();
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
   assert.equal(element("comments").children.length, 0);
-  await project("a", "Project A"); command("c Fix A"); command("sendall");
+  await project("a", "Project A"); command("c Fix A"); sendAll();
   assert.match(messages.at(-1).text, /Fix A/);
   assert.doesNotMatch(messages.at(-1).text, /Fix B/);
   receive({ type: "send-result", purpose: "comments", ok: false, text: "failed" });

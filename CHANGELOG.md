@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Review before sending: `S` opens a sheet with the target session, an
+  editable opening line, and exactly what will be pasted; `Enter` sends and
+  `Esc` closes. `Ctrl-S` in the comments picker sends a single comment.
 - Mark each comment with one bar in the left margin beside its blocks, instead
   of a badge under every block and a tinted background. A range comment no
   longer looks like several, and adding one no longer moves the text.

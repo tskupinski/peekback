@@ -501,7 +501,7 @@
   // or discarded, their session ends, or the daemon stops. Moving to another
   // session parks them.
   let nextCommentId = 1;
-  let commentsInFlight = null; // { request_id, ids, after } for a send that has not reported back
+  let commentsInFlight = null; // { request_id, ids } for a send that has not reported back
   // Tells the agent a quote is no longer in the file, so it is not read as a
   // request to restore it.
   const CHANGED_NOTE = "(This text has since changed or been removed.)";
@@ -640,7 +640,7 @@
       note: note.trim(),
     });
     renderComments();
-    setMessage(`${activeComments().length} pending comment${activeComments().length === 1 ? "" : "s"}`);
+    setMessage("comment added"); // The status line already counts them.
   }
 
   function removeComment(id) {
@@ -682,31 +682,87 @@
     return `\`${promptPathFor(path)}#L${first}${endLine > first ? `-${endLine}` : ""}\``;
   }
 
-  function sendAllComments(after) {
-    const comments = activeComments();
-    if (state.confirm) return after?.kept();
-    if (rendering) {
-      setMessage("still rendering; try again");
-      return after?.kept();
-    }
-    // With nothing left unsent there is nothing to keep the viewer here for.
-    if (comments.length === 0) {
-      after?.sent();
-      return setMessage("no pending comments for this session");
-    }
-    sendComments(comments, "", after);
+  // Send all reviews first: the sheet shows exactly what will be pasted.
+  function sendAllComments() {
+    if (state.confirm) return;
+    openReview(activeComments());
   }
 
-  // `after` hears whether the comments went out (sent) or stayed (kept).
-  function sendComments(comments, prefix, after) {
-    if (commentsInFlight) {
-      after?.kept();
-      return setMessage("still sending the previous batch");
-    }
+  function sendComments(comments, prefix) {
+    if (commentsInFlight) return setMessage("still sending the previous batch");
     const request_id = post({ type: "send", text: prefix + commentsPrompt(comments), purpose: "comments" });
-    if (request_id === null) return after?.kept();
-    commentsInFlight = { request_id, ids: comments.map((c) => c.id), after };
+    if (request_id !== null) commentsInFlight = { request_id, ids: comments.map((c) => c.id) };
   }
+
+  // -------------------------------------------------------- review sheet
+
+  const reviewEl = $("review");
+  const reviewTarget = $("review-target");
+  const reviewIntroInput = $("review-intro");
+  const reviewPreview = $("review-preview");
+  let reviewing = null; // the comments the sheet would send
+  // The opening line you last sent with, kept while the daemon runs.
+  let reviewIntro = "Address these review comments.";
+
+  function openReview(comments) {
+    if (comments.length === 0) return setMessage("no pending comments for this session");
+    closePicker();
+    closeCmdline();
+    reviewing = comments;
+    const n = comments.length;
+    const session = state.doc?.session;
+    reviewTarget.textContent = session
+      ? `Send ${n} comment${n === 1 ? "" : "s"} to ${sessionName(session)}`
+      : "No session to send to: this document is not part of one";
+    reviewIntroInput.value = reviewIntro;
+    showReviewText();
+    reviewEl.hidden = false;
+    setMode("review");
+    reviewIntroInput.focus();
+  }
+
+  function reviewPrefix() {
+    const intro = reviewIntroInput.value.trim();
+    return intro ? `${intro}\n\n` : "";
+  }
+
+  function showReviewText() {
+    if (reviewing) reviewPreview.textContent = reviewPrefix() + commentsPrompt(reviewing);
+  }
+
+  function closeReview() {
+    if (reviewEl.hidden) return;
+    reviewEl.hidden = true;
+    reviewing = null;
+    reviewIntroInput.blur();
+    setMode("normal");
+    showQuestionLater();
+  }
+
+  function sendReview() {
+    if (!state.doc?.session) return;
+    const comments = reviewing;
+    const prefix = reviewPrefix();
+    reviewIntro = reviewIntroInput.value.trim();
+    closeReview();
+    sendComments(comments, prefix);
+  }
+
+  reviewIntroInput.addEventListener("input", showReviewText);
+  reviewIntroInput.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.isComposing) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeReview();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      sendReview();
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      reviewPreview.scrollTop += event.key === "ArrowDown" ? 48 : -48;
+    }
+  });
 
   // Parked comments go with their session when it ends; the one on screen
   // stays, since its documents remain readable.
@@ -724,21 +780,18 @@
   function onSendResult(message) {
     toast(message.text);
     if (message.purpose !== "comments" || message.request_id !== commentsInFlight?.request_id) return;
-    const { ids, after } = commentsInFlight;
+    const { ids } = commentsInFlight;
     commentsInFlight = null;
     if (message.ok && message.outcome === "pasted") {
       markSent(ids);
-      after?.sent();
     } else if (message.ok && message.outcome === "copied") {
       // Only you know whether it reached the prompt; keeping them unasked
       // would send them again next time.
       const n = ids.length;
       ask(`Copied ${n} comment${n === 1 ? "" : "s"} to the clipboard. Pasted ${n === 1 ? "it" : "them"}? y marks sent · n keeps`, {
-        y: () => { markSent(ids); after?.sent(); },
-        n: () => after?.kept(),
+        y: () => markSent(ids),
+        n: () => {},
       });
-    } else {
-      after?.kept();
     }
   }
 
@@ -762,7 +815,7 @@
 
   function showQuestion() {
     if (state.confirm || state.questions.length === 0) return;
-    if (["command", "search", "comment", "picker"].includes(state.mode)) return;
+    if (["command", "search", "comment", "picker", "review"].includes(state.mode)) return;
     state.confirm = state.questions.shift();
     setMode("confirm");
     const { text } = state.confirm;
@@ -821,6 +874,7 @@
         return li;
       })
     );
+    showReviewText();
     sendAllButton.hidden = activeComments().length === 0;
     sendAllButton.textContent = `Send all (${activeComments().length})`;
     renderStatus();
@@ -1259,7 +1313,7 @@
     if (kind === "documents" && picker.scope !== "bookmarks" && !state.doc?.sessionId) picker.scope = "bookmarks";
     if (kind === "documents") refreshScope();
     pickerInput.value = "";
-    pickerInput.placeholder = { documents: "open document", comments: "pending comments, Ctrl-E edits, Ctrl-D removes" }[kind];
+    pickerInput.placeholder = { documents: "open document", comments: "pending comments, Ctrl-E edits, Ctrl-S sends one, Ctrl-D removes" }[kind];
     pickerEl.hidden = false;
     setMode("picker");
     updatePickerItems();
@@ -1373,6 +1427,12 @@
     } else if (event.key === "ArrowUp" || (ctrl && (event.key === "p" || event.key === "k"))) {
       event.preventDefault();
       movePicker(-1);
+    } else if (ctrl && event.key === "s" && picker.kind === "comments") {
+      event.preventDefault();
+      const chosen = picker.filtered[picker.index];
+      const comment = chosen && activeComments().find((c) => c.id === chosen.id);
+      closePicker();
+      if (comment) openReview([comment]);
     } else if (ctrl && event.key === "e" && picker.kind === "comments") {
       event.preventDefault();
       const chosen = picker.filtered[picker.index];
@@ -1432,7 +1492,7 @@
     if (rendering && event.key !== "Escape") return;
     // A click elsewhere took focus from the note; the next key brings it back.
     if (state.mode === "comment" && !composerEl.hidden) return composerInput.focus();
-    if (["command", "search", "picker", "comment"].includes(state.mode)) return;
+    if (["command", "search", "picker", "comment", "review"].includes(state.mode)) return;
     if (modifierKeys.has(event.key)) return;
     if (event.ctrlKey && !event.metaKey && !event.altKey) {
       const ctrl = { p: () => openPicker("documents"), d: () => halfPage(1), u: () => halfPage(-1), f: () => fullPage(1), b: () => fullPage(-1) }[event.key];

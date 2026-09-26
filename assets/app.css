@@ -344,6 +344,41 @@ body.no-sidebar .statusline, body.no-sidebar .cmdline { left: 0; }
   overflow: hidden;
 }
 .picker[hidden] { display: none; }
+
+/* ---- review sheet: what Send all will paste ---- */
+
+.review {
+  position: fixed;
+  top: 8%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, 92%);
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  z-index: 9;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--sidebar-bg);
+  box-shadow: 0 16px 48px var(--shadow);
+  overflow: hidden;
+}
+.review[hidden] { display: none; }
+.review-target { padding: 10px 14px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 13px; }
+.review-row { display: flex; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: var(--mono-size, 13px); }
+.review-row input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--fg); font: inherit; }
+.review-preview {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 12px 14px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: var(--mono-size, 12.5px)/1.5 var(--mono);
+  color: var(--fg);
+  background: var(--bg);
+}
+.review-hint { padding: 6px 14px; border-top: 1px solid var(--border); font: 11px/1.4 var(--mono); color: var(--muted); }
 .picker-scope { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
 .picker-scope[hidden], .picker-note[hidden] { display: none; }
 .picker-scope button { font: inherit; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; cursor: pointer; }

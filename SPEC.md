@@ -463,7 +463,14 @@ request to restore it. A later reload that brings the text back clears the
 mark. Only the document on screen is checked: a comment on another document
 of the session keeps the state it had when that document was last shown.
 
-Send all sends the session's comments as one prompt grouped by canonical file
+Send all opens a review sheet first: the target session, an editable opening
+line, and a read-only preview of the exact text to paste, updated as the line
+or the comments change. `Enter` sends, `Esc` closes, the arrow keys scroll the
+preview. The opening line defaults to "Address these review comments.", is
+remembered while the daemon runs, and is left out when empty. Without a
+session the sheet says there is nowhere to send and sends nothing. `Ctrl-S` in
+the comments picker reviews and sends one comment; `s` on a selection sends
+at once. The sent text groups the session's comments by canonical file
 path, with labels relative to the delivery target. Each comment starts with
 a `path#L<start>-<end>` reference to its source lines, 1-based, before its
 quote; a comment whose text changed or was removed has none, since its lines
