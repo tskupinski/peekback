@@ -23,10 +23,10 @@
   text contrast in most themes, and themes are now defined in one place so
   more can be added. `theme = "system"` still works and means `auto`.
 - Give comments their own color instead of the warning banner's.
-- Keep comments with their session. A resume keeps them, opening another
-  session parks them, and coming back restores them with a notice; they end
-  with their session. Previously a resume left them in memory where they could
-  never be shown or sent again.
+- Keep comments with their session. A resume keeps them, even after the
+  agent exited while you were elsewhere, opening another session parks them,
+  and coming back restores them with a notice. Previously a resume left them
+  in memory where they could never be shown or sent again.
 - Follow commented text that moves, and mark comments whose text changed or
   was removed, saying so in what is sent. Previously such markers vanished.
 - Ask after a clipboard fallback whether the comments were pasted, so they are

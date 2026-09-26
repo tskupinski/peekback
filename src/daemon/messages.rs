@@ -3,7 +3,7 @@ use crate::{
     bookmarks,
     discovery::Document,
     protocol::{Request, Response},
-    registry::{Session, SessionKey},
+    registry::Session,
     send,
     theme::Theme,
 };
@@ -135,23 +135,4 @@ pub enum DaemonMessage<'a> {
         purpose: Option<&'a str>,
         text: &'a str,
     },
-    /// Comments waiting for a session that is no longer here are done with.
-    LiveSessions {
-        sessions: &'a [SessionKey],
-    },
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn live_sessions_name_the_keys_comments_belong_to() {
-        let keys = [crate::harness::Harness::Codex.key("s1".to_owned())];
-        let message = serde_json::to_value(DaemonMessage::LiveSessions { sessions: &keys }).unwrap();
-        assert_eq!(
-            message,
-            serde_json::json!({"type": "live-sessions", "sessions": [{"agent": "codex", "session_id": "s1"}]})
-        );
-    }
 }

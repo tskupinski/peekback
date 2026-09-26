@@ -400,13 +400,32 @@ async function main() {
   element("comments").children[0].children[3].dispatch("click");
   await render();
 
+  // Leaving the document saves the note with it; the box does not follow.
   key("g"); key("g"); key("c");
-  await render("/other.md");
   element("composer-input").value = "Keep the original target";
-  element("composer-input").dispatch("keydown", { key: "Enter" });
+  await render("/other.md");
+  assert.equal(element("composer").hidden, true);
+  assert.match(element("toast").textContent, /note saved with its document/);
   assert.equal(marked().length, 0);
   await render();
   assert.equal(marked()[0].attributes.title, "Keep the original target");
+  key("g"); key("g"); key("c"); // An empty note is just closed.
+  await render("/other.md");
+  assert.equal(element("composer").hidden, true);
+  await render();
+  assert.equal(element("comments").children.length, 1);
+  // A reload while writing a note on a range keeps the note open and on its
+  // text, and no question interrupts it.
+  element("comments").children[0].children[3].dispatch("click");
+  key("g"); key("g"); key("v"); key("j"); key("c");
+  element("composer-input").value = "Written during a reload";
+  await render("/comments.md", "Inserted.\n\n" + source);
+  assert.equal(element("mode").textContent, "COMMENT");
+  assert.equal(element("composer").hidden, false);
+  element("composer-input").dispatch("keydown", { key: "Enter" });
+  assert.deepEqual(marked().map(b => b.dataset.sourceLine), ["2", "4"]); // Followed its text.
+  element("comments").children.forEach(() => element("comments").children[0].children[3].dispatch("click"));
+  await render();
   console.log("Comments passed: ranges, overlapping notes, document switches, stale anchors, removal, send lifecycle, captured targets.");
 
   const anchor = (attributes, xlink = {}) => ({
@@ -482,13 +501,13 @@ async function main() {
   assert.match(element("toast").textContent, /1 unsent comment restored/);
   await project("a", "Project A, reloaded");
   assert.doesNotMatch(element("toast").textContent, /Project A, reloaded/); // A reload restores nothing.
-  // A parked session's comments end with it; the one on screen keeps its own.
+  // Parked comments wait however long it takes, through the session's agent
+  // exiting and being resumed: coming back in a new incarnation finds them.
   await project("b", "Project B");
-  receive({ type: "live-sessions", sessions: [{ agent: "claude", session_id: "b" }] });
-  await project("a", "Project A");
-  assert.equal(element("comments").children.length, 0);
-  command("c Fix A");
-  receive({ type: "live-sessions", sessions: [] });
+  receive({ type: "render", path: "/a/README.md", file_identity: "/a/README.md", source: "Project A",
+    session: { session_id: "a", cwd: "/a" }, documents: [],
+    context: { generation: 120, session: { ...aContext.session, incarnation: "resumed later" } } });
+  await new Promise(setImmediate);
   assert.equal(element("comments").children.length, 1);
   element("comments").children[0].children[3].dispatch("click");
   // Every question is answered in turn, and only an answer ends one: a
@@ -500,7 +519,7 @@ async function main() {
     session: { session_id: "a", cwd: "/a" }, documents: [] });
   await new Promise(setImmediate);
   assert.equal(element("mode").textContent, "CONFIRM");
-  assert.match(element("status-msg").textContent, /Pasted it\?/);
+  assert.match(element("status-msg").textContent, /Copied 1 comment\. Pasted\? y marks sent · n keeps/);
   key("j");
   assert.equal(element("mode").textContent, "CONFIRM"); // Other keys do nothing.
   key("Escape"); // Escape keeps them.
@@ -519,9 +538,32 @@ async function main() {
   element("composer-input").dispatch("keydown", { key: "Enter" });
   await new Promise(setImmediate);
   assert.equal(element("mode").textContent, "CONFIRM");
+  assert.match(element("status-msg").textContent, /Pasted\?/); // Saving the note did not replace it.
   key("y");
   assert.deepEqual(element("comments").children.map(li => li.children[2].textContent), ["Written while asked"]);
-  element("comments").children[0].children[3].dispatch("click");
+  // While "Pasted?" waits behind an open input, nothing more can be sent:
+  // those comments may already be in the prompt.
+  command("sendall"); // The sheet is open when the copied result arrives...
+  element("review-intro").dispatch("keydown", { key: "Enter" });
+  command("sendall");
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
+  assert.equal(element("mode").textContent, "REVIEW"); // ...so the question waits.
+  const beforeBlocked = messages.length;
+  element("review-intro").dispatch("keydown", { key: "Enter" });
+  assert.equal(messages.length, beforeBlocked); // Not sent a second time.
+  await new Promise(setImmediate);
+  assert.equal(element("mode").textContent, "CONFIRM");
+  key("y");
+  assert.equal(element("comments").children.length, 0);
+  // A comment removed while the sheet is open is not sent.
+  command("c Stays"); key("j"); command("c Removed while reviewing");
+  command("sendall");
+  element("comments").children[1].children[3].dispatch("click");
+  assert.doesNotMatch(element("review-preview").textContent, /Removed while reviewing/);
+  element("review-intro").dispatch("keydown", { key: "Enter" });
+  assert.doesNotMatch(messages.at(-1).text, /Removed while reviewing/);
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
+  assert.equal(element("comments").children.length, 0);
   // The sidebar's Send all button sends like S does.
   command("c From the button");
   element("send-all").dispatch("click");

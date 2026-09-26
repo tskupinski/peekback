@@ -45,9 +45,9 @@
     count: "",
     search: { query: "", matches: [], index: -1 },
     comments: [], // { id, path, label, quote, note, line, endLine, anchorSource, anchorCount, anchorIndex, changed }
-    confirm: null, // the question being asked: { text, choices }
-    questions: [], // questions waiting their turn
-    pendingAnswer: null, // a key answering the question while blocks render
+    question: null, // { text, yes, no, shown }: the one question, about a clipboard send
+    pendingJump: null, // { fileIdentity, line }: where to go once that document renders
+    pendingEdit: null, // a comment id to edit once its document renders
     pendingJump: null, // { path, line } to apply once that document renders
   };
 
@@ -124,6 +124,8 @@
       documents: message.documents,
       label: labelFor(message.path, message.documents),
     };
+    // A note being written belongs to the document it was started on.
+    if (composing && (composing.target ?? composing.editing).fileIdentity !== state.doc.fileIdentity) settleComposer();
     // Another session's comments wait for it; coming back finds them.
     const restored = previousOwner !== commentOwner() ? activeComments().length : 0;
     previousOwner = commentOwner();
@@ -170,27 +172,23 @@
 
     collectBlocks();
     rendering = false;
+    // The note being written follows its text like a saved comment does.
+    if (composing?.target?.anchorSource) locate(composing.target, message.source.split("\n"));
     renderComments();
     placeComposer();
-    if (state.pendingEdit) {
-      const comment = activeComments().find((c) => c.id === state.pendingEdit);
-      if (comment?.fileIdentity === state.doc.fileIdentity) {
-        state.pendingEdit = null;
-        Promise.resolve().then(() => openComposer({ editing: comment }));
-      }
-    }
-    if (state.pendingAnswer && state.confirm) {
-      const key = state.pendingAnswer;
-      state.pendingAnswer = null;
-      Promise.resolve().then(() => answer(key));
-    }
-    if (sourceChanged && state.anchor !== null) setMode("normal");
-    if (state.pendingJump?.path === message.path) {
+    // A jump or edit waiting for a document applies when that one renders;
+    // any other render means it went elsewhere.
+    const pendingEdit = state.pendingEdit && activeComments().find((c) => c.id === state.pendingEdit);
+    state.pendingEdit = null;
+    if (pendingEdit?.fileIdentity === state.doc.fileIdentity) Promise.resolve().then(() => openComposer({ editing: pendingEdit }));
+    // A changed selection cannot stay; a note being written on it stays open.
+    if (sourceChanged && state.mode === "visual") setMode("normal");
+    if (state.pendingJump?.fileIdentity === state.doc.fileIdentity) {
       state.cursor = nearestBlock(state.pendingJump.line);
-      state.pendingJump = null;
     } else {
       state.cursor = previousLine === undefined ? 0 : nearestBlock(Number(previousLine));
     }
+    state.pendingJump = null;
     if (state.search.query) runSearch(state.search.query, { keepIndex: true });
     paintCursor(false);
     renderDocuments();
@@ -406,7 +404,7 @@
 
   function setMode(mode) {
     // Only an answer ends a question; a reload or a click must not hide it.
-    if (state.confirm && mode !== "confirm") {
+    if (state.question?.shown && mode !== "confirm") {
       if (mode === "normal") state.anchor = null;
       paintCursor(false);
       return;
@@ -422,7 +420,9 @@
     if (state.anchor !== null) setMode("normal");
   }
 
+  // While a question is shown, it owns the status message.
   function setMessage(text) {
+    if (state.question?.shown) return;
     statusMsgEl.textContent = text;
   }
 
@@ -464,7 +464,7 @@
   // --------------------------------------------------------------- actions
 
   function switchTo(sessionId, path) {
-    if (state.confirm) return;
+    if (state.question?.shown) return;
     post({ type: "switch", session_id: sessionId, path });
   }
 
@@ -484,10 +484,10 @@
   }
 
   function perform(action, text, line, endLine) {
-    if (rendering || state.confirm || !text) return;
+    if (rendering || state.question?.shown || !text) return;
     if (action === "copy") post({ type: "copy", text });
     if (action === "send") {
-      const quoted = [lineRef(state.doc?.path, line, endLine), blockquote(text)].filter(Boolean).join("\n");
+      const quoted = [lineRef(state.doc?.fileIdentity, line, endLine), blockquote(text)].filter(Boolean).join("\n");
       const attached = commentsWithin(line, endLine);
       if (attached.length) sendComments(attached, `${quoted}\n\n`);
       else post({ type: "send", text: quoted, purpose: "selection" });
@@ -551,6 +551,18 @@
     leaveVisual();
     setMode("normal");
     showQuestionLater();
+  }
+
+  // Leaving the note's document saves what was written, with its own
+  // document and session, rather than carrying the box to another document.
+  function settleComposer() {
+    const what = composing;
+    const note = composerInput.value.trim();
+    closeComposer();
+    if (!note) return;
+    if (what.editing) what.editing.note = note;
+    else state.comments.push({ ...what.target, id: nextCommentId++, note });
+    toast("note saved with its document");
   }
 
   function saveComposer() {
@@ -684,11 +696,13 @@
 
   // Send all reviews first: the sheet shows exactly what will be pasted.
   function sendAllComments() {
-    if (state.confirm) return;
     openReview(activeComments());
   }
 
+  // Until "Pasted them?" is answered, those comments may already be in the
+  // prompt; sending again could paste them twice.
   function sendComments(comments, prefix) {
+    if (state.question) return setMessage("answer whether the last comments were pasted first");
     if (commentsInFlight) return setMessage("still sending the previous batch");
     const request_id = post({ type: "send", text: prefix + commentsPrompt(comments), purpose: "comments" });
     if (request_id !== null) commentsInFlight = { request_id, ids: comments.map((c) => c.id) };
@@ -700,25 +714,27 @@
   const reviewTarget = $("review-target");
   const reviewIntroInput = $("review-intro");
   const reviewPreview = $("review-preview");
-  let reviewing = null; // the comments the sheet would send
+  let reviewing = null; // ids of the comments the sheet would send
   // The opening line you last sent with, kept while the daemon runs.
   let reviewIntro = "Address these review comments.";
 
   function openReview(comments) {
     if (comments.length === 0) return setMessage("no pending comments for this session");
+    if (state.question) return setMessage("answer whether the last comments were pasted first");
     closePicker();
     closeCmdline();
-    reviewing = comments;
-    const n = comments.length;
-    const session = state.doc?.session;
-    reviewTarget.textContent = session
-      ? `Send ${n} comment${n === 1 ? "" : "s"} to ${sessionName(session)}`
-      : "No session to send to: this document is not part of one";
+    reviewing = new Set(comments.map((c) => c.id));
     reviewIntroInput.value = reviewIntro;
-    showReviewText();
     reviewEl.hidden = false;
     setMode("review");
+    showReviewText();
     reviewIntroInput.focus();
+  }
+
+  // The comments under review as they are now: one removed or edited while
+  // the sheet is open is not sent as it was.
+  function reviewedComments() {
+    return reviewing ? activeComments().filter((c) => reviewing.has(c.id)) : [];
   }
 
   function reviewPrefix() {
@@ -727,7 +743,18 @@
   }
 
   function showReviewText() {
-    if (reviewing) reviewPreview.textContent = reviewPrefix() + commentsPrompt(reviewing);
+    if (!reviewing) return;
+    const comments = reviewedComments();
+    if (comments.length === 0) {
+      closeReview();
+      return setMessage("nothing left to send");
+    }
+    const n = comments.length;
+    const session = state.doc?.session;
+    reviewTarget.textContent = session
+      ? `Send ${n} comment${n === 1 ? "" : "s"} to ${sessionName(session)}`
+      : "No session to send to: this document is not part of one";
+    reviewPreview.textContent = reviewPrefix() + commentsPrompt(comments);
   }
 
   function closeReview() {
@@ -741,7 +768,7 @@
 
   function sendReview() {
     if (!state.doc?.session) return;
-    const comments = reviewing;
+    const comments = reviewedComments();
     const prefix = reviewPrefix();
     reviewIntro = reviewIntroInput.value.trim();
     closeReview();
@@ -764,13 +791,6 @@
     }
   });
 
-  // Parked comments go with their session when it ends; the one on screen
-  // stays, since its documents remain readable.
-  function dropEnded(sessions) {
-    const live = new Set(sessions.map((key) => JSON.stringify(key)));
-    state.comments = state.comments.filter((c) => c.owner === commentOwner() || live.has(c.owner));
-  }
-
   function markSent(ids) {
     const sent = new Set(ids);
     state.comments = state.comments.filter((c) => !sent.has(c.id));
@@ -788,10 +808,7 @@
       // Only you know whether it reached the prompt; keeping them unasked
       // would send them again next time.
       const n = ids.length;
-      ask(`Copied ${n} comment${n === 1 ? "" : "s"} to the clipboard. Pasted ${n === 1 ? "it" : "them"}? y marks sent · n keeps`, {
-        y: () => markSent(ids),
-        n: () => {},
-      });
+      ask(`Copied ${n} comment${n === 1 ? "" : "s"}. Pasted? y marks sent · n keeps`, () => markSent(ids), () => {});
     }
   }
 
@@ -803,46 +820,41 @@
       && c.line >= line && c.endLine <= endLine);
   }
 
-  // One-key questions in the status line, asked one at a time and each
-  // answered: a newer one waits its turn, since dropping "Pasted them?"
-  // would send those comments again. Escape answers with the question's own
-  // Escape, else n. A question never interrupts typing: while an input is
-  // open it waits until the input closes, so a note being written is kept.
-  function ask(text, choices) {
-    state.questions.push({ text, choices });
+  // A one-key question in the status line, y or n, where Escape means n.
+  // There is one: after a clipboard fallback, whether the comments were
+  // pasted. It never interrupts typing: while an input is open it waits until
+  // the input closes, so a note being written is kept.
+  function ask(text, yes, no) {
+    state.question = { text, yes, no, shown: false };
     showQuestion();
   }
 
   function showQuestion() {
-    if (state.confirm || state.questions.length === 0) return;
-    if (["command", "search", "comment", "picker", "review"].includes(state.mode)) return;
-    state.confirm = state.questions.shift();
+    const question = state.question;
+    if (!question || question.shown || inputOpen()) return;
+    question.shown = true;
     setMode("confirm");
-    const { text } = state.confirm;
-    setMessage(typeof text === "function" ? text() : text);
+    statusMsgEl.textContent = question.text;
   }
 
   // After the key that closed an input has done its work, so its own message
-  // does not replace the question.
+  // does not come first.
   function showQuestionLater() {
     Promise.resolve().then(showQuestion);
   }
 
   function answer(key) {
-    // An answer given mid-render waits for the blocks; sending first would
-    // otherwise be refused and look like it had happened.
-    if (rendering) {
-      state.pendingAnswer = key;
-      return;
-    }
-    const { choices } = state.confirm;
-    const choice = choices[key] ?? (key === "Escape" ? choices.Escape ?? choices.n : null);
+    const choice = { y: state.question.yes, n: state.question.no, Escape: state.question.no }[key];
     if (!choice) return;
-    state.confirm = null;
+    state.question = null;
     setMode("normal");
     setMessage("");
     choice();
-    showQuestion();
+  }
+
+  // Inputs take the keyboard; normal-mode keys and questions wait for them.
+  function inputOpen() {
+    return ["command", "search", "comment", "picker", "review"].includes(state.mode);
   }
 
   function renderComments() {
@@ -995,8 +1007,8 @@
   }
 
   function jumpToComment(c) {
-    if (c.path !== state.doc?.path) {
-      state.pendingJump = { path: c.path, line: c.line };
+    if (c.fileIdentity !== state.doc?.fileIdentity) {
+      state.pendingJump = { fileIdentity: c.fileIdentity, line: c.line };
       switchTo(state.doc?.sessionId ?? null, c.path);
       return;
     }
@@ -1484,7 +1496,7 @@
   const modifierKeys = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
 
   window.addEventListener("keydown", (event) => {
-    if (state.confirm) {
+    if (state.question?.shown) {
       if (modifierKeys.has(event.key)) return;
       event.preventDefault();
       return answer(event.key);
@@ -1492,7 +1504,7 @@
     if (rendering && event.key !== "Escape") return;
     // A click elsewhere took focus from the note; the next key brings it back.
     if (state.mode === "comment" && !composerEl.hidden) return composerInput.focus();
-    if (["command", "search", "picker", "comment", "review"].includes(state.mode)) return;
+    if (inputOpen()) return;
     if (modifierKeys.has(event.key)) return;
     if (event.ctrlKey && !event.metaKey && !event.altKey) {
       const ctrl = { p: () => openPicker("documents"), d: () => halfPage(1), u: () => halfPage(-1), f: () => fullPage(1), b: () => fullPage(-1) }[event.key];
@@ -1768,7 +1780,6 @@
         bannerEl.hidden = false;
         break;
       case "toast": toast(message.text); break;
-      case "live-sessions": dropEnded(message.sessions); break;
       case "theme": applyTheme(message.theme); break;
       case "send-result": onSendResult(message); break;
       default: console.warn("unknown message", message);

@@ -4,7 +4,7 @@ use crate::{
     discovery::{self, Document},
     harness::Harness,
     protocol::{Request, Response},
-    registry::{self, Session, SessionKey},
+    registry::{self, Session},
     send, session, terminal,
     theme::Theme,
 };
@@ -89,8 +89,6 @@ pub(super) struct App {
     bookmarks: FileListing,
     sending: bool,
     presentation: Presentation,
-    /// The live sessions the page was last told about.
-    live: Vec<SessionKey>,
 }
 
 impl App {
@@ -115,7 +113,6 @@ impl App {
             bookmarks: FileListing::default(),
             sending: false,
             presentation: Presentation::Keep,
-            live: Vec::new(),
         }
     }
 
@@ -321,7 +318,6 @@ impl App {
             PageMessage::Ready => {
                 self.page_ready = true;
                 self.view.push(&DaemonMessage::Theme { theme: self.theme.as_ref() });
-                self.view.push(&DaemonMessage::LiveSessions { sessions: &self.live });
                 self.render();
             }
             PageMessage::ListScratchpad { context, request_id } => self.list(context, request_id, true)?,
@@ -506,13 +502,6 @@ impl App {
             UserEvent::Refreshed { context, sessions, documents } => {
                 self.refresh_pending = false;
                 self.sessions = sessions;
-                let live: Vec<_> = self.sessions.iter().map(Session::activity_key).collect();
-                if live != self.live {
-                    self.live = live;
-                    if self.page_ready {
-                        self.view.push(&DaemonMessage::LiveSessions { sessions: &self.live });
-                    }
-                }
                 // The documents belong to the view they were computed for. A
                 // show in flight has already advanced the generation, and
                 // after it lands the view is another session's.

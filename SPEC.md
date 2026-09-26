@@ -415,8 +415,10 @@ paste. Selection actions are disabled while block mappings are rendering.
 
 A note is written in a composer placed under the last block it is about,
 outside the rendered document so a live reload while typing keeps the draft;
-it is placed again after every render. `Enter` saves, `Shift-Enter` adds a
-line, `Esc` cancels. `C` edits the latest comment on the cursor's block, and
+after every render its target is found again like a saved comment's, and the
+box is placed under it. A reload never ends a note being written. Opening
+another document or session saves a non-empty note with its own document and
+closes the box. `Enter` saves, `Shift-Enter` adds a line, `Esc` cancels. `C` edits the latest comment on the cursor's block, and
 `Ctrl-E` in the comments picker edits the chosen one, opening its document
 first when it is another. `:c note` still adds a one-line note directly.
 
@@ -438,18 +440,17 @@ page's memory and belong to their session: the agent and session ID, so a
 resume in a new incarnation keeps them. Hiding and showing the viewer,
 switching documents and live reloads keep them too. Opening another session
 parks them without asking; coming back restores them, with a notice of how
-many. They end when they are sent or discarded, when their session ends (the
-daemon lists live session keys to the page whenever they change, and parked
-comments of sessions no longer listed are dropped), or when the daemon stops.
-`peekback quit` discards them without asking. The session on screen keeps its
-comments even after it ends, since its documents stay readable.
+many. They end when they are sent or discarded, or when the daemon stops;
+parked comments of a session that ended stay in memory, unseen, until then.
+`peekback quit` discards them without asking.
 
-Questions are asked one at a time and each gets an answer: a newer one waits
-its turn, so "Pasted them?" is never dropped. While a question is open, other
-mode changes, selection actions and document switches wait for it. A
-question never interrupts typing: one that arrives while the command line, a
-note, search or a picker is open waits until it closes. An answer given while
-blocks render is applied once they are ready.
+There is one status-line question: after a clipboard fallback, whether the
+comments were pasted (`y` marks them sent, `n` or `Esc` keeps them). Until it
+is answered no comments can be sent, since they may already be in the
+prompt. While it is shown it owns the status message, and other mode
+changes, selection actions and document switches are refused. It never
+interrupts typing: arriving while the command line, a note, search, a picker
+or the review sheet is open, it waits until that closes.
 
 Each comment keeps its quoted source and the source lines it covered. On every
 render of its document, a comment whose lines no longer hold that text is
@@ -465,7 +466,8 @@ of the session keeps the state it had when that document was last shown.
 
 Send all opens a review sheet first: the target session, an editable opening
 line, and a read-only preview of the exact text to paste, updated as the line
-or the comments change. `Enter` sends, `Esc` closes, the arrow keys scroll the
+or the comments change; a comment edited or removed while the sheet is open
+is sent as it is then, or not at all. `Enter` sends, `Esc` closes, the arrow keys scroll the
 preview. The opening line defaults to "Address these review comments.", is
 remembered while the daemon runs, and is left out when empty. Without a
 session the sheet says there is nowhere to send and sends nothing. `Ctrl-S` in
