@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-09-30
 
 Breaking: the library no longer knows any particular agent. Stored data is
 unchanged.

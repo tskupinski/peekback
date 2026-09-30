@@ -97,8 +97,8 @@ peekback setup
 peekback quit
 ```
 
-The next `peekback show` or `p` in the terminal browser starts the new daemon
-and restores the global hotkey. Review changed Codex hooks through `/hooks`
+The next session you start or resume, or `peekback show`, starts the new
+daemon and restores the global hotkey. Review changed Codex hooks through `/hooks`
 if prompted. Rerun setup if you move the executable.
 
 Upgrading from 0.1.x to 0.2 changes how session files are recorded. Each
@@ -106,6 +106,10 @@ session starts capturing turns at its next prompt; Markdown it wrote through
 shell commands before the upgrade is not backfilled, while files from its
 file tools stay listed. The new history format cannot be read by 0.1.x, which
 skips it with warnings, so downgrading loses what 0.2 recorded.
+
+Upgrading from 0.2 to 0.3 keeps recorded history and installed hooks as they
+are. The terminal browser moved to `peekback debug browse`, and
+`browse --all-sessions` is gone.
 
 If an upgrade seems to have no effect, run `type -a peekback` and
 `peekback --version`. An older copy in `~/bin` or `~/.local/bin` may come before
@@ -375,7 +379,7 @@ owns event normalization, storage, scanning, and file queries. It has no
 dependency on Peekback's viewer, Markdown renderer, or terminal integration.
 
 ```sh
-cargo add session-activity@0.1
+cargo add session-activity@0.3
 ```
 
 See the [library guide](https://github.com/tskupinski/peekback/tree/main/crates/session-activity)

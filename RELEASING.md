@@ -143,7 +143,8 @@ peekback setup
 Use `peekback setup --agent codex` or `--agent claude` to select one integration.
 In Codex, review/trust hooks through `/hooks`. Setup preserves unrelated
 settings and invokes the installed executable directly. If upgrading, run
-`peekback quit`, then open a preview to start the new daemon. Check
+`peekback quit`, then start or resume a session, or run `peekback show`, to
+start the new daemon. Check
 `type -a peekback` if an older binary elsewhere on PATH shadows the Cargo install.
 
 ## Optional unsigned archive
@@ -207,7 +208,10 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
 - [ ] Record macOS version, architecture, `peekback --version`, `claude --version`,
       and `codex --version` in the release notes.
 - [ ] Register a real Claude session and a real Codex CLI session using the
-      generated hook commands. Confirm both appear in `peekback status`.
+      generated hook commands. Confirm both appear in `peekback status`, and
+      that starting the first one started the daemon: the hotkey works without
+      running `peekback show`. After `peekback quit`, a prompt does not start it
+      again; the next session start does.
 - [ ] Create/edit a Markdown file in each session. Confirm it appears in
       the viewer with `Cmd+Shift+M`, and in `peekback debug browse`, where `p`
       renders it in the native viewer.
@@ -217,7 +221,7 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
 - [ ] Interrupt a turn with Esc, write a Markdown file yourself, then send the
       next prompt. Confirm the session does not list that file. With two
       sessions working in one directory, confirm a shell-written file is marked
-      `shared` in the browser and viewer.
+      `shared` in `peekback debug browse` and the viewer.
 - [ ] Open a fresh session that has written no Markdown. Confirm `show` and the
       hotkey switch the viewer to it with an empty state, and that its first
       document opens as soon as it is written. With several tmux panes, confirm
@@ -229,10 +233,19 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
 - [ ] Configure bookmarked files, folders, and globs. Check the Bookmarks picker
       and refresh after editing the config; opening a bookmark keeps the session.
 - [ ] Check Mermaid, math, syntax highlighting, live reload, normal window
-      stacking, and the global hotkey after the first `peekback show`.
+      stacking, both themes and `theme = "auto"` following the system, and
+      `gx` on a block with one link and with several.
 - [ ] Confirm `show` and terminal previews take focus, and `show --no-focus`
-      leaves keyboard focus in the terminal. Add/remove/send comments and check
-      their block markers, including across live reloads.
+      leaves keyboard focus in the terminal.
+- [ ] Comment from the keyboard only: `c` on a block and on a `v` range, `C` to
+      edit, `x` to remove and `u` to bring it back, `Esc` on a written note and
+      `u`. Check each comment is one margin bar, `]c` / `[c` show the notes, and
+      the status line counts them. Have the agent edit the file: moved text
+      keeps its bar, and changed text is reported by `]c`.
+- [ ] Send with `S`: the sheet names the session, scrolls with `j` / `k`, and
+      `Enter` pastes the prompt shown, with `path#L` references, without
+      submitting it. Switch to another session's pane and back: its comments
+      are parked and restored. Check a clipboard fallback asks "Pasted?".
 - [ ] Copy a selection and send one through a tested terminal backend. Confirm
       it lands in the intended prompt without submitting it. Record the backend.
 - [ ] Kill an agent process without ending its session. Confirm the session
@@ -242,10 +255,12 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
       identity; older entries without it retain the previous behavior until
       refreshed. Check this for Codex too: its hook process ancestry is not yet
       verified.
-- [ ] End the sessions; verify their retained files remain queryable and live
-      registry entries disappear.
+- [ ] End the sessions; verify their retained files remain queryable with
+      `peekback debug files` and live registry entries disappear.
 - [ ] Upgrade over an earlier installation, restart the daemon, and verify the
-      installed hook still resolves the new binary.
+      installed hook still resolves the new binary. Check `type -a peekback`:
+      an older copy earlier on PATH, such as `~/bin`, hides the new one, and
+      hooks set up from it keep running it.
 - [ ] Review dependency notices and source-availability links after dependency
       updates. See [licenses/README.md](licenses/README.md).
 

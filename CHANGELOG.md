@@ -1,98 +1,74 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-09-30
 
-- Start the viewer when a session starts or resumes, so the hotkey works
-  after install and after a reboot without running `peekback show` first.
-  `peekback quit` stops it until the next session starts. `setup` now ends
-  by pointing at the hotkey.
-- Move the terminal browser and the activity queries under `peekback debug`
-  (`debug browse`, `debug files`, `debug events`, `debug compact`,
-  `debug retain`), for finding out why a file is or is not listed. The
-  hooks' `peekback activity record` keeps working and is hidden from help.
-  `browse --all-sessions` is gone: it showed every session's files, which the
-  viewer never does.
-- Follow links from the keyboard with `gx`: the one in the cursor's block, or
-  a list to pick from when the block has several. Links were mouse-only.
-- Remove the sidebar, `Tab` and `:sidebar`. It was off by default, and the
-  document and comments pickers list the same things from the keyboard.
-- End the line reference of a list's last item at its text; it included the
-  blank line after the list.
-- Stop re-reading the session registry over and over while a document is
-  opening.
-- Keep the keyboard on an open review sheet or note after a click elsewhere;
-  the review sheet ignored every key, `Esc` included.
-- Stop losing notes around a send: an edit made while a send is waiting
-  stays pending instead of being marked sent, a comment removed while it
-  was being sent cannot be restored with `u` and sent again, and `u` after a
-  send restores a discarded edit as a new comment instead of into nothing.
-- Keep a comment on its text when the agent adds another copy of it, such as
-  a second `### Tests` heading; it was reported as changed.
-- Save an open note with its session when the viewer switches to another
-  session showing the same file.
-- Say how to reach a comment on a bookmark or scratchpad file from another
-  document, instead of a failed switch.
-- Count comments whose text changed in the status line, and let `]c` / `[c`
-  stop on them. They used to vanish from the margin and `]c` while still
-  counting as pending.
-- Put a blank line between each quote and its note in what is sent, so the
-  note is not read as part of the quote, and stop repeating quotes a sent
-  selection already holds.
-- Keep the status message readable when space is short, with a shorter
-  "Pasted?" question.
-- Draw inactive comment bars in their own color that keeps 3:1 contrast
-  (it was 2.45:1 in the light theme), let the help overlay scroll, and clear
-  a search when the viewer changes session.
-- `u` undoes removing a comment or discarding a written note, which each say
-  so; `u` was a second half-page-up key. An empty new note is no longer
-  added as "(no note)", and emptying a comment in `C` removes it.
-- Review before sending: `S` opens a sheet with the target session and
-  exactly what will be pasted, scrolled with `j` / `k`; `Enter` sends and
-  `Esc` closes.
-- Mark each comment with one bar in the left margin beside its blocks, instead
-  of a badge under every block and a tinted background. A range comment no
-  longer looks like several, and adding one no longer moves the text.
-- Step through comments with `]c` / `[c`, which show each note in the status
-  line, so notes can be read without hovering.
-- Show the pending count with `S send` on the right of the status line.
-- Write comments in a note box that opens under the commented block, with
-  several lines (`Shift-Enter`), instead of a one-line input at the bottom
-  edge. `C` edits and `x` removes the comment on the cursor's block;
-  comments could only be removed from the sidebar or the picker before.
-- Tell the agent where each comment and sent selection is, as a
-  `path#L12-18` reference before the quote.
+Read what a session wrote, comment on it and send the comments back without
+leaving the keyboard. Requires session-activity 0.3.0. Breaking: `peekback
+browse` is now `peekback debug browse` and `--all-sessions` is gone, the
+WezTerm and Kitty backends are removed, the viewer's sidebar is gone, and
+`setup --all` replaces `--agent all`.
+
+### Viewer
+
+- Start the viewer when a session starts or resumes, so the hotkey works after
+  install and after a reboot without running `peekback show` first. `peekback
+  quit` stops it until the next session starts, and `setup` now ends by
+  pointing at the hotkey.
+- Show one session at a time. The sidebar is gone, with its session and
+  document lists, the session picker (`Space s`, `:session`), `]s` / `[s`,
+  `Tab` and `:sidebar`. The document picker (`Ctrl-P`) and the comments picker
+  (`Space c`) list the same things from the keyboard. To look at another
+  session, press the hotkey in its pane or run `peekback show --session ID`.
 - Replace terminal color detection with built-in light and dark themes, in
   Peekback's own palette. `theme = "auto"` follows the system; `"light"` and
   `"dark"` pin a theme and the window's appearance. Terminal palettes failed
-  text contrast in most themes, and themes are now defined in one place so
-  more can be added. `theme = "system"` still works and means `auto`.
-- Give comments their own color instead of the warning banner's.
-- Keep comments with their session. A resume keeps them, even after the
-  agent exited while you were elsewhere, opening another session parks them,
-  and coming back restores them with a notice. Previously a resume left them
-  in memory where they could never be shown or sent again.
-- Follow commented text that moves, and mark comments whose text changed or
-  was removed, saying so in what is sent. Previously such markers vanished.
+  text contrast in most themes. `theme = "system"` still works and means
+  `auto`.
+- Follow links from the keyboard with `gx`: the one in the cursor's block, or
+  a list to pick from when the block has several. Links were mouse-only.
+- Let the help overlay scroll, keep the status message readable when space is
+  short, and clear a search when the viewer changes session.
+
+### Comments
+
+- Write comments in a note box that opens under the commented block, with
+  several lines (`Shift-Enter`), instead of a one-line input at the bottom
+  edge. `C` edits and `x` removes the comment on the cursor's block; comments
+  could only be removed before. An empty note adds nothing, and emptying a
+  comment removes it.
+- `u` undoes removing a comment or discarding a written note, and each says so.
+  `u` was a second half-page-up key.
+- Mark each comment with one bar in the left margin beside its blocks, in
+  comments' own color, instead of a badge under every block and a tinted
+  background. A range comment no longer looks like several, and adding one no
+  longer moves the text.
+- Step through comments with `]c` / `[c`, which show each note in the status
+  line, so notes can be read without hovering. The status line shows how many
+  are pending, and how many changed, with `S send`.
+- Review before sending: `S` opens a sheet with the target session and exactly
+  what will be pasted, scrolled with `j` / `k`; `Enter` sends and `Esc` closes.
+- Keep comments with their session. A resume keeps them, even after the agent
+  exited while you were elsewhere; opening another session parks them, and
+  coming back restores them with a notice. Previously a resume left them in
+  memory where they could never be shown or sent again.
+- Follow commented text that moves, including when the agent adds another
+  copy of it. A comment whose text changed or was removed stays reachable with
+  `]c` and is sent with a note saying so. Previously such comments vanished.
 - Ask after a clipboard fallback whether the comments were pasted, so they are
   not sent twice.
-- Sending a selection includes the comments inside it.
-- Open the hotkey on the tmux pane you are actually in. The daemon inherited
-  the pane of whichever terminal started it, and tmux answered every "which
-  pane is active" query for that pane's window, so the hotkey kept opening a
-  session from that window. The active pane is now the one of the tmux
-  server's most recently used client, and a server with no client attached
-  has none.
+
+### Sending
+
+- Tell the agent where each comment and sent selection is, as a `path#L12-18`
+  reference before the quote, and put a blank line between each quote and its
+  note, so the note is not read as part of the quote.
+- Sending a selection includes the comments inside it, without repeating their
+  quotes.
 - Send to the pane the agent actually runs in when multiplexers are nested.
   A terminal window opened from tmux inherits `TMUX_PANE`, so text went to the
   tmux pane instead, and the hotkey and `--pane` could open it for the tmux
   pane's own session. A pane on another tty than the agent's is no longer
   recorded.
-- Look up `--pane` on the caller's tmux server. Pane ids repeat across tmux
-  servers, so it could open a session from another server.
-- Open the hotkey on a fresh Codex or Claude Code pane even before its agent
-  registers a session. Codex creates one only at its first prompt, so the
-  hotkey opened another session; it now shows an empty view for that pane and
-  switches to its session once it starts.
 - Remove the WezTerm and Kitty backends. They were never exercised on a real
   install and could not verify that a pane belongs to the agent, so automatic
   sends through them already used the clipboard. tmux is the supported
@@ -100,10 +76,31 @@
   A config naming `wezterm` or `kitty` reports that and uses `auto`.
 - Sessions recorded by an earlier version send through keystroke or the
   clipboard until their next prompt or tool call re-records the pane.
+
+### Sessions and panes
+
+- Open the hotkey on the tmux pane you are actually in. The daemon inherited
+  the pane of whichever terminal started it, and tmux answered every "which
+  pane is active" query for that pane's window, so the hotkey kept opening a
+  session from that window. The active pane is now the one of the tmux
+  server's most recently used client, and a server with no client attached
+  has none.
+- Look up `--pane` on the caller's tmux server. Pane ids repeat across tmux
+  servers, so it could open a session from another server.
+- Open the hotkey on a fresh Codex or Claude Code pane even before its agent
+  registers a session. Codex creates one only at its first prompt, so the
+  hotkey opened another session; it now shows an empty view for that pane and
+  switches to its session once it starts.
+
+### Command line
+
+- Move the terminal browser and the activity queries under `peekback debug`
+  (`debug browse`, `debug files`, `debug events`, `debug compact`, `debug
+  retain`), for finding out why a file is or is not listed. The hooks'
+  `peekback activity record` keeps working and is hidden from help.
+  `browse --all-sessions` is gone: it showed every session's files, which the
+  viewer never does.
 - `peekback setup --all` replaces `--agent all`.
-- The viewer shows one session at a time. The sidebar's session list, the
-  session picker (`Space s`, `:session`) and `]s` / `[s` are gone; press the
-  hotkey in another session's pane, or use `peekback show --session ID`.
 
 ## 0.2.0 - 2026-09-25
 
