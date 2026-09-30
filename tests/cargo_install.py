@@ -39,9 +39,9 @@ def main():
         def run(*arguments, **kwargs):
             return subprocess.check_output([str(binary), *arguments], env=env, cwd=root, text=True, **kwargs)
         assert run("--version").startswith("peekback ")
-        run("setup", "--agent", "all", "--dry-run")
+        run("setup", "--all", "--dry-run")
         assert not (root / "codex").exists() and not (root / "claude").exists()
-        run("setup", "--agent", "all")
+        run("setup", "--all")
         for agent, filename in [("claude", "settings.json"), ("codex", "hooks.json")]:
             path = root / agent / filename
             first = path.read_bytes()
