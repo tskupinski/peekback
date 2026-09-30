@@ -457,7 +457,7 @@ scenario("Margin bars: one per comment, lanes, stepping with ]c and [c", async p
 });
 
 scenario("Selection sends: comments inside go along, those reaching beyond stay", async page => {
-  const { messages, receive, key, command, render, notes, remove } = page;
+  const { element, messages, receive, key, command, render, pending, notes, remove } = page;
   await render();
   // Sending a selection takes the comments inside it along, and sends them.
   key("g"); key("g"); command("c On the first");
@@ -480,6 +480,21 @@ scenario("Selection sends: comments inside go along, those reaching beyond stay"
   assert.doesNotMatch(messages.at(-1).text, /On both/);
   receive({ type: "send-result", purpose: "selection", ok: true, text: "sent" });
   remove();
+  // y copies the same words s sends, comments included, and hands them off.
+  key("g"); key("g"); command("c Copy me along");
+  key("g"); key("g"); key("v"); key("j"); key("y");
+  assert.equal(messages.at(-1).type, "copy");
+  assert.match(messages.at(-1).text,
+    /^`\/comments\.md#L1-3`\n> First paragraph\.\n>\n> Second paragraph\.\n\nComments on `\/comments\.md`:\n\n`\/comments\.md#L1`\n\nCopy me along$/);
+  assert.equal(pending(), 0);
+  assert.match(element("toast").textContent, /^Copied with 1 comment · u brings it back$/);
+  key("u");
+  assert.deepEqual(notes(), ["Copy me along"]);
+  remove();
+  // Without comments inside, y copies the Markdown as it is.
+  key("g"); key("g"); key("y");
+  assert.deepEqual(messages.at(-1), { type: "copy", text: "First paragraph." });
+  assert.match(element("toast").textContent, /^Copied$/);
 });
 
 scenario("Size limit: refused in the page, not left in flight", async page => {
@@ -586,8 +601,7 @@ scenario("Sends in flight: an edit made meanwhile stays pending, a removal is no
   key("C"); element("composer-input").value = "First version, and more";
   element("composer-input").dispatch("keydown", { key: "Enter" });
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
-  key("y"); // What was pasted is sent; what was added after it was not.
-  assert.deepEqual(notes(), ["First version, and more"]);
+  assert.deepEqual(notes(), ["First version, and more"]); // What was copied is handed off; the addition is not.
   remove();
   command("c Removed while sending");
   sendAll();
@@ -598,18 +612,22 @@ scenario("Sends in flight: an edit made meanwhile stays pending, a removal is no
   assert.deepEqual(notes(), []);
 });
 
-scenario("Undo after a send: a discarded edit comes back as a new comment, on its own document", async page => {
+scenario("Undo after a send: u brings the batch back, and a note on a sent comment becomes a new one", async page => {
   const { element, receive, key, command, render, sendAll, pending, notes, remove } = page;
   const composer = element("composer-input");
   await render();
-  command("c Keep me");
-  key("C"); composer.value = "Keep me, reworded";
-  composer.dispatch("keydown", { key: "Escape" });
+  command("c Sent");
   sendAll();
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
   assert.equal(pending(), 0);
-  key("u");
-  assert.equal(composer.value, "Keep me, reworded");
+  key("u"); // In case the paste never reached the prompt.
+  assert.deepEqual(notes(), ["Sent"]);
+  remove();
+  // An edit still open when its comment goes out is not lost with it.
+  command("c Keep me");
+  sendAll();
+  key("C"); composer.value = "Keep me, reworded";
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
   composer.dispatch("keydown", { key: "Enter" });
   assert.deepEqual(notes(), ["Keep me, reworded"]);
   remove();
@@ -768,50 +786,37 @@ scenario("Session isolation: drafts, delivery identity, acknowledgments, copied 
   await new Promise(setImmediate);
   assert.equal(pending(), 1);
   remove();
-  // Every question is answered in turn, and only an answer ends one: a
-  // reload does not hide "Pasted it?".
+  // A clipboard fallback hands the comments off like a paste, without asking:
+  // kept, they would go out again with the next send. u brings them back if
+  // they never reached the prompt, a reload in between included.
   command("c Fix A once");
   sendAll();
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
+  assert.equal(pending(), 0);
+  assert.equal(element("mode").textContent, "NORMAL");
+  assert.match(element("toast").textContent, /^Copied 1 comment · Cmd-V in the terminal · u brings it back$/);
   receive({ type: "render", path: "/a/README.md", file_identity: "/a/README.md", source: "Project A, edited",
     session: { session_id: "a", cwd: "/a" }, documents: [] });
   await new Promise(setImmediate);
-  assert.equal(element("mode").textContent, "CONFIRM");
-  assert.match(element("status-msg").textContent, /Copied 1 comment\. Pasted\? y marks sent · n keeps/);
-  key("j");
-  assert.equal(element("mode").textContent, "CONFIRM"); // Other keys do nothing.
-  key("Escape"); // Escape keeps them.
-  assert.equal(pending(), 1);
-  sendAll();
-  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
-  key("y");
-  assert.equal(pending(), 0);
-  // A question arriving while a note is being written waits for it.
-  command("c Fix A again");
+  key("u");
+  assert.deepEqual(notes(), ["Fix A once"]);
+  // A result arriving while a note is being written leaves the note alone.
   sendAll();
   key("c");
-  element("composer-input").value = "Written while asked";
+  element("composer-input").value = "Written while sending";
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
   assert.equal(element("mode").textContent, "COMMENT");
   element("composer-input").dispatch("keydown", { key: "Enter" });
-  await new Promise(setImmediate);
-  assert.equal(element("mode").textContent, "CONFIRM");
-  assert.match(element("status-msg").textContent, /Pasted\?/); // Saving the note did not replace it.
-  key("y");
-  assert.deepEqual(notes(), ["Written while asked"]);
-  // While "Pasted?" waits behind an open input, nothing more can be sent:
-  // those comments may already be in the prompt.
-  command("sendall"); // The sheet is open when the copied result arrives...
-  key("Enter");
+  assert.deepEqual(notes(), ["Written while sending"]);
+  // One batch at a time: a second send waits for the first to report back.
   command("sendall");
-  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
-  assert.equal(element("mode").textContent, "REVIEW"); // ...so the question waits.
-  const beforeBlocked = messages.length;
   key("Enter");
-  assert.equal(messages.length, beforeBlocked); // Not sent a second time.
-  await new Promise(setImmediate);
-  assert.equal(element("mode").textContent, "CONFIRM");
-  key("y");
+  const beforeBlocked = messages.length;
+  command("sendall");
+  key("Enter");
+  assert.equal(messages.length, beforeBlocked);
+  assert.match(element("status-msg").textContent, /still sending the previous batch/);
+  receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
   assert.equal(pending(), 0);
   await project("b", "Project B"); command("c Fix B"); sendAll();
   const bSend = messages.at(-1);
@@ -826,9 +831,7 @@ scenario("Session isolation: drafts, delivery identity, acknowledgments, copied 
   receive({ type: "send-result", purpose: "comments", ok: true, request_id: bSend.request_id - 1, text: "stale" });
   assert.equal(pending(), 1);
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "copied", text: "copied" });
-  assert.equal(pending(), 1); // Clipboard fallback keeps the draft until answered.
-  key("y");
-  assert.equal(pending(), 0); // So it cannot go out twice.
+  assert.equal(pending(), 0); // Handed off to the clipboard, so it cannot go out twice.
   await project("b", "Project B"); command("c Fix B again"); sendAll();
   receive({ type: "send-result", purpose: "comments", ok: true, outcome: "pasted", text: "sent" });
   assert.equal(pending(), 0);

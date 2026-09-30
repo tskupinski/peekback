@@ -245,7 +245,8 @@ commit IDs. Workflow artifacts are not automatically public GitHub releases.
 - [ ] Send with `S`: the sheet names the session, scrolls with `j` / `k`, and
       `Enter` pastes the prompt shown, with `path#L` references, without
       submitting it. Switch to another session's pane and back: its comments
-      are parked and restored. Check a clipboard fallback asks "Pasted?".
+      are parked and restored. On a clipboard fallback, and with `y` on a
+      selection holding comments, the comments leave and `u` brings them back.
 - [ ] Copy a selection and send one through a tested terminal backend. Confirm
       it lands in the intended prompt without submitting it. Record the backend.
 - [ ] Kill an agent process without ending its session. Confirm the session

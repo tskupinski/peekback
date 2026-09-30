@@ -564,10 +564,8 @@ impl App {
                 self.sending = false;
                 self.sent(request_id, purpose.as_deref(), &result);
             }
-            UserEvent::Copied(result) => {
-                result?;
-                self.toast("Copied");
-            }
+            // The page says what was copied; only a failure is news from here.
+            UserEvent::Copied(result) => result?,
         }
         Ok(())
     }

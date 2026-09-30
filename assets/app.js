@@ -42,9 +42,8 @@
     count: "",
     search: { query: "", matches: [], index: -1 },
     comments: [], // { id, owner, path, fileIdentity, quote, note, line, endLine, anchorSource, anchorCount, anchorIndex, changed }
-    question: null, // { text, yes, no, shown }: the one question, about a clipboard send
     pendingJump: null, // { fileIdentity, line }: where to go once that document renders
-    undo: null, // { comment } removed, or { what, note } a discarded note: what u brings back
+    undo: null, // { comment } removed, { batch } handed off, or { what, note } a discarded note: what u brings back
     currentComment: null, // the comment ]c and [c last stopped on
   };
 
@@ -397,12 +396,6 @@
   // ----------------------------------------------------------------- modes
 
   function setMode(mode) {
-    // Only an answer ends a question; a reload or a click must not hide it.
-    if (state.question?.shown && mode !== "confirm") {
-      if (mode === "normal") state.anchor = null;
-      paintCursor(false);
-      return;
-    }
     state.mode = mode;
     if (mode === "normal") state.anchor = null;
     modeEl.textContent = mode.toUpperCase();
@@ -414,9 +407,7 @@
     if (state.anchor !== null) setMode("normal");
   }
 
-  // While a question is shown, it owns the status message.
   function setMessage(text) {
-    if (state.question?.shown) return;
     statusMsgEl.textContent = text;
   }
 
@@ -442,7 +433,6 @@
   // --------------------------------------------------------------- actions
 
   function switchTo(sessionId, path) {
-    if (state.question?.shown) return;
     post({ type: "switch", session_id: sessionId, path });
   }
 
@@ -462,12 +452,21 @@
   }
 
   function perform(action, text, line, endLine) {
-    if (rendering || state.question?.shown || !text) return;
+    if (rendering || !text) return;
     endLine = lastTextLine(line, endLine);
-    if (action === "copy") post({ type: "copy", text });
+    // The comments inside a selection go with it, copied or sent, in the
+    // same words; a copy hands them off as a send does.
+    const quoted = [lineRef(state.doc?.fileIdentity, line, endLine), blockquote(text)].filter(Boolean).join("\n");
+    const attached = commentsWithin(line, endLine);
+    if (action === "copy" && attached.length) {
+      const withComments = `${quoted}\n\n${commentsPrompt(attached, { quotes: false })}`;
+      if (post({ type: "copy", text: withComments }) === null) return;
+      const n = handOff(attached);
+      toast(`Copied with ${n} comment${n === 1 ? "" : "s"} · u brings ${n === 1 ? "it" : "them"} back`);
+    } else if (action === "copy") {
+      if (post({ type: "copy", text }) !== null) toast("Copied");
+    }
     if (action === "send") {
-      const quoted = [lineRef(state.doc?.fileIdentity, line, endLine), blockquote(text)].filter(Boolean).join("\n");
-      const attached = commentsWithin(line, endLine);
       if (attached.length) sendComments(attached, `${quoted}\n\n`, { quotes: false });
       else post({ type: "send", text: quoted, purpose: "selection" });
     }
@@ -538,7 +537,6 @@
     composerInput.blur();
     leaveVisual();
     setMode("normal");
-    showQuestionLater();
   }
 
   // Leaving the note's document saves what was written, with its own
@@ -677,13 +675,14 @@
 
   function undo() {
     const last = state.undo;
-    const owner = last?.comment?.owner ?? last?.what?.target?.owner ?? last?.what?.editing?.owner;
+    const owner = last?.comment?.owner ?? last?.batch?.[0].owner ?? last?.what?.target?.owner ?? last?.what?.editing?.owner;
     if (!last || owner !== commentOwner()) return setMessage("nothing to undo");
     state.undo = null;
-    if (last.comment) {
-      state.comments.push(last.comment);
+    if (last.comment || last.batch) {
+      const restored = last.batch ?? [last.comment];
+      state.comments.push(...restored);
       renderComments();
-      setMessage("comment restored");
+      setMessage(restored.length === 1 ? "comment restored" : `${restored.length} comments restored`);
     } else {
       const what = resolveNote(last.what);
       const on = what.editing ?? what.target;
@@ -740,10 +739,7 @@
     openReview(activeComments());
   }
 
-  // Until "Pasted them?" is answered, those comments may already be in the
-  // prompt; sending again could paste them twice.
   function sendComments(comments, prefix, format) {
-    if (state.question) return setMessage("answer whether the last comments were pasted first");
     if (commentsInFlight) return setMessage("still sending the previous batch");
     const request_id = post({ type: "send", text: prefix + commentsPrompt(comments, format), purpose: "comments" });
     if (request_id !== null) commentsInFlight = { request_id, sent: comments.map(({ id, note }) => ({ id, note })) };
@@ -760,7 +756,6 @@
 
   function openReview(comments) {
     if (comments.length === 0) return setMessage("no pending comments for this session");
-    if (state.question) return setMessage("answer whether the last comments were pasted first");
     closePicker();
     closeCmdline();
     reviewing = new Set(comments.map((c) => c.id));
@@ -796,7 +791,6 @@
     reviewEl.hidden = true;
     reviewing = null;
     setMode("normal");
-    showQuestionLater();
   }
 
   function sendReview() {
@@ -818,29 +812,30 @@
     else if (event.key === "Escape" || event.key === "q") closeReview();
   }
 
-  // Only comments still as they were sent: one edited meanwhile stays
-  // pending with its new note, and one removed meanwhile cannot come back
-  // with u to be sent again.
-  function markSent(sent) {
+  // Comments leave once handed off, pasted or copied: kept, they would go
+  // out again with the next send. u brings the batch back when it never
+  // reached the prompt. Only comments still as they were sent go: one edited
+  // meanwhile stays with its new note, and one removed meanwhile stays gone.
+  function handOff(sent) {
     const isSent = (c) => sent.some((s) => s.id === c.id && s.note === c.note);
+    const batch = state.comments.filter(isSent);
     state.comments = state.comments.filter((c) => !isSent(c));
     if (state.undo?.comment && isSent(state.undo.comment)) state.undo = null;
+    if (batch.length) state.undo = { batch };
     renderComments();
+    return batch.length;
   }
 
   function onSendResult(message) {
-    toast(message.text);
-    if (message.purpose !== "comments" || message.request_id !== commentsInFlight?.request_id) return;
+    const ours = message.purpose === "comments" && message.request_id === commentsInFlight?.request_id;
+    if (!ours || !message.ok) return toast(message.text);
     const { sent } = commentsInFlight;
     commentsInFlight = null;
-    if (message.ok && message.outcome === "pasted") {
-      markSent(sent);
-    } else if (message.ok && message.outcome === "copied") {
-      // Only you know whether it reached the prompt; keeping them unasked
-      // would send them again next time.
-      const n = sent.length;
-      ask(`Copied ${n} comment${n === 1 ? "" : "s"}. Pasted? y marks sent · n keeps`, () => markSent(sent), () => {});
-    }
+    const n = handOff(sent);
+    const them = n === 1 ? "it" : "them";
+    toast(message.outcome === "copied"
+      ? `Copied ${n} comment${n === 1 ? "" : "s"} · Cmd-V in the terminal · u brings ${them} back`
+      : `${message.text} · u brings ${them} back`);
   }
 
   // Comments whose text lies wholly inside a selection travel with it; one
@@ -850,39 +845,7 @@
     return attachedHere().filter((c) => c.line >= line && c.endLine <= endLine);
   }
 
-  // A one-key question in the status line, y or n, where Escape means n.
-  // There is one: after a clipboard fallback, whether the comments were
-  // pasted. It never interrupts typing: while an input is open it waits until
-  // the input closes, so a note being written is kept.
-  function ask(text, yes, no) {
-    state.question = { text, yes, no, shown: false };
-    showQuestion();
-  }
-
-  function showQuestion() {
-    const question = state.question;
-    if (!question || question.shown || inputOpen()) return;
-    question.shown = true;
-    setMode("confirm");
-    statusMsgEl.textContent = question.text;
-  }
-
-  // After the key that closed an input has done its work, so its own message
-  // does not come first.
-  function showQuestionLater() {
-    Promise.resolve().then(showQuestion);
-  }
-
-  function answer(key) {
-    const choice = { y: state.question.yes, n: state.question.no, Escape: state.question.no }[key];
-    if (!choice) return;
-    state.question = null;
-    setMode("normal");
-    setMessage("");
-    choice();
-  }
-
-  // Inputs take the keyboard; normal-mode keys and questions wait for them.
+  // Inputs take the keyboard; normal-mode keys wait for them.
   function inputOpen() {
     return ["command", "search", "comment", "picker", "review"].includes(state.mode);
   }
@@ -1197,7 +1160,6 @@
     hideCompletions();
     cmdInput.blur();
     setMode(state.anchor !== null ? "visual" : "normal");
-    showQuestionLater();
   }
 
   function completionsFor(value) {
@@ -1335,7 +1297,6 @@
     pickerEl.hidden = true;
     pickerInput.blur();
     setMode(state.anchor !== null ? "visual" : "normal");
-    showQuestionLater();
   }
 
   function filterPicker() {
@@ -1482,11 +1443,6 @@
   const modifierKeys = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
 
   window.addEventListener("keydown", (event) => {
-    if (state.question?.shown) {
-      if (modifierKeys.has(event.key)) return;
-      event.preventDefault();
-      return answer(event.key);
-    }
     if (rendering && event.key !== "Escape") return;
     // A click elsewhere took focus from the note; the next key brings it
     // back, and Esc still closes it.

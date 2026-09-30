@@ -54,16 +54,17 @@ WezTerm and Kitty backends are removed, the viewer's sidebar is gone, and
 - Follow commented text that moves, including when the agent adds another
   copy of it. A comment whose text changed or was removed stays reachable with
   `]c` and is sent with a note saying so. Previously such comments vanished.
-- Ask after a clipboard fallback whether the comments were pasted, so they are
-  not sent twice.
+- Comments leave once handed off, pasted or copied to the clipboard when a
+  paste is not possible, so they are never sent twice; `u` brings the batch
+  back if the paste never reached the prompt.
 
 ### Sending
 
 - Tell the agent where each comment and sent selection is, as a `path#L12-18`
   reference before the quote, and put a blank line between each quote and its
   note, so the note is not read as part of the quote.
-- Sending a selection includes the comments inside it, without repeating their
-  quotes.
+- Sending (`s`) or copying (`y`) a selection includes the comments inside it,
+  without repeating their quotes.
 - Send to the pane the agent actually runs in when multiplexers are nested.
   A terminal window opened from tmux inherits `TMUX_PANE`, so text went to the
   tmux pane instead, and the hotkey and `--pane` could open it for the tmux

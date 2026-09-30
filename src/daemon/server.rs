@@ -63,7 +63,7 @@ fn apply_deadline(expires_at_ms: Option<u64>, now: Instant, wall_ms: u64) -> Ins
 
 fn handle(mut stream: UnixStream, proxy: EventLoopProxy<UserEvent>) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
-    let line = read_request(&mut stream, deadline)?;
+    let Some(line) = read_request(&mut stream, deadline)? else { return Ok(()) };
     let response = match serde_json::from_slice::<Incoming>(&line) {
         Ok(Incoming { request, expires_at_ms }) => {
             let (reply, receiver) = mpsc::channel();
@@ -83,7 +83,9 @@ fn handle(mut stream: UnixStream, proxy: EventLoopProxy<UserEvent>) -> Result<()
     Ok(())
 }
 
-fn read_request(stream: &mut UnixStream, deadline: Instant) -> Result<Vec<u8>> {
+/// `None` when the client hangs up before sending anything, as a hook checking
+/// whether the daemon runs does.
+fn read_request(stream: &mut UnixStream, deadline: Instant) -> Result<Option<Vec<u8>>> {
     stream.set_nonblocking(true)?;
     let mut line = Vec::new();
     let mut buffer = [0; 4096];
@@ -111,12 +113,15 @@ fn read_request(stream: &mut UnixStream, deadline: Instant) -> Result<Vec<u8>> {
             }
             Err(error) => return Err(error.into()),
         };
+        if read == 0 && line.is_empty() {
+            return Ok(None);
+        }
         ensure!(read > 0, "incomplete socket request");
         let end = buffer[..read].iter().position(|&byte| byte == b'\n');
         line.extend_from_slice(&buffer[..end.unwrap_or(read)]);
         ensure!(line.len() <= 64 * 1024, "socket request exceeds 64 KiB limit");
         if end.is_some() {
-            return Ok(line);
+            return Ok(Some(line));
         }
     }
 }
@@ -124,6 +129,18 @@ fn read_request(stream: &mut UnixStream, deadline: Instant) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_client_hanging_up_unheard_is_a_check_and_a_cut_off_request_an_error() {
+        let deadline = || Instant::now() + Duration::from_secs(1);
+        let (mut daemon, client) = UnixStream::pair().unwrap();
+        drop(client);
+        assert!(read_request(&mut daemon, deadline()).unwrap().is_none());
+        let (mut daemon, mut client) = UnixStream::pair().unwrap();
+        client.write_all(b"{\"partial").unwrap();
+        drop(client);
+        assert!(read_request(&mut daemon, deadline()).is_err());
+    }
 
     #[test]
     fn a_request_expires_when_its_client_stops_waiting() {
@@ -144,7 +161,7 @@ mod tests {
         let (mut server, mut client) = UnixStream::pair().unwrap();
         client.write_all(b"{\"type\":\"status\"}\n").unwrap();
         assert_eq!(
-            read_request(&mut server, Instant::now() + Duration::from_secs(1)).unwrap(),
+            read_request(&mut server, Instant::now() + Duration::from_secs(1)).unwrap().unwrap(),
             b"{\"type\":\"status\"}"
         );
         assert!(read_request(&mut server, Instant::now() + Duration::from_millis(20)).is_err());

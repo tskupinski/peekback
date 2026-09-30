@@ -35,30 +35,14 @@ From the viewer UI review (findings A1 and A2).
 - Check focus by hand in the native window; the page tests can cover the
   attributes.
 
-## Decision: what a clipboard send does with its comments
+## Held back until they are missed
 
-Parked until the current send flow has been used for a while. Today a paste
-that falls back to the clipboard asks "Pasted? y marks sent · n keeps", which
-puts the viewer in CONFIRM mode and blocks sending until answered. `Esc`
-means "keep them" there but "leave" everywhere else, and outside tmux every
-send falls back, so the question comes every time.
-
-Proposal from the product review: a clipboard copy counts as sent. Toast
-"Copied N comments · Cmd-V in the terminal · u brings them back", hide the
-viewer, and let `u` restore the whole batch as pending. That removes the
-question, CONFIRM mode and the send lock.
-
-Settled while discussing it:
-
-- Sending removes comments. They are a draft of one message to the agent; the
-  terminal keeps what was sent. Keeping them would need a sent status or a
-  manual clear, and pulls toward a review system (threads, resolved states).
-- If checking a revision against the comments you sent turns out to matter,
-  the smallest answer is the last sent batch, read-only, until the next send.
-- Changed text stays tracked so the prompt never points at lines that now hold
-  something else, but the viewer can show it in fewer places: keep the `]c`
-  label and the note in the sent text, and drop the status-line count and the
-  sidebar and picker labels.
+- Checking a revision against the comments you sent: the smallest answer is
+  the last sent batch, read-only, until the next send.
+- Showing changed comments in fewer places: keep the `]c` label and the note
+  in the sent text, drop the status-line count and the picker label.
+- A key to discard every pending comment at once; `x` and `Ctrl-D` in the
+  comments picker remove one at a time.
 
 ## Decision: one document list instead of Current session and Scratchpad
 
@@ -80,4 +64,5 @@ focus, saving an `Esc` on every send. Open questions:
 - Does it feel right for `S` (send all comments)? Likely yes.
 - For `s` (send a selection), do you often send several selections in a row?
   If so, `s` should keep the viewer open.
-- A clipboard fallback is part of the parked clipboard decision above.
+- A clipboard fallback leaves the paste to you (`Cmd-V`), so hiding there
+  returns you to the terminal for exactly that.

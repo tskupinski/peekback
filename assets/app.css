@@ -176,9 +176,8 @@ body {
 }
 .statusline .mode[data-mode="visual"] { background: var(--mode-visual); }
 .statusline .mode[data-mode="command"], .statusline .mode[data-mode="search"], .statusline .mode[data-mode="picker"], .statusline .mode[data-mode="comment"] { background: var(--accent); }
-.statusline .mode[data-mode="confirm"] { background: var(--mode-visual); }
 .statusline .status-doc { flex: 0 1000 auto; min-width: 0; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The message gives way last: questions and notes are what you read now. */
+/* The message gives way last: it is what you read now. */
 .statusline .status-msg { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .statusline .status-pending {
   flex: 0 0 auto;

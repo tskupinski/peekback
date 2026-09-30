@@ -171,7 +171,7 @@ pane and press the hotkey, or run `peekback show --session ID`.
 | `]d` / `[d` | next / previous document |
 | `]c` / `[c` | next / previous comment, showing its note in the status line |
 | `v` | visual mode, extend with `j` / `k` |
-| `y` | copy the block or selection as Markdown |
+| `y` | copy the block or selection as Markdown, with the comments inside it |
 | `s` | send the block or selection to the prompt as a blockquote, with the comments inside it |
 | `c` | comment on the block or selection: a note box opens under it; `Enter` saves, `Shift-Enter` adds a line, `Esc` cancels |
 | `C` / `x` | edit / remove the comment on the cursor's block; `u` brings a removed one back |
@@ -199,22 +199,25 @@ what will be pasted, opening with "Address these review comments.". `j` /
 `k` and `Ctrl-D` / `Ctrl-U` scroll it, `Enter` sends, and `Esc` or `q`
 closes it without sending. The paste is never submitted, so anything more
 you want to say goes in the prompt after it. `s` on a selection sends right
-away. Bars disappear when
-comments are removed or successfully sent. Sending a selection (`s`) also sends the comments inside it. Everything
-sent says where it is in the file, as `notes/plan.md#L12-18`, so the agent
-finds the text without searching, even after editing the file.
+away, and `y` copies the same text; both take the comments inside the
+selection along. Everything sent or copied says where it is in the file, as
+`notes/plan.md#L12-18`, so the agent finds the text without searching, even
+after editing the file.
+
+Comments leave once they are handed off: pasted, or copied to the clipboard
+when a paste is not possible, since kept they would go out again with the
+next send. `u` right after brings them back, in case the paste never reached
+the prompt.
 
 Comments belong to their session. They stay while you hide and show the
 viewer, switch documents, reload or resume the session. Opening another
-session parks them, and coming back restores them. They end when you send or
+session parks them, and coming back restores them. They end when you send, copy or
 discard them, when their session ends, or when the daemon stops;
 `peekback quit` discards them.
 
 When the agent moves commented text, the comment follows it. When it changes
 or deletes the text, the comment stays in the list marked "text changed or
 removed", and sending it tells the agent the quote is no longer in the file.
-If a send falls back to the clipboard, the viewer asks whether you pasted it,
-so the same comments are not sent twice.
 
 The document picker has **Current session**, **Scratchpad** and
 **Bookmarks** scopes; `Tab` and `Shift-Tab` cycle through them. Current

@@ -427,7 +427,8 @@ another document or session saves a non-empty note with its own document and
 closes the box. `Enter` saves, `Shift-Enter` adds a line, `Esc` cancels. An
 empty new note adds nothing, and saving an existing comment empty removes it.
 `u` takes back the last removal (`x`, `Ctrl-D` in the comments picker, or an
-emptied note) or the last note discarded with `Esc`, once, in
+emptied note), the last batch handed off by a paste or a copy, or the last
+note discarded with `Esc`, once, in
 the session it belongs to; each says so in a toast. A note is restored on its
 own document; elsewhere `u` says where it is. A note editing a comment that
 was sent or removed meanwhile is saved as a new comment on the same text.
@@ -459,19 +460,18 @@ page's memory and belong to their session: the agent and session ID, so a
 resume in a new incarnation keeps them. Hiding and showing the viewer,
 switching documents and live reloads keep them too. Opening another session
 parks them without asking; coming back restores them, with a notice of how
-many. They end when they are sent or discarded, or when the daemon stops;
+many. They end when they are handed off or discarded, or when the daemon stops;
 parked comments of a session that ended stay in memory, unseen, until then.
 `peekback quit` discards them without asking.
 
-There is one status-line question: after a clipboard fallback, whether the
-comments were pasted (`y` marks them sent, `n` or `Esc` keeps them). Until it
-is answered no comments can be sent, since they may already be in the
-prompt. Only comments still as they were sent are marked sent: one edited
-meanwhile stays pending with its new note, and one removed meanwhile is no
-longer offered to `u`. While it is shown it owns the status message, and other mode
-changes, selection actions and document switches are refused. It never
-interrupts typing: arriving while the command line, a note, search, a picker
-or the review sheet is open, it waits until that closes.
+A comment is handed off when it reaches the prompt or the clipboard: a
+paste, a send that fell back to the clipboard, or `y` on a selection holding
+it. Handed-off comments leave, since kept they would go out again with the
+next send, and the viewer never asks whether a clipboard copy was pasted;
+the toast says it was copied and that `u` brings the batch back. Only
+comments still as they were sent leave: one edited meanwhile stays pending
+with its new note, and one removed meanwhile is no longer offered to `u`. One
+batch is sent at a time; a second waits for the first to report back.
 
 Each comment keeps its quoted source and the source lines it covered. On every
 render of its document, a comment whose lines still hold that text stays,
@@ -503,10 +503,9 @@ note as part of the quote; a comment whose text changed or was removed has no
 reference, since its lines no longer hold it. Sending a selection includes
 the unchanged comments wholly inside it after the quoted selection, with
 their references and notes but not their quotes, which the selection already
-holds; those count as sent too, and a comment reaching beyond the selection
-stays. Only a matching paste result marks a batch sent. A
-clipboard fallback asks whether it was pasted: yes marks the batch sent so it
-cannot go out twice, no keeps it. Delivery still checks the exact session
+holds; those are handed off too, and a comment reaching beyond the selection
+stays. `y` copies the same text. Only a matching send result hands a batch
+off; a failed send keeps it. Delivery still checks the exact session
 incarnation and process, so a comment written before a resume is sent only
 to the resumed process the viewer now shows.
 
