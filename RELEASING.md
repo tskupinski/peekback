@@ -20,10 +20,10 @@ create tags, or create GitHub releases.
 
 ## Validation evidence
 
-For 0.2.0, the [CI run for commit b3f92bd](https://github.com/tskupinski/peekback/actions/runs/36156342344)
+For 0.3.0, the [CI run for commit e82f7b8](https://github.com/tskupinski/peekback/actions/runs/39236049804)
 passed the app job and both standalone library jobs, and the tag workflows
-verified the [release archive](https://github.com/tskupinski/peekback/actions/runs/36156347569)
-and the [standalone library](https://github.com/tskupinski/peekback/actions/runs/36156347363).
+verified the [release archive](https://github.com/tskupinski/peekback/actions/runs/39236396618)
+and the [standalone library](https://github.com/tskupinski/peekback/actions/runs/39236397276).
 Both crates were published from that commit. This is automated evidence, not a
 substitute for the manual acceptance checks on each release.
 
@@ -32,14 +32,14 @@ substitute for the manual acceptance checks on each release.
 | App CI | macOS 15 ARM runner: checks, source Cargo install, setup, archive installation |
 | Library CI | Standalone package tests, Clippy, rustdoc, and consumer example on Ubuntu 24.04 and macOS 15 |
 | Release archive | `aarch64-apple-darwin`, deployment target macOS 14.0 |
-| Local build/test host at 0.2.0 | Apple Silicon, macOS 26.5.2, Rust 1.87.0 |
+| Local build/test host at 0.3.0 | Apple Silicon, macOS 26.5.2, Rust 1.87.0 |
 | Agent payload coverage | Synthetic hook/transcript fixtures, both installed hook lifecycles, retained history |
 | Terminal UI | Automated pseudo-terminal test; preview IPC uses a fake viewer |
 | Manual integration coverage | Record actual agent versions and terminal backends in release notes |
 | Other platforms | No Intel/Linux/Windows app builds or desktop/IDE composer integration |
 
-Local agent versions observed during 0.2.0 preparation were Claude Code 2.1.282
-and Codex CLI 0.156.1. These are an inventory, not claimed minimum versions or
+Local agent versions observed during 0.3.0 preparation were Claude Code 2.1.303
+and Codex CLI 0.162.1. These are an inventory, not claimed minimum versions or
 proof of end-to-end coverage. The deployment target is a compatibility baseline,
 not proof of testing on every macOS version.
 
