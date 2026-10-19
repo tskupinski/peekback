@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 - 2026-09-30
+## 0.3.0 - 2026-10-19
 
 Read what a session wrote, comment on it and send the comments back without
 leaving the keyboard. Requires session-activity 0.3.0. Breaking: `peekback
